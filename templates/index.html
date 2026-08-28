@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Finance Clone</title>
+
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+
+    <!-- Top Navigation Bar -->
+    <header class="navbar">
+        <div class="nav-left">
+            <span class="logo"><span class="blue">G</span><span class="red">o</span><span class="yellow">o</span><span class="blue">g</span><span class="green">l</span><span class="red">e</span> <span class="gray">Finance</span></span>
+        </div>
+        <div class="search-container">
+            <input type="text" placeholder="Search for stocks & ETFs...">
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="container">
+
+        <!-- Market Index Chips -->
+        <section class="indices-bar">
+            <div class="chip">
+                <span class="index-name">S&P 500</span>
+                <span class="index-price">5,088.80</span>
+                <span class="index-change pos">+0.42%</span>
+            </div>
+            <div class="chip">
+                <span class="index-name">Nasdaq</span>
+                <span class="index-price">16,000.10</span>
+                <span class="index-change pos">+0.83%</span>
+            </div>
+            <div class="chip">
+                <span class="index-name">Dow Jones</span>
+                <span class="index-price">38,989.84</span>
+                <span class="index-change neg">-0.15%</span>
+            </div>
+            <div class="chip">
+                <span class="index-name">Russell 2000</span>
+                <span class="index-price">2,016.69</span>
+                <span class="index-change pos">+0.10%</span>
+            </div>
+        </section>
+
+        <!-- Main Dashboard Content Grid -->
+        <div class="dashboard-grid">
+
+            <!-- Left Main Column -->
+            <div class="main-content">
+                <div class="card stock-header-card">
+                    <div class="stock-title">
+                        <h2>Alphabet Inc (GOOGL)</h2>
+                        <span class="badge">NASDAQ</span>
+                    </div>
+                    <div class="stock-price-container">
+                        <span class="current-price">$143.96</span>
+                        <span class="price-change pos">+1.85 (+1.30%) Today</span>
+                    </div>
+
+                    <!-- Placeholder area where Chart.js will render -->
+                    <div class="chart-box">
+                        <div class="chart-placeholder">[ Chart.js Canvas Renders Here ]</div>
+                    </div>
+
+                    <div class="chart-timeframe-selectors">
+                        <button class="time-btn active">1D</button>
+                        <button class="time-btn">5D</button>
+                        <button class="time-btn">1M</button>
+                        <button class="time-btn">6M</button>
+                        <button class="time-btn">YTD</button>
+                        <button class="time-btn">1Y</button>
+                        <button class="time-btn">5Y</button>
+                        <button class="time-btn">MAX</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Sidebar Column (Watchlist) -->
+            <aside class="sidebar">
+                
+                <!-- Watchlist Card -->
+                <div class="card watchlist-card">
+                    <div class="card-header">
+                        <h3>Watchlist</h3>
+                        <button class="btn-text">+ Add</button>
+                    </div>
+                    <ul class="watchlist">
+                        <!-- Loops over SQLite data dynamically later -->
+                        {% for item in watchlist %}
+                        <li class="watchlist-item">
+                            <div>
+                                <strong>{{ item.symbol }}</strong>
+                                <div class="sub-text">{{ item.name }}</div>
+                            </div>
+                            <div class="text-right">
+                                <div>${{ item.price }}</div>
+                                <span class="change-tag {{ 'pos' if item.change > 0 else 'neg' }}">
+                                    {{ '+' if item.change > 0 }}{{ item.change }}%
+                                </span>
+                            </div>
+                        </li>
+                        {% else %}
+                        <!-- Fallback static preview -->
+                        <li class="watchlist-item">
+                            <div><strong>AAPL</strong><div class="sub-text">Apple Inc</div></div>
+                            <div class="text-right"><div>$182.52</div><span class="change-tag pos">+0.68%</span></div>
+                        </li>
+                        <li class="watchlist-item">
+                            <div><strong>MSFT</strong><div class="sub-text">Microsoft Corp</div></div>
+                            <div class="text-right"><div>$407.48</div><span class="change-tag neg">-0.32%</span></div>
+                        </li>
+                        <li class="watchlist-item">
+                            <div><strong>NVDA</strong><div class="sub-text">NVIDIA Corp</div></div>
+                            <div class="text-right"><div>$788.17</div><span class="change-tag pos">+2.98%</span></div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+
+            </aside>
+        </div>
+
+    </main>
+
+</body>
+</html>

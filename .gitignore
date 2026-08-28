@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Flask local data (SQLite cache DB)
+instance/
+*.db
+
+# Environment variables & secrets
+.env
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
