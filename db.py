@@ -1,7 +1,12 @@
 """SQLite persistence layer.
 
-Currently stores exactly one thing: the watchlist symbol list. It will grow
-to hold the transaction ledger later.
+Stores two things: the watchlist symbol list, and the transaction ledger
+(every BUY/SELL the user records).
+
+The ledger's design rule: store IMMUTABLE FACTS ONLY. Any value that
+depends on the live market price (total value, gain $/%) would freeze
+stale the moment it was stored, so those are computed at display time
+from live quotes instead — never written here.
 
 This module knows nothing about Flask or yfinance — routes decide WHAT the
 data means; this file only knows HOW to store and retrieve rows.
@@ -36,20 +41,54 @@ def _connect():
 
 
 def init():
-    """Create the watchlist table if it doesn't already exist.
+    """Create every table this app needs, if it doesn't already exist.
 
     CREATE TABLE IF NOT EXISTS is idempotent — safe to run on every startup.
-    The table is deliberately tiny: the symbol IS the identity, and making it
-    the PRIMARY KEY means the database itself rejects duplicates (a second
-    line of defence behind the 409 check in the route).
     """
     with _connect() as conn:
         # `with conn:` commits the change if the block succeeds and rolls
         # back on error — same idea as a transaction in any database.
+
+        # The watchlist table is deliberately tiny: the symbol IS the
+        # identity, and making it the PRIMARY KEY means the database itself
+        # rejects duplicates (a second line of defence behind the 409 check
+        # in the route).
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS watchlist (
                 symbol TEXT PRIMARY KEY
+            )
+            """
+        )
+
+        # The transaction ledger. Stores IMMUTABLE FACTS ONLY — nothing that
+        # depends on a live market price (such values would freeze stale the
+        # moment they were stored). Each column's type choice:
+        #
+        #   id               SQLite convention: INTEGER PRIMARY KEY is an
+        #                    alias for the hidden rowid, so it auto-numbers
+        #                    itself (1, 2, 3, ...) with no extra keyword.
+        #   ticker           TEXT — same canonical UPPERCASE form everywhere.
+        #   transaction_date SQLite has no DATE type. We store ISO text
+        #                    ("2026-08-31"), which sorts lexicographically —
+        #                    and for ISO dates that IS chronological order.
+        #   price / qty      REAL (floating point). REAL for qty too, so
+        #                    fractional shares and crypto amounts work.
+        #   currency         The security's TRADING currency ("USD", "CAD"),
+        #                    auto-filled by the route layer from yfinance.
+        #   transaction_type The CHECK constraint is a second line of
+        #                    defence behind route validation: the database
+        #                    itself refuses anything that isn't BUY or SELL.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transactions (
+                id               INTEGER PRIMARY KEY,
+                ticker           TEXT NOT NULL,
+                transaction_date TEXT NOT NULL,
+                price            REAL NOT NULL,
+                qty              REAL NOT NULL,
+                currency         TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK (transaction_type IN ('BUY', 'SELL'))
             )
             """
         )
@@ -95,3 +134,64 @@ def remove_symbol(symbol):
             "DELETE FROM watchlist WHERE symbol = ?", (symbol,)
         )
         return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# TRANSACTION LEDGER — the facts table. add stores what happened; get
+# returns those facts untouched. Any price-dependent value (gain, current
+# value) is computed elsewhere, from live quotes — never stored here.
+# ---------------------------------------------------------------------------
+
+def add_transaction(ticker, transaction_date, price, qty, currency,
+                    transaction_type):
+    """Insert one BUY or SELL row. Returns the new row's auto-numbered id.
+
+    Validation has already happened in the route layer (fields checked,
+    ticker proven real, currency fetched from Yahoo) — this function is the
+    dumb, trusted writer. If the route slipped a bad transaction_type past
+    its checks, the table's CHECK constraint raises IntegrityError here:
+    defence in depth means BOTH layers would have to fail.
+
+    Same ? placeholder rule as add_symbol: values travel separately from
+    SQL text, so even hostile input is inert data, never executable SQL.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO transactions
+                (ticker, transaction_date, price, qty, currency,
+                 transaction_type)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (ticker, transaction_date, price, qty, currency, transaction_type),
+        )
+        # lastrowid: the id SQLite just assigned to THIS insert. Telling the
+        # caller which row was created makes the route's 201 response more
+        # useful (and makes future edit/delete routes possible).
+        return cursor.lastrowid
+
+
+def get_transactions():
+    """Return every transaction, newest first, as a list of plain dicts.
+
+    Newest first because a ledger is read like a bank statement: the most
+    recent event is what you check first. Two keys sort it — transaction_date
+    first (the day it happened), then id (the order rows were inserted that
+    day, since later ids were inserted later).
+
+    sqlite3.Row is a row wrapper that behaves like a tuple BUT remembers its
+    column names. dict(row) then turns each row into {"ticker": "AAPL", ...}
+    — exactly the shape jsonify needs. Setting row_factory on the connection
+    switches every fetch from that connection to Row objects.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, ticker, transaction_date, price, qty, currency,
+                   transaction_type
+            FROM transactions
+            ORDER BY transaction_date DESC, id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]

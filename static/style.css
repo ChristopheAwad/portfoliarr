@@ -148,16 +148,15 @@ body {
     white-space: nowrap;
 }
 
-/* Chart Canvas Area */
+/* Chart Canvas Area. The dashed border / centering / grey tint from the
+   placeholder mockup are gone — the chart IS the content now. What remains:
+   a fixed height (so the card layout is stable) and position: relative,
+   which gives Chart.js a positioned ancestor to measure itself against —
+   with responsive:true + maintainAspectRatio:false the canvas stretches to
+   exactly fill this box. */
 .chart-box {
     height: 300px;
-    background-color: #fafafa;
-    border: 1px dashed var(--border-color);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-secondary);
+    position: relative;
     margin-bottom: 16px;
 }
 
@@ -256,6 +255,98 @@ body {
     font-size: 13px;
     color: var(--text-secondary);
     padding: 12px 0;
+}
+
+/* Transaction Ledger */
+.tx-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+/* Every form control shares one shape; flex-basis keeps each at least
+   ~90px wide while letting the row wrap gracefully on narrow screens. */
+.tx-form input,
+.tx-form select {
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    outline: none;
+    flex: 1 1 90px;
+    min-width: 0;
+}
+
+.tx-form input:focus,
+.tx-form select:focus {
+    border-color: var(--blue-accent);
+}
+
+.tx-form button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: var(--blue-accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.tx-form button:hover {
+    background: #1557b0;
+}
+
+.tx-error {
+    color: var(--red-neg);
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+.ledger-table {
+    width: 100%;
+    border-collapse: collapse; /* borders join into single hairlines */
+    font-size: 13px;
+}
+
+.ledger-table th {
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.ledger-table td {
+    padding: 8px;
+    border-bottom: 1px solid #f1f3f4;
+}
+
+/* .num right-aligns numeric columns — digits of different lengths line up
+   on the decimal point, which is how finance tables stay readable. */
+.ledger-table .num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.tx-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.tx-badge.buy {
+    background-color: var(--green-bg);
+    color: var(--green-pos);
+}
+
+.tx-badge.sell {
+    background-color: var(--red-bg);
+    color: var(--red-neg);
 }
 
 /* Responsive */

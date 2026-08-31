@@ -6,6 +6,12 @@
     <title>Google Finance Clone</title>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <!-- Chart.js, loaded from a public CDN (a free hosted copy — nothing to
+         pip install, it ships straight to the browser). Loading it here adds
+         a global "Chart" class to the page. <head> placement guarantees the
+         library exists before main.js (bottom of <body>) tries to use it. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 </head>
 <body>
 
@@ -63,9 +69,12 @@
                         <span class="price-change pos">+1.85 (+1.30%) Today</span>
                     </div>
 
-                    <!-- Placeholder area where Chart.js will render -->
+                    <!-- Chart area. Chart.js paints onto a <canvas> — think
+                         of it as a blank drawing pad. main.js finds it by id
+                         and draws the chart on it (placeholder data for now;
+                         real backend data comes later). -->
                     <div class="chart-box">
-                        <div class="chart-placeholder">[ Chart.js Canvas Renders Here ]</div>
+                        <canvas id="portfolioChart"></canvas>
                     </div>
 
                     <div class="chart-timeframe-selectors">
@@ -78,6 +87,63 @@
                         <button class="time-btn">5Y</button>
                         <button class="time-btn">MAX</button>
                     </div>
+                </div>
+
+                <!-- Transaction Ledger card. Two parts:
+                     1. A form to log a BUY/SELL (the only way rows are born)
+                     2. A table whose <tbody> ships EMPTY — main.js rebuilds
+                        the rows from /api/transactions every cycle, exactly
+                        like the watchlist's <ul>. Facts + live gain/value
+                        are painted by JS; a failed quote gap-fills to "—". -->
+                <div class="card ledger-card">
+                    <div class="card-header">
+                        <h3>Transactions</h3>
+                    </div>
+
+                    <!-- The inline log form. name= attributes are what JS
+                         reads via FormData; required gives free browser-side
+                         validation, while the REAL validation lives in the
+                         backend (400s with named fields) — the browser is
+                         only a first filter. -->
+                    <form id="tx-form" class="tx-form">
+                        <input type="text" name="ticker" placeholder="Ticker"
+                               autocomplete="off" required>
+                        <input type="date" name="date" required>
+                        <input type="number" name="price" placeholder="Price"
+                               step="any" min="0" required>
+                        <input type="number" name="qty" placeholder="Qty"
+                               step="any" min="0" required>
+                        <select name="type">
+                            <option value="BUY">Buy</option>
+                            <option value="SELL">Sell</option>
+                        </select>
+                        <button type="submit">Log</button>
+                    </form>
+
+                    <!-- Backend error messages (bad date, unknown ticker...)
+                         land here — inline, watchlist-alert style but quiet. -->
+                    <p class="tx-error" hidden></p>
+
+                    <table class="ledger-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Ticker</th>
+                                <th class="num">Qty</th>
+                                <th class="num">Price</th>
+                                <th class="num">Value</th>
+                                <th class="num">Total Gain</th>
+                                <th class="num">Total Gain %</th>
+                                <th class="num">Day Gain</th>
+                                <th class="num">Day Gain %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledger-body">
+                            <!-- main.js fills this: one <tr class="ledger-row">
+                                 per transaction, or a single empty-state row. -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
 

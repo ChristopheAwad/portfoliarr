@@ -3,6 +3,7 @@
 ## Read first
 - `project-brief.md` — authoritative spec (stack, UI, MVP scope); takes precedence over assumptions.
 - `feature.md` — context file for the feature in progress; read it before resuming work. If empty and we're starting to work on a new feature, populate it first with subtasks.
+- Design decisions that outlive a feature go in their permanent home: the "why" lives in code comments next to the code, cross-cutting rules go in `project-brief.md`'s Design Rules section. Never leave durable rationale only in `feature.md` — it's wiped per feature, so no long-lived file may reference it.
 
 ## Stack & architecture
 - Flask serves JSON; the browser does all rendering (vanilla JS `fetch` + DOM, no framework).
@@ -24,6 +25,7 @@
 ## Contracts that are easy to break
 - Adding an index chip = TWO edits: symbol in `INDEX_SYMBOLS` (`app.py`) AND a chip with matching `data-symbol` in `templates/index.html`. JS finds chips by `data-symbol`, not position.
 - `/api/indices` returns successes only (failed symbols absent); `503` only when ALL symbols fail; frontend gap-fills missing chips with "—". Keep both sides in sync.
+- Ledger table column count lives in TWO places: the `<th>` row (`templates/index.html`) AND `setLedgerMessage`'s `colSpan` (`static/js/main.js`). Adding/removing a column = edit both.
 - Backend sends raw floats; number formatting and `pos`/`neg` classes are frontend-only.
 
 ## MVP scope guard

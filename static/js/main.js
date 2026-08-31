@@ -1,4 +1,5 @@
-// Frontend logic for the live indices bar AND the live watchlist.
+// Frontend logic for the live indices bar, the live watchlist, AND the
+// transaction ledger.
 //
 // Talks to the Flask backend over HTTP only (fetch -> JSON -> DOM).
 // Knows nothing about yfinance, Flask, or Python.
@@ -303,6 +304,330 @@ watchlistEl.addEventListener("click", async (event) => {
 });
 
 // ---------------------------------------------------------------------------
+// TRANSACTION LEDGER — the list of BUY/SELL events, plus the form that logs
+// new ones. Same philosophy as the watchlist: the HTML ships an EMPTY
+// <tbody>, and this code rebuilds the rows from /api/transactions every
+// cycle. The backend returns each row's immutable facts PLUS live math
+// (price_now, value, total_gain/pct, day_gain/pct — raw floats: its job is
+// numbers, ours is formatting), so all this section does is place text and
+// colours.
+// ---------------------------------------------------------------------------
+
+// Grab the pieces this section manages, once, at load time.
+const txForm = document.querySelector("#tx-form");
+const txErrorEl = document.querySelector(".tx-error");
+const ledgerBody = document.querySelector("#ledger-body");
+const txDateInput = txForm.elements.date;
+
+// Local "today" as YYYY-MM-DD — the date input's default value.
+// Why not new Date().toISOString().slice(0, 10)? toISOString() is UTC: in
+// the evening in a negative-UTC timezone (or morning in a positive-UTC one)
+// it returns a DIFFERENT day than the user's clock says. Building the
+// string from the LOCAL getters avoids that off-by-one-day surprise.
+function todayLocalISO() {
+    const now = new Date();
+    // padStart forces two digits: "2026-8-5" would fail fromisoformat
+    // server-side; "2026-08-05" is the ISO form it demands.
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+// Grouped-thousands formatter with a flexible decimal cap. Unlike
+// formatPrice (fixed at 2), maxDigits lets the qty column show fractional
+// amounts ("0.0050" BTC) without trailing-zero spam on whole numbers.
+function formatNumber(value, maxDigits = 2) {
+    return new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: maxDigits,
+    }).format(value);
+}
+
+// Signed money text: 12.3 -> "+12.30 CAD", -7.1 -> "-7.10 CAD".
+// Gains are signed in the DATA; the sign character is presentation,
+// so it belongs here (same rule as the chips' "+" prefix).
+function formatSigned(value, currency) {
+    const sign = value >= 0 ? "+" : "";
+    return `${sign}${formatNumber(value)} ${currency}`;
+}
+
+// Replace the tbody's contents with one full-width message row (empty
+// ledger, backend unreachable). Same wipe-and-rebuild trick as the
+// watchlist's setWatchlistMessage.
+function setLedgerMessage(text) {
+    ledgerBody.textContent = "";
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 10; // one cell spanning the whole table (must match the
+                       // <th> count — 10 columns)
+    cell.className = "empty-state";
+    cell.textContent = text;
+    row.append(cell);
+    ledgerBody.append(row);
+}
+
+// Rebuild the tbody: one <tr> per transaction. Facts are always present;
+// live cells (value/gain) exist only when the backend could quote that
+// ticker — otherwise they gap-fill to "—".
+function renderLedger(transactions) {
+    if (transactions.length === 0) {
+        setLedgerMessage("No transactions yet — log your first above.");
+        return;
+    }
+
+    // Wipe last cycle's rows, then build fresh ones. createElement +
+    // textContent only: assembled strings (innerHTML) would let any
+    // backend-originated text execute as markup.
+    ledgerBody.textContent = "";
+
+    for (const tx of transactions) {
+        const row = document.createElement("tr");
+
+        // --- Facts (from the DB, always present) ---
+        const dateCell = document.createElement("td");
+        dateCell.textContent = tx.transaction_date;
+
+        const typeCell = document.createElement("td");
+        const badge = document.createElement("span");
+        badge.className =
+            `tx-badge ${tx.transaction_type === "BUY" ? "buy" : "sell"}`;
+        badge.textContent = tx.transaction_type;
+        typeCell.append(badge);
+
+        const tickerCell = document.createElement("td");
+        tickerCell.textContent = tx.ticker;
+
+        const qtyCell = document.createElement("td");
+        qtyCell.className = "num";
+        qtyCell.textContent = formatNumber(tx.qty, 4);
+
+        // Native currency per security — the stored code travels with the
+        // facts (no FX conversion, per the brief).
+        const priceCell = document.createElement("td");
+        priceCell.className = "num";
+        priceCell.textContent = `${formatNumber(tx.price)} ${tx.currency}`;
+
+        // --- Live cells (present only when decorated) ---
+        const hasLive = tx.price_now !== undefined;
+
+        const valueCell = document.createElement("td");
+        valueCell.className = "num ledger-live";
+        const gainCell = document.createElement("td");
+        gainCell.className = "num ledger-live";
+        const gainPctCell = document.createElement("td");
+        gainPctCell.className = "num ledger-live";
+        const dayGainCell = document.createElement("td");
+        dayGainCell.className = "num ledger-live";
+        const dayPctCell = document.createElement("td");
+        dayPctCell.className = "num ledger-live";
+
+        if (hasLive) {
+            valueCell.textContent = `${formatNumber(tx.value)} ${tx.currency}`;
+
+            // Total gain/pct: the position's whole lifetime since purchase.
+            gainCell.textContent = formatSigned(tx.total_gain, tx.currency);
+            gainPctCell.textContent =
+                `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
+
+            // Day gain/pct: TODAY's move only. The % is the ticker's daily
+            // move itself — the same for any position size.
+            dayGainCell.textContent = formatSigned(tx.day_gain, tx.currency);
+            dayPctCell.textContent =
+                `${tx.day_gain_pct >= 0 ? "+" : ""}${tx.day_gain_pct.toFixed(2)}%`;
+
+            // Green for gains, red for losses — the shared pos/neg classes.
+            // Each pair colours independently: a position can be up overall
+            // (green Total) while today is red (neg Day).
+            for (const [cell, value] of [
+                [gainCell, tx.total_gain],
+                [gainPctCell, tx.total_gain_pct],
+                [dayGainCell, tx.day_gain],
+                [dayPctCell, tx.day_gain_pct],
+            ]) {
+                cell.classList.toggle("pos", value >= 0);
+                cell.classList.toggle("neg", value < 0);
+            }
+        } else {
+            // The backend couldn't quote this ticker this cycle. The facts
+            // still show; only the live cells degrade.
+            valueCell.textContent = "—";
+            gainCell.textContent = "—";
+            gainPctCell.textContent = "—";
+            dayGainCell.textContent = "—";
+            dayPctCell.textContent = "—";
+        }
+
+        row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
+                   valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell);
+        ledgerBody.append(row);
+    }
+}
+
+// Degrade live cells to "—" when a refresh cycle fails entirely but fact
+// rows from an earlier cycle are still on screen (mirrors the watchlist's
+// markWatchlistUnavailable).
+function markLedgerUnavailable() {
+    ledgerBody.querySelectorAll(".ledger-live").forEach((cell) => {
+        cell.textContent = "—";
+        cell.classList.remove("pos", "neg");
+    });
+}
+
+// One ledger refresh cycle: GET -> rebuild rows. The backend's quote cache
+// means at most every other cycle touches Yahoo — same rhythm as the chips
+// and the watchlist.
+async function refreshLedger() {
+    try {
+        const response = await fetch("/api/transactions");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const transactions = await response.json();
+        renderLedger(transactions);
+    } catch (err) {
+        console.error("ledger refresh failed:", err);
+        if (ledgerBody.querySelector(".ledger-row")) {
+            markLedgerUnavailable();
+        } else {
+            // We never got rows at all — can't know if the ledger is empty
+            // or unreachable, so say exactly that.
+            setLedgerMessage("Ledger unavailable");
+        }
+    }
+}
+
+// Form submit: the ONLY way rows are born. preventDefault stops the
+// browser's native full-page form POST — we want fetch + partial update,
+// not a navigation. The backend remains the real validator: its named
+// 400/404 messages are shown inline, its 201 is the trigger to re-fetch.
+txForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    // FormData collects every named input's current value; fromEntries
+    // turns it into a plain object. Numbers arrive as STRINGS from inputs
+    // — Number() converts them to real JSON numbers before shipping.
+    const fields = Object.fromEntries(new FormData(txForm));
+    const body = {
+        ticker: String(fields.ticker || "").trim().toUpperCase(),
+        date: fields.date,
+        price: Number(fields.price),
+        qty: Number(fields.qty),
+        type: fields.type,
+    };
+
+    // Fresh attempt, fresh error state.
+    txErrorEl.hidden = true;
+
+    try {
+        const response = await fetch("/api/transactions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => null);
+            txErrorEl.textContent =
+                err?.error || `Could not log transaction (HTTP ${response.status})`;
+            txErrorEl.hidden = false;
+            return;
+        }
+        // 201: the row exists server-side. Clear the form (reset() restores
+        // HTML-attribute defaults, so the date default — set in JS — must be
+        // re-applied) and pull the truth immediately rather than waiting
+        // for the next poll.
+        txForm.reset();
+        txDateInput.value = todayLocalISO();
+        refreshLedger();
+    } catch (err) {
+        console.error("log transaction failed:", err);
+        txErrorEl.textContent = "Could not reach the server — is it running?";
+        txErrorEl.hidden = false;
+    }
+});
+
+// Prefill the date input ONCE at load: "today" is the overwhelmingly common
+// answer for a fresh transaction.
+txDateInput.value = todayLocalISO();
+
+// ---------------------------------------------------------------------------
+// PORTFOLIO CHART — placeholder data for now. Chart.js itself came from the
+// CDN <script> tag in index.html, so a global "Chart" class already exists
+// by the time this runs. Real backend data comes later; this section proves
+// the canvas renders and shows the config shape we'll reuse then.
+// ---------------------------------------------------------------------------
+
+// The canvas from the HTML — our blank drawing pad — and its "2D context":
+// the object whose methods actually paint pixels onto the pad.
+const portfolioCanvas = document.getElementById("portfolioChart");
+const portfolioCtx = portfolioCanvas.getContext("2d");
+
+// A handle we can use later to push real data into the same chart
+// (see the comment at the end of this section).
+let portfolioChart = null;
+
+// Guard: the CDN could be unreachable (offline, blocked, down). Without this
+// check, "new Chart(...)" would throw and kill EVERYTHING below in main.js —
+// including the watchlist boot code. One if/else buys graceful degradation.
+if (typeof Chart === "undefined") {
+    console.error("Chart.js failed to load from the CDN — chart skipped");
+} else {
+    portfolioChart = new Chart(portfolioCtx, {
+        // "type" picks the chart family. "line" connects each point to the
+        // next — the classic stock-chart look. Other options: "bar",
+        // "doughnut" (that one is planned for portfolio allocation later).
+        type: "line",
+
+        data: {
+            // labels = x-axis categories, one slot per data point.
+            labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            datasets: [
+                {
+                    // A dataset is ONE series of numbers = one line.
+                    label: "Portfolio Value",
+                    data: [142.0, 143.5, 141.75, 144.2, 146.8, 145.1, 148.3],
+                    // Google blue line + a faint translucent fill under it.
+                    borderColor: "#1a73e8",
+                    backgroundColor: "rgba(26, 115, 232, 0.1)",
+                    fill: true,
+                    // tension bends the line between points: 0 = straight
+                    // segments, higher = smoother curves. ~0.3 looks like
+                    // a finance chart without distorting the data.
+                    tension: 0.3,
+                    pointRadius: 3,
+                },
+            ],
+        },
+
+        options: {
+            // responsive: redraw to match the parent .chart-box's size.
+            // maintainAspectRatio: false lets our CSS height (300px) win —
+            // otherwise Chart.js locks in its own width:height ratio.
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                // With only one dataset, the legend ("Portfolio Value"
+                // swatch) adds nothing. Off it comes, for the clean look.
+                legend: { display: false },
+            },
+            scales: {
+                x: { grid: { display: false } }, // no vertical gridlines
+                y: {
+                    grid: { color: "#e0e0e0" },
+                    // beginAtZero: false starts the y-axis near the data's
+                    // minimum instead of 0 — exactly how real stock charts
+                    // make small daily moves visible.
+                    beginAtZero: false,
+                },
+            },
+        },
+    });
+}
+
+// "portfolioChart" is our handle on the live chart object. When real data
+// arrives later, updating the chart will look like:
+//   portfolioChart.data.labels = [...new labels];
+//   portfolioChart.data.datasets[0].data = [...new values];
+//   portfolioChart.update();
+// — and the canvas redraws itself. No page reload, no new Chart needed.
+
+// ---------------------------------------------------------------------------
 // BOOT — the script's entry point. This block runs top-to-bottom the moment
 // the browser reaches it, and only now are all the functions above defined.
 // ---------------------------------------------------------------------------
@@ -312,15 +637,18 @@ watchlistEl.addEventListener("click", async (event) => {
 //    starts truly empty and refreshWatchlist paints it within the second.
 setChipState("…");
 
-// 2. Fetch both sections immediately — no waiting for the first interval.
+// 2. Fetch all three sections immediately — no waiting for the first interval.
 refreshIndices();
 refreshWatchlist();
+refreshLedger();
 
-// 3. Poll. ONE timer drives both cycles: both sections' quotes change at
-//    the same rate, so polling them together keeps the two sections in
-//    lockstep and doubles as the watchlist's change-detector (add/remove
-//    shows up within a minute even without its own trigger).
+// 3. Poll. ONE timer drives all cycles: all three sections' data changes at
+//    the same rate, so polling them together keeps them in lockstep and
+//    doubles as the change-detector for anything added through other
+//    windows or tabs (add/remove/log shows up within a minute even without
+//    its own trigger).
 setInterval(() => {
     refreshIndices();
     refreshWatchlist();
+    refreshLedger();
 }, REFRESH_MS);
