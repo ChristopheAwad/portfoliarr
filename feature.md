@@ -1,68 +1,40 @@
-# Feature: Live S&P 500 Index Chip
+# Feature: Live watchlist with add/remove
 
-> Context file for resuming work in a new session. Read `project-brief.md` first — it is the authoritative spec.
+Goal: watchlist items behave like the four index chips — live prices polled
+every 60s — plus the ability to add/remove tickers from the UI.
 
-## Goal
+## Decisions made (2026-08-31)
 
-Replace the hardcoded values in the top indices bar (S&P 500 chip) with live data from yfinance, following the brief's architecture: **Flask serves JSON, browser renders via `fetch`**.
+- **Storage: SQLite table** in `instance/portfolio.db` (file already existed,
+  empty). Survives server restarts; establishes the DB pattern we'll need for
+  the transaction ledger. New `db.py` module keeps SQLite out of app.py.
+- **Add UX: "+ Add" button opens `prompt()`** for a ticker. Backend validates
+  the ticker is real (via `get_quote`, which doubles as cache warm-up) before
+  inserting. Duplicate → 409, unknown → 404.
+- **Names: fetched once via `get_name()`** in market_data.py with a separate
+  process-lifetime cache (names never change → no TTL, unlike prices).
 
-```
-yfinance (Python) → Flask JSON endpoint → JS fetch() → DOM update
-```
+## Key design point
 
-## Decisions Already Made
-
-| Decision | Choice |
-|---|---|
-| Scope | **S&P 500 only** (`^GSPC`). The other 3 chips (Nasdaq, Dow, Russell) stay static placeholders for now. |
-| Cache | **In-memory dict with TTL** (~60s). SQLite cache comes later with the transaction ledger. |
-| Refresh | **Poll every 60s** via `setInterval` in JS. |
-
-## Relevant Current State
-
-- `app.py` — Flask entrypoint, has root route `/` serving `index.html` with an empty watchlist.
-- `templates/index.html:26-47` — `indices-bar` section with 4 hardcoded chips; the S&P 500 chip is the target.
-- `templates/index.html:8` — stylesheet linked as `../static/style.css` (fragile; fix to `url_for`).
-- `static/style.css` — `.chip`, `.index-name`, `.index-price`, `.index-change`, `.pos`/`.neg` classes already exist.
-- No `requirements.txt`, no venv, no JS files yet.
+Unlike the indices bar (chips are fixed in HTML, JS finds them by
+`data-symbol`), watchlist rows come and go — the frontend must learn the
+symbol list from the backend. So `GET /api/watchlist` returns
+`{"symbols": [...], "quotes": [...]}`: rows render for ALL symbols, quotes
+gap-fill with "—" for failures, same contract as `/api/indices`.
 
 ## Subtasks
 
-### 1. Environment setup
-- Create `requirements.txt` with `flask` + `yfinance`.
-- Create virtual environment, `pip install -r requirements.txt`.
-- Verify network access to Yahoo works before continuing.
-
-### 2. yfinance scratch experiment (`/tmp/opencode/scratch.py`)
-- Fetch `^GSPC` via `.fast_info` and `.history(period="2d")`.
-- Inspect what fields come back (`last_price`, `previous_close`, etc.) before wiring anything up.
-
-### 3. `market_data.py` — data module
-- `get_sp500_quote()` → `{symbol, name, price, change, change_pct}` computed from last close vs previous close.
-- In-memory TTL cache (~60s): module-level dict holding `{data, fetched_at}`; stale entries trigger a fresh yfinance call.
-- Return an error indicator on network failure so the route can respond cleanly.
-
-### 4. `GET /api/indices` in `app.py`
-- Calls the module, `jsonify`s the result.
-- Returns `503` + error JSON if Yahoo is unreachable.
-
-### 5. Frontend wiring
-- Add `data-symbol="^GSPC"` to the S&P chip in `templates/index.html`.
-- Create `static/js/main.js`:
-  - `fetch('/api/indices')` → update price (formatted like `5,088.80` via `Intl.NumberFormat`), change %, toggle `pos`/`neg` class.
-  - Run once on load, then `setInterval(..., 60000)`.
-- Fix stylesheet link to `{{ url_for('static', filename='style.css') }}`.
-
-### 6. Verify end-to-end
-- `curl http://localhost:5000/api/indices`.
-- Load page, confirm live value + 60s refresh.
-- Test error path (e.g., disconnect network) — page should degrade gracefully, not break.
-
-## Learning Notes (user is a beginner — explain as we go)
-
-1. venv + dependency pinning
-2. Exploring an unfamiliar API before using it
-3. Separation of concerns; what a TTL cache is and why (rate-limit protection)
-4. JSON endpoints, `jsonify`, HTTP status codes
-5. `fetch` + async/await, DOM manipulation, number formatting
-6. Tracing a request through the full stack; browser dev tools Network tab
+- [x] `db.py`: SQLite helpers (init / get_symbols / add_symbol / remove_symbol),
+      parameterized queries, connection per call
+- [x] `market_data.py`: `get_name(symbol)` with process-lifetime `_name_cache`
+- [x] `app.py`: GET/POST/DELETE `/api/watchlist`; copy quote dicts before
+      adding `name` (cache returns shared objects — never mutate them);
+      remove dead `watchlist = []` placeholder from index()
+- [x] `index.html`: Jinja loop + static mock rows out; empty `<ul>` JS fills,
+      empty-state element, per-row remove button
+- [x] `main.js`: renderWatchlistRows (createElement + textContent),
+      updateWatchRow (reuse formatPrice + pos/neg), refreshWatchlist on boot +
+      shared interval; + Add prompt → POST; remove via event delegation → DELETE
+- [x] `style.css`: .remove-btn + empty-state styling
+- [x] Verify: curl happy paths + 409/404; browser add/remove; restart server
+      and confirm rows persist

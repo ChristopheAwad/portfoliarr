@@ -232,6 +232,32 @@ body {
 .change-tag.pos { background-color: var(--green-bg); }
 .change-tag.neg { background-color: var(--red-bg); }
 
+/* Watchlist row remove button. visibility:hidden keeps the button's box
+   (so the row layout doesn't shift when it appears) while making it
+   invisible until the mouse rests on its row — a common "quiet UI" trick. */
+.remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    visibility: hidden;
+}
+
+.watchlist-item:hover .remove-btn { visibility: visible; }
+
+.remove-btn:hover { color: var(--red-neg); }
+
+/* The "Nothing here yet" / "Watchlist unavailable" message row */
+.empty-state {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 12px 0;
+}
+
 /* Responsive */
 @media (max-width: 920px) {
     .dashboard-grid {
