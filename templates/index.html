@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Google Finance Clone</title>
 
-    <link rel="stylesheet" href="../static/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
@@ -22,25 +22,27 @@
     <!-- Main Container -->
     <main class="container">
 
-        <!-- Market Index Chips -->
+        <!-- Market Index Chips. data-symbol is the hook main.js uses to find
+             each chip (by meaning, not position). Every chip here is managed:
+             main.js blanks them to "…" on load and fills with live data. -->
         <section class="indices-bar">
-            <div class="chip">
+            <div class="chip" data-symbol="^GSPC">
                 <span class="index-name">S&P 500</span>
                 <span class="index-price">5,088.80</span>
                 <span class="index-change pos">+0.42%</span>
             </div>
-            <div class="chip">
+            <div class="chip" data-symbol="^IXIC">
                 <span class="index-name">Nasdaq</span>
                 <span class="index-price">16,000.10</span>
                 <span class="index-change pos">+0.83%</span>
             </div>
-            <div class="chip">
-                <span class="index-name">Dow Jones</span>
+            <div class="chip" data-symbol="^GSPTSE">
+                <span class="index-name">TSX</span>
                 <span class="index-price">38,989.84</span>
                 <span class="index-change neg">-0.15%</span>
             </div>
-            <div class="chip">
-                <span class="index-name">Russell 2000</span>
+            <div class="chip" data-symbol="BTC-USD">
+                <span class="index-name">Bitcoin</span>
                 <span class="index-price">2,016.69</span>
                 <span class="index-change pos">+0.10%</span>
             </div>
@@ -53,8 +55,8 @@
             <div class="main-content">
                 <div class="card stock-header-card">
                     <div class="stock-title">
-                        <h2>Alphabet Inc (GOOGL)</h2>
-                        <span class="badge">NASDAQ</span>
+                        <h2>Your Portfolio</h2>
+                        <span class="badge">Main</span>
                     </div>
                     <div class="stock-price-container">
                         <span class="current-price">$143.96</span>
@@ -126,5 +128,8 @@
 
     </main>
 
+    <!-- main.js is loaded last so the HTML above exists before it runs.
+         url_for stamps the correct static path at render time. -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

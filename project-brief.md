@@ -46,3 +46,18 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - Native currency display per security (no FX conversion)
 
 **Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios.
+
+## Temporary Decisions (will need rework in the future)
+
+- ~~**`/api/indices` fails all-or-nothing.**~~ **RESOLVED — rework done.**
+  Was a deliberate MVP simplification while the bar served one chip
+  (`^GSPC`). The documented rework trigger fired when the bar grew to four
+  chips (`^GSPC`, `^IXIC`, `^GSPTSE` (TSX), `BTC-USD`): the route now uses
+  per-symbol resilience — each chip fetched independently, failed symbols
+  simply absent from the success-only response, `503` only when *all*
+  symbols fail; the frontend marks unanswered chips with `—`. Kept here as
+  decision history.
+- **Quote cache is an in-memory dict** (`market_data.py`, TTL 120s), not
+  SQLite as listed in the stack table. Dies on server restart, which is
+  acceptable for prices. **Rework trigger:** when the SQLite transaction
+  ledger is built, consider moving the price cache into the same database.
