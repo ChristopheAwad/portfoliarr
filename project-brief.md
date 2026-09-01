@@ -64,19 +64,16 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   simply absent from the success-only response, `503` only when *all*
   symbols fail; the frontend marks unanswered chips with `—`. Kept here as
   decision history.
-- **Portfolio chart shows hardcoded placeholder data.** The dashboard's
-  line chart is real Chart.js (CDN in `index.html` `<head>`, `<canvas>` in
-  the `.chart-box`, init code in `main.js`), but its values are a fake
-  7-day series literal in `main.js`, added as a learning exercise: to see
-  the finished look early and to learn Chart.js's config shape before
-  wiring real data. The timeframe buttons (1D–MAX) are still decorative.
-  **Must be replaced with a real implementation:** portfolio value
-  computed from the transaction ledger + live/historical prices, served
-  by a backend endpoint (e.g. `/api/portfolio/history`), with the
-  timeframe buttons driving which range is fetched. **Rework trigger:**
-  as soon as the transaction ledger exists — updating the chart is then
-  just `portfolioChart.data.* = ...; portfolioChart.update()` (handle
-  already kept in `main.js`).
+- **Portfolio chart shows hardcoded placeholder data.** ~~The dashboard's
+  line chart is real Chart.js, but its values were a fake series.~~
+  **RESOLVED — rework done.** The chart now plots real portfolio value
+  over time, computed by `GET /api/portfolio/history` from the
+  transaction ledger + historical close prices (`get_history` in
+  `market_data.py`, `PERIOD_MAP` maps the 1D–MAX buttons to
+  yfinance period/interval pairs). One deliberate simplification kept:
+  a transaction dated on a non-trading day (weekend/holiday) is applied
+  at the NEXT trading day's bar, since a date-only ledger can't know the
+  intraday moment. Kept here as decision history.
 - **Quote cache is an in-memory dict** (`market_data.py`, TTL 120s), not
   SQLite as listed in the stack table. Dies on server restart, which is
   acceptable for prices. **Rework trigger:** when the SQLite transaction

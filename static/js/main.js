@@ -906,10 +906,12 @@ txCancelBtn.addEventListener("click", exitEditMode);
 txDateInput.value = todayLocalISO();
 
 // ---------------------------------------------------------------------------
-// PORTFOLIO CHART — placeholder data for now. Chart.js itself came from the
-// CDN <script> tag in index.html, so a global "Chart" class already exists
-// by the time this runs. Real backend data comes later; this section proves
-// the canvas renders and shows the config shape we'll reuse then.
+// PORTFOLIO CHART — real portfolio value over time. Chart.js itself came
+// from the CDN <script> tag in index.html, so a global "Chart" class already
+// exists by the time this runs. The CHART is created once, here, with empty
+// data; refreshPortfolioChart() fills it from /api/portfolio/history when
+// the page loads (5D, the default) and every time a timeframe button is
+// clicked.
 // ---------------------------------------------------------------------------
 
 // The canvas from the HTML — our blank drawing pad — and its "2D context":
@@ -917,8 +919,18 @@ txDateInput.value = todayLocalISO();
 const portfolioCanvas = document.getElementById("portfolioChart");
 const portfolioCtx = portfolioCanvas.getContext("2d");
 
-// A handle we can use later to push real data into the same chart
-// (see the comment at the end of this section).
+// The timeframe button bar. Delegated listener picks up clicks on any
+// .time-btn, reads its textContent as the period key, and re-fetches.
+const chartButtonsEl = document.querySelector(".chart-timeframe-selectors");
+
+// The default period — must match the `active` button in index.html (5D),
+// so the first thing the chart shows is the same range the button bar
+// claims is selected.
+const DEFAULT_CHART_PERIOD = "5D";
+
+// A handle on the live chart object. Created once at load with empty
+// data; every refresh just swaps assigns new labels/values and calls
+// update() — no re-creating the Chart, no page reload.
 let portfolioChart = null;
 
 // Guard: the CDN could be unreachable (offline, blocked, down). Without this
@@ -933,14 +945,19 @@ if (typeof Chart === "undefined") {
         // "doughnut" (that one is planned for portfolio allocation later).
         type: "line",
 
+        // Empty by design — refreshPortfolioChart() fills these in. The
+        // dataset object is created here so its presentational config (line
+        // shade, fill, tension) lives in ONE place and survives every refresh.
         data: {
-            // labels = x-axis categories, one slot per data point.
-            labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            // labels = x-axis categories, one slot per data point. Filled
+            // from the backend's {"labels": [...], "values": [...]}.
+            labels: [],
             datasets: [
                 {
                     // A dataset is ONE series of numbers = one line.
                     label: "Portfolio Value",
-                    data: [142.0, 143.5, 141.75, 144.2, 146.8, 145.1, 148.3],
+                    // Filled from the backend's "values" list.
+                    data: [],
                     // Google blue line + a faint translucent fill under it.
                     borderColor: "#1a73e8",
                     backgroundColor: "rgba(26, 115, 232, 0.1)",
@@ -979,12 +996,51 @@ if (typeof Chart === "undefined") {
     });
 }
 
-// "portfolioChart" is our handle on the live chart object. When real data
-// arrives later, updating the chart will look like:
-//   portfolioChart.data.labels = [...new labels];
-//   portfolioChart.data.datasets[0].data = [...new values];
-//   portfolioChart.update();
-// — and the canvas redraws itself. No page reload, no new Chart needed.
+// One refresh: GET /api/portfolio/history?period=... then paint.
+// "period" is a PERIOD_MAP key ("5D", "1M", "3M"...) passed through to the
+// backend, which validates it. The chart is mutated in place — Chart.js
+// redraws itself on update(), so swapping the arrays is all it takes.
+async function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
+    // If Chart.js never loaded, portfolioChart is null — nothing to paint.
+    if (!portfolioChart) return;
+
+    try {
+        const response = await fetch(`/api/portfolio/history?period=${period}`);
+        // fetch does NOT throw on 4xx/5xx — only on network failure. A 400
+        // (bad period key) arrives with ok === false; the browser's buttons
+        // only ever send valid keys, so this mainly guards against drift.
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json(); // {labels: [...], values: [...]}
+
+        // Swap the data, then redraw. The presentational config (colour,
+        // tension...) was set once at creation and is untouched here.
+        portfolioChart.data.labels = data.labels;
+        portfolioChart.data.datasets[0].data = data.values;
+        portfolioChart.update();
+    } catch (err) {
+        console.error("portfolio chart refresh failed:", err);
+    }
+}
+
+// Timeframe buttons: ONE delegated listener on the button bar. The buttons
+// are static HTML (never rebuilt), so a direct listener would work too —
+// delegation is used here simply to match the watchlist/ledger pattern and
+// keep all click handling in one place.
+chartButtonsEl.addEventListener("click", (event) => {
+    // Ignore clicks that land on the bar itself (the gap between buttons).
+    const btn = event.target.closest(".time-btn");
+    if (!btn) return;
+
+    // textContent is the period key: "1D", "5D", "3M"... — exactly what the
+    // backend's PERIOD_MAP expects. No separate map to keep in sync.
+    const period = btn.textContent.trim();
+
+    // Swap the active highlight to the clicked button, then fetch+paint.
+    chartButtonsEl.querySelectorAll(".time-btn").forEach((b) =>
+        b.classList.remove("active"));
+    btn.classList.add("active");
+    refreshPortfolioChart(period);
+});
 
 // ---------------------------------------------------------------------------
 // BOOT — the script's entry point. This block runs top-to-bottom the moment
@@ -1000,6 +1056,11 @@ setChipState("…");
 refreshIndices();
 refreshWatchlist();
 refreshLedger();
+// The portfolio chart is fetched once at load (its default 5D view) and
+// again only when a timeframe button is clicked — unlike the quote-driven
+// sections, price history doesn't change on a 60s cadence, so it would be
+// wasteful (and Yahoo rate-limit-hammering) to poll it too.
+refreshPortfolioChart();
 
 // 3. Poll. ONE timer drives all cycles: all three sections' data changes at
 //    the same rate, so polling them together keeps them in lockstep and

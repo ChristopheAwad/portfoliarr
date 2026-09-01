@@ -9,7 +9,7 @@ from flask import Flask, jsonify, render_template, request
 # symbols the page needs and HOW answers map to HTTP; market_data.py handles
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
-from market_data import get_quote, get_name
+from market_data import get_quote, get_name, get_history, PERIOD_MAP
 import db
 
 # datetime's date class knows how to both VALIDATE and NORMALIZE dates:
@@ -70,6 +70,147 @@ def index_quotes():
     # Successes only: failed symbols are simply absent from the list.
     # The frontend infers which chips to mark unavailable ("—").
     return jsonify(quotes)
+
+
+# ---------------------------------------------------------------------------
+# PORTFOLIO VALUE CHART — the dashboard's line chart, computed from the
+# transaction ledger + historical prices.
+#
+# This is the chart that started life as hardcoded placeholder data in
+# main.js (a learning exercise). Now that the ledger exists, we can plot
+# REAL numbers: for every point in the selected timeframe, the portfolio
+# is worth the sum of each held quantity times that ticker's close price
+# that day.
+#
+# The timeframe buttons (1D..MAX) each map to a Yahoo period/interval via
+# PERIOD_MAP in market_data.py — this route validates the client's key
+# against the same dict, keeping the label-to-fetch mapping in one place.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/portfolio/history")
+def portfolio_history():
+    """Return the portfolio's value over time as {labels, values}.
+
+    Query param `period` is a PERIOD_MAP key ("5D", "1M"...); defaults
+    to "5D" (the chart's default view, matching the 5D button's `active`
+    class in index.html). Anything else gets a 400.
+
+    Algorithm: walk every trading day in the range forward, keeping a
+    running "net quantity held" per ticker (buys add, sells subtract),
+    and at each day multiply that quantity by the ticker's close. Sum
+    across tickers = portfolio value that day. Before a ticker's first
+    buy its quantity is 0, so it contributes nothing until you own it.
+    """
+    # Validate the timeframe key BEFORE doing any work. get_history()
+    # indexes PERIOD_MAP directly, so a bad key would KeyError mid-loop;
+    # catching it here (and returning the valid options) is friendlier.
+    period = request.args.get("period", "5D").upper()
+    if period not in PERIOD_MAP:
+        options = ", ".join(sorted(PERIOD_MAP))
+        return jsonify({"error": f"period must be one of: {options}"}), 400
+
+    # The ledger's default sort is newest-first; we need the opposite to
+    # walk history forward, so sort ascending here.
+    transactions = sorted(
+        db.get_transactions(),
+        key=lambda tx: (tx["transaction_date"], tx["id"]),
+    )
+
+    # An empty ledger is a normal state, not an error — the frontend
+    # shows "No transactions yet" and leaves the chart blank.
+    if not transactions:
+        return jsonify({"labels": [], "values": []})
+
+    # Fetch each ticker's price history once. Per-ticker resilience, the
+    # same rule as the indices bar: a dead/delisted ticker is skipped,
+    # its contribution is 0 for the whole period — never a 503 for the
+    # whole chart.
+    histories = {}
+    for tx in transactions:
+        symbol = tx["ticker"]
+        if symbol in histories:
+            continue
+        try:
+            histories[symbol] = get_history(symbol, period)
+        except Exception:
+            histories[symbol] = {}  # he can't be priced; treat as 0
+
+    # The x-axis = the union of every ticker's trading days, ascending.
+    # Build a set first (O(1) membership), then sort once.
+    all_labels = set()
+    for history in histories.values():
+        all_labels.update(history)
+    labels = sorted(all_labels)
+
+    # Intraday (1D) labels are times ("09:30"), not dates ("2026-08-31") —
+    # see get_history. So "which label applies which transaction" differs:
+    #   Daily bars: a transaction dated that DAY applies at that day's bar.
+    #   Intraday bars: every transaction dated TODAY applies at today's
+    #     FIRST bar (they all happened during today's session, and we can't
+    #     know the exact minute from a date-only ledger — applying at the
+    #     open is the honest, simple choice).
+    # Detect the case by the interval (same dict that drove the fetch), and
+    # grab today's date once (same local-day rule the frontend's date input
+    # uses, so a "today" trade prices into today's intraday chart).
+    is_intraday = PERIOD_MAP[period]["interval"] != "1d"
+    label_date_today = date.today().isoformat()
+
+    # Walk each label forward, maintaining quantity per ticker. This is
+    # the heart of the chart: buying shares must push the line up from
+    # that point on; selling must pull it down. We only add/sell, never
+    # average cost — that (more nuanced) math is a later feature.
+    #
+    # Applying transactions is date-driven, and a transaction's date may
+    # NOT be a trading-day label (it was a weekend/holiday — e.g. the
+    # user logs a "Saturday" buy). So we use a POINTER into the
+    # sorted-by-date transaction list: at each label we apply every
+    # transaction whose date is on-or-before it that we haven't applied
+    # yet. A Saturday buy therefore lands on the NEXT trading day's bar,
+    # which is the honest approximation available to us.
+    net_qty = {}
+    values = []
+    tx_index = 0        # next un-applied daily transaction (advances through
+                        # the sorted list); unused in the intraday branch
+    today_applied = False  # intraday: have today's transactions been applied?
+    for label in labels:
+        # Choose which transactions this label should absorb, then apply
+        # them BEFORE pricing (a buy today prices at today's close).
+        if is_intraday:
+            # Intraday facts: see the comment above — today's txs apply at
+            # the first bar of today's session, once.
+            if not today_applied:
+                today_applied = True
+                for tx in transactions:
+                    if tx["transaction_date"] == label_date_today:
+                        net_qty[tx["ticker"]] = (
+                            net_qty.get(tx["ticker"], 0)
+                            + (tx["qty"]
+                               if tx["transaction_type"] == "BUY" else -tx["qty"])
+                        )
+        else:
+            # Daily: transactions are sorted by date, so as long as the
+            # transaction's date is still on-or-before this label, it
+            # belongs to the position from here on. Apply it now (once)
+            # and advance.
+            while tx_index < len(transactions) \
+                    and transactions[tx_index]["transaction_date"] <= label:
+                tx = transactions[tx_index]
+                tx_index += 1
+                net_qty[tx["ticker"]] = net_qty.get(tx["ticker"], 0) + (
+                    tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
+                )
+
+        # Sum each ticker's held quantity × its close price at this label.
+        total = 0.0
+        for symbol, held in net_qty.items():
+            if held != 0:
+                # .get(label, 0): a day where Yahoo has no bar for this
+                # ticker (holiday, delisted) counts as holding it at 0 —
+                # a deliberate flat line rather than a gap.
+                total += held * histories[symbol].get(label, 0)
+        values.append(total)
+
+    return jsonify({"labels": labels, "values": values})
 
 
 # JSON endpoint powering the live watchlist. One route, two payloads:
