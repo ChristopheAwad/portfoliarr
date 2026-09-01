@@ -15,3 +15,6 @@ instance/
 .DS_Store
 .idea/
 .vscode/
+
+# Test framework
+.pytest_cache/

@@ -15,7 +15,8 @@
 - Activate venv: `source .venv/bin/activate`
 - Run dev server: `python app.py` (debug mode, port 5000)
 - Verify live data: `curl http://localhost:5000/api/indices`
-- Deps pinned in `requirements.txt`. No tests, lint, or CI exist yet.
+- Deps pinned in `requirements.txt`.
+- Run tests: `python -m pytest` from the project root. Test files live in `tests/`; shared setup goes in `conftest.py` (root).
 
 ## Git & GitHub
 - Repo: `ChristopheAwad/portfoliarr`, remote `origin` over HTTPS. Default branch `main` tracks `origin/main` — plain `git push` / `git pull` just work.
