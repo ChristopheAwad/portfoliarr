@@ -25,7 +25,8 @@
 ## Contracts that are easy to break
 - Adding an index chip = TWO edits: symbol in `INDEX_SYMBOLS` (`app.py`) AND a chip with matching `data-symbol` in `templates/index.html`. JS finds chips by `data-symbol`, not position.
 - `/api/indices` returns successes only (failed symbols absent); `503` only when ALL symbols fail; frontend gap-fills missing chips with "—". Keep both sides in sync.
-- Ledger table column count lives in TWO places: the `<th>` row (`templates/index.html`) AND `setLedgerMessage`'s `colSpan` (`static/js/main.js`). Adding/removing a column = edit both.
+- Ledger table column count (11, incl. the trailing actions column) lives in FOUR places: the `<th>` row (`templates/index.html`), `setLedgerMessage`'s `colSpan`, `buildGroupRow`'s cell list (summary rows end with a BLANK actions cell), AND `buildTxRow`'s cell list (`static/js/main.js`). Adding/removing a column = edit all four.
+- Edits go through `PUT /api/transactions/<id>` with body `{date, price, qty, type}` ONLY — ticker/currency are identity + a yfinance fact and are excluded from the UPDATE's SET list by design. POST and PUT share `validate_tx_fields` in `app.py`; add new field rules there once.
 - Backend sends raw floats; number formatting and `pos`/`neg` classes are frontend-only.
 
 ## MVP scope guard

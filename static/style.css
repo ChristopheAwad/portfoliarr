@@ -349,6 +349,78 @@ body {
     color: var(--red-neg);
 }
 
+/* Ledger group rows — the collapsed, clickable face of one ticker.
+   A faint tint + cursor:pointer signal "this row is a control"; .open
+   rotates the caret from ▸ (collapsed) to ▾ (expanded). */
+.ledger-group {
+    cursor: pointer;
+    background-color: var(--bg-color);
+}
+
+.ledger-group:hover {
+    background-color: #f1f3f4;
+}
+
+.ledger-group .caret {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.ledger-group.open .caret {
+    transform: rotate(90deg);
+}
+
+/* Detail rows sit visually inside their group: a small indent on the first
+   cell echoes tree UIs. Text colour is deliberately untouched here — the
+   pos/neg classes must keep winning on the gain cells. */
+.tx-detail td:first-child {
+    padding-left: 28px;
+}
+
+/* Ledger row action buttons (edit ✎ / delete ×), painted by main.js on
+   detail rows only. Same quiet hover-reveal trick as the watchlist's
+   remove button: visibility:hidden keeps each button's box (no layout
+   shift) while making them invisible until the mouse rests on their row. */
+.tx-action-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 4px;
+    cursor: pointer;
+    visibility: hidden;
+}
+
+.ledger-row:hover .tx-action-btn { visibility: visible; }
+
+.tx-action-btn.edit:hover { color: var(--blue-accent); }
+.tx-action-btn.delete:hover { color: var(--red-neg); }
+
+/* Edit-mode notice: the form is temporarily editing an existing row.
+   Blue tint = "state, not error" (errors stay red in .tx-error below). */
+.tx-editing {
+    background-color: #e8f0fe;
+    color: var(--blue-accent);
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.tx-cancel {
+    background: none;
+    border: none;
+    color: var(--blue-accent);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
 /* Responsive */
 @media (max-width: 920px) {
     .dashboard-grid {

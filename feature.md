@@ -149,8 +149,9 @@ Subtasks:
       live gain, sanity-check the math, confirm the inline error line on a
       bad input (e.g. fake ticker)
 
-Deferred (recorded, not scheduled): row edit/delete; prefilling the price
-field from the live quote once a ticker is entered.
+Deferred (recorded, not scheduled): prefilling the price field from the
+live quote once a ticker is entered. (Row edit/delete WAS deferred here —
+now scheduled as Step 2d below.)
 
 ### Step 2b — Day gain columns (follow-up) ✅ DONE
 
@@ -205,7 +206,192 @@ Subtasks:
       Yahoo fetches = prices drift between them. Test rows cleaned.
 - [ ] UI check by user (now 10 columns)
 
-### Step 3 — Holdings view + sell semantics ← CURRENT
+### Step 2c — Grouped ledger view (collapsed by ticker, expandable) ✅ DONE
+
+The flat one-row-per-transaction table repeats the same ticker over and
+over and grows without bound. Now transactions group by ticker: one
+collapsed summary row per ticker, expandable to reveal the individual
+transactions underneath.
+
+Decisions made (2026-08-31):
+
+- **Pure frontend.** `/api/transactions` already returns the flat
+  decorated list; grouping is display logic, so `app.py` is untouched
+  (AGENTS.md layering: main.js renders, the backend sends facts + floats).
+- **Summary aggregates = BUY rows only.** The collapsed row reflects
+  CURRENT holdings: net Qty = Σ(buy qty) − Σ(sell qty); Value / Total
+  Gain / Day Gain sum BUY rows only; Total Gain % = Σ total_gain ÷
+  Σ(price × qty of BUYs) × 100. Why: a SELL row's "value" is what the
+  *sold* shares would be worth today — summing that into a group total
+  inflates it. This matches Step 3's upcoming holdings math. SELL
+  details stay visible when expanded.
+- **Day Gain % in the summary** is the ticker's daily move — price-level,
+  identical for every row in the group (see Step 2b semantics), so it's
+  read from any decorated row rather than aggregated.
+- **Grouping preserves backend order.** Groups appear in first-appearance
+  order of the newest-first list — the most recently transacted ticker
+  on top.
+- **Expansion state lives in a Set, not the DOM.** `renderLedger` rebuilds
+  the tbody every 60s poll (watchlist pattern), so anything stored only in
+  the DOM dies with each rebuild. `expandedTickers` (a Set of tickers)
+  survives rebuilds; clicking a summary row toggles membership AND flips
+  the `hidden` attribute on that group's detail rows directly — instant,
+  no re-fetch.
+- **Collapsed by default, always** — even a lone-transaction group.
+  One exception: after a successful POST, the logged ticker's group
+  auto-expands so the row just entered is visible immediately.
+- **Guarded percentages.** A SELL-only group has no cost basis → Σ cost
+  is 0 → Total Gain % shows "—" instead of dividing by zero.
+- **Undecorated groups degrade wholesale.** app.py decorates per *unique
+  ticker*, so within a group either every row has live math or none —
+  the summary's live cells either fill or all gap-fill to "—". No
+  partial-group ambiguity exists by construction.
+
+Subtasks:
+
+- [x] feature.md: this section
+- [x] main.js: extract `buildTxRow(tx)` from renderLedger's loop (returns
+      the existing 10-cell `.ledger-row`, unchanged)
+- [x] main.js: `expandedTickers` Set + reworked renderLedger — group via
+      Map (first-appearance order), summary row per group (caret +
+      "N txns" in the Date cell, blank Type, bold ticker, net qty, "—"
+      price, BUY-only sums with pos/neg, guarded Total Gain %, day % from
+      any decorated row), then hidden detail rows via buildTxRow
+      (`row.hidden = !expandedTickers.has(ticker)`)
+- [x] main.js: delegated click listener on ledgerBody (watchlist ×-button
+      pattern — survives rebuilds): toggle ticker in expandedTickers,
+      flip `hidden` on `.tx-detail` rows directly; CSS.escape for tickers
+      like "BRK.B"
+- [x] main.js: POST success adds the logged ticker to expandedTickers
+      before refreshLedger()
+- [x] style.css: .ledger-group (cursor pointer, hover bg, bold ticker),
+      caret rotates on .open, detail rows visually subordinate
+- [x] AGENTS.md: extended the colSpan contract line — the group summary
+      row (`buildGroupRow`) is a third place the 10-column count matters
+- [x] Verified (2026-08-31, Flask test client — same process as the quote
+      cache): seeded 2 AAPL BUYs + 1 AAPL SELL + 1 SHOP.TO SELL; confirmed
+      all-or-nothing decoration per group, net qty = 12 (buys − sells),
+      BUY-only sums match the closed forms by hand
+      (gain = 15×live − 3100), Total % = Σgain ÷ Σcost, SELL-only group
+      has cost 0 → "—" guard, day_gain_pct uniform within a group.
+      Smoke test: `GET /` 200, `/api/transactions` decorated.
+      LESSON: the ledger held real user rows (ids 1–2, CM + AAPL) — test
+      scripts must filter/assert by seeded id only, never assume an empty
+      table; cleanup deleted exactly the seeded ids, user rows untouched.
+      (No node on this machine — JS reviewed by read-through; no automated
+      frontend test exists yet.)
+- [ ] UI check by user: groups collapsed by default; clicking a summary
+      row expands/collapses its transactions; expansion survives the 60s
+      poll; logging a new transaction auto-expands its group; summary
+      shows net qty + BUY-only aggregates; a ticker whose quote fails
+      shows "—" in the summary's live columns
+
+### Step 2d — Edit & delete transactions ← CURRENT
+
+The ledger was append-only (an explicit Step 2 decision, since un-deferred
+here): a typo'd price or qty was in there forever. Now each transaction can
+be corrected in place or removed — with one hard boundary: **edits touch
+only what the USER typed, never anything yfinance-derived.**
+
+Decisions made (2026-08-31):
+
+- **The ticker is the row's identity and is NOT editable.** Editable
+  fields: date, price, qty, type. Why: currency was auto-derived from the
+  ticker at insert time (a yfinance fact); letting the ticker change would
+  force the backend to re-quote and silently rewrite that fact mid-edit.
+  The user's rule — "edit my input, not yfinance's data" — makes the
+  boundary exact. A wrong ticker is a wrong identity: delete + re-log.
+  (User confirmed date IS editable; only price/qty/type was the
+  alternative on the table.)
+- **PUT semantics, honest body.** `PUT /api/transactions/<id>` takes
+  exactly `{date, price, qty, type}` — no ignored fields. If a client
+  sends a `ticker` anyway, the backend IGNORES it (validated in a test).
+- **Validation is shared, not duplicated.** The date/price/qty/type checks
+  move out of `log_transaction` into one `validate_tx_fields(body)` helper
+  used by BOTH POST and PUT — otherwise the two routes' rules could drift
+  and an edit could create a state the POST route would have rejected.
+  POST keeps its ticker validation inline (it's the only route that needs
+  one).
+- **404 before validation.** PUT/DELETE look the row up by id FIRST —
+  "no transaction with id 99" beats "date must be YYYY-MM-DD" when the id
+  was the wrong part. `get_transaction()` in db.py serves the existence
+  check; `<int:tx_id>` in the route makes Flask 404 non-numeric ids
+  itself.
+- **Edit reuses the top form** (user choice). Edit mode: prefill the 4
+  editable fields, DISABLE the ticker input (visual "identity locked"
+  cue), Log → Save, a quiet "Editing TICKER …" notice + Cancel link
+  appear. One form, one validation UX, one submit handler that branches
+  POST vs PUT. Same reasoning as Step 2's "inline form, not prompt chain":
+  the form IS the transaction vocabulary of this UI.
+- **Delete asks first.** `confirm()` dialog naming the transaction — the
+  DELETE is immediate and the backend has no undo. 204/404 handling
+  mirrors the watchlist remove (404 = already gone elsewhere → refresh
+  shows the truth).
+- **Edit state lives outside the DOM.** `editingTxId` (null = log mode) —
+  same reasoning as `expandedTickers`: the tbody rebuilds every 60s, so
+  form mode must not depend on rows staying put. On submit success OR
+  404 the mode exits; on a 400 it STAYS (fix the field, resave).
+- **Actions live on detail rows only** — group summary rows are
+  aggregates, not records; they gain a blank 11th cell to keep the
+  columns aligned. Edit/delete buttons are only reachable when a group is
+  expanded, which is the intended friction: collapsed = overview.
+- **Column count 10 → 11** (new trailing actions `<th>`). Per the
+  AGENTS.md contract this now lives in FOUR places: thead, colSpan,
+  buildGroupRow's blank cell, buildTxRow's actions cell.
+
+Subtasks:
+
+- [x] feature.md: this section + Step 2 deferral note updated
+- [x] db.py: `get_transaction(tx_id)` (dict or None),
+      `update_transaction(tx_id, transaction_date, price, qty,
+      transaction_type)` (touches ONLY the 4 editable columns; returns
+      rowcount > 0), `delete_transaction(tx_id)` (returns rowcount > 0) —
+      parameterized SQL throughout; ledger banner comment now names all
+      four verbs
+- [x] app.py: extracted `validate_tx_fields(body)` from log_transaction
+      (date/price/qty/type checks, named 400s unchanged, returns
+      normalized fields under DB-column names); POST keeps its ticker
+      check + get_quote/currency flow
+- [x] app.py: `PUT /api/transactions/<int:tx_id>` — 404 unknown id first,
+      shared validation, UPDATE of the 4 fields, 200 returns the re-read
+      stored row (ticker/currency untouched, sent tickers ignored)
+- [x] app.py: `DELETE /api/transactions/<int:tx_id>` — 204 on success,
+      404 if already gone
+- [x] index.html: 11th blank `<th class="actions">` for actions; tbody +
+      card comments mention per-row actions and the form's double duty
+- [x] main.js: `editingTxId` + `lastTransactions` cache (refreshLedger
+      stores what it fetched); buildTxRow sets `row.dataset.id` and gains
+      the actions cell; buildGroupRow + setLedgerMessage go to 11 columns
+- [x] main.js: second delegated ledgerBody listener — edit click looks up
+      the tx BY ID in the cache and prefills the form (ticker disabled,
+      Log→Save, "Editing…" notice, scrollIntoView); delete click
+      confirm()s then DELETEs (404 tolerated like the watchlist; exits
+      edit mode if the deleted row was the one being edited)
+- [x] main.js: submit handler branches POST/PUT on editingTxId; exits
+      edit mode on success or 404, stays on 400 (fixable); cancel + reset
+      restore log mode and the today-default date
+- [x] style.css: quiet hover-reveal .tx-action-btn pair (delete red,
+      edit blue), .tx-editing blue notice, .tx-cancel underline button
+- [x] AGENTS.md: column-count contract line — FOUR places, 11 columns;
+      NEW contract line for the PUT body `{date, price, qty, type}` +
+      shared-validator rule
+- [x] Verified (2026-08-31, Flask test client — seeded ids only per the
+      Step 2c lesson): PUT happy path reflects on GET with ticker/currency
+      unchanged; PUT with a "ticker" in the body → field ignored, stored
+      ticker unchanged; PUT 404 unknown id AND non-numeric id (Flask's
+      <int:> converter); 6 named 400 rejection paths (bad/real-but-impossible
+      dates, price 0, qty −5, string price, bad type) + non-JSON body 400;
+      DELETE → 204, again → 404, gone from GET; POST regression after the
+      validator refactor (lowercase "sell" normalized, CAD auto-filled);
+      user's real rows untouched. Live smoke: `GET /` 200, page carries
+      the new actions `<th>`, `/api/transactions` decorated.
+      (No node on this machine — JS reviewed by read-through.)
+- [ ] UI check by user: expand a group, hover a row → ✎/× appear; edit
+      prefills the form with the ticker locked, Save applies, Cancel
+      returns to Log; delete asks first; a 400 (e.g. qty 0) shows inline
+      and KEEPS edit mode; edit mode survives a 60s poll rebuild
+
+### Step 3 — Holdings view + sell semantics
 
 - [ ] Aggregate transactions into holdings (net qty per ticker)
 - [ ] Average cost basis (how: average-cost method — decide exact rule when

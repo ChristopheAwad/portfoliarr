@@ -160,11 +160,16 @@ def remove_from_watchlist(symbol):
 
 
 # ---------------------------------------------------------------------------
-# TRANSACTION LEDGER — log and list BUY/SELL events.
+# TRANSACTION LEDGER — log, list, edit, and delete BUY/SELL events.
 #
 # The database stores immutable FACTS ONLY: nothing in the
 # ledger table depends on a live market price. Total Value / Gain $ / Gain %
 # are computed fresh on every GET request, from live quotes — never persisted.
+#
+# The edit boundary (why PUT can't touch two columns): ticker is the row's
+# IDENTITY and currency is the yfinance fact DERIVED from it at insert
+# time. Edits rewrite what the user typed — never what Yahoo supplied. A
+# ticker sent in a PUT body is ignored outright.
 #
 # One naming subtlety: the JSON API uses short keys ("date", "type") because
 # the browser writes them; the DB uses explicit columns ("transaction_date",
@@ -172,26 +177,22 @@ def remove_from_watchlist(symbol):
 # route is the translator between the two vocabularies.
 # ---------------------------------------------------------------------------
 
-@app.route("/api/transactions", methods=["POST"])
-def log_transaction():
-    """Record one transaction. The browser POSTs JSON like:
-        {"ticker": "AAPL", "date": "2026-08-31", "price": 229.50,
-         "qty": 10, "type": "BUY"}
+
+def validate_tx_fields(body):
+    """Validate the four ticker-independent fields of a transaction:
+    date, price, qty, type.
+
+    ONE validator for BOTH routes that write transactions — POST (log) and
+    PUT (edit). If the two routes each had their own checks they could
+    drift apart, and an edit could smuggle in a state that logging would
+    have rejected (qty 0, a fake date...). Shared code = one set of rules.
+
+    Returns (fields, None) on success — fields holds the NORMALIZED values
+    under their DB-column names ("transaction_date", "transaction_type")
+    because this function is the translator between the browser's short
+    keys and the DB's explicit ones. Returns (None, (response, status)) on
+    the first bad field, ready for the route to `return error` as-is.
     """
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return jsonify({"error": "expected JSON body with ticker, date, price, qty, type"}), 400
-
-    # --- Validate every field BEFORE touching the DB (fail fast, fail clear).
-    # Each check returns its own 400 with a message naming the bad field, so
-    # a caller always knows exactly what to fix.
-
-    # Ticker: same trim + uppercase normalization as the watchlist add route
-    # — one canonical form everywhere ("aapl" and "AAPL" must match).
-    ticker = str(body.get("ticker", "")).strip().upper()
-    if not ticker:
-        return jsonify({"error": "ticker is required"}), 400
-
     # Date: fromisoformat is the whole validation — it raises ValueError for
     # anything that isn't a real calendar date in "YYYY-MM-DD" form (Feb 30,
     # "08/31/2026", "yesterday"...). .isoformat() then gives back canonical
@@ -199,7 +200,7 @@ def log_transaction():
     try:
         transaction_date = date.fromisoformat(str(body.get("date", ""))).isoformat()
     except ValueError:
-        return jsonify({"error": "date must be YYYY-MM-DD (a real calendar date)"}), 400
+        return None, (jsonify({"error": "date must be YYYY-MM-DD (a real calendar date)"}), 400)
 
     # Numbers: price and qty must be JSON numbers > 0. The isinstance guard
     # rejects strings ("10") and None outright — being lenient here would
@@ -216,12 +217,40 @@ def log_transaction():
     for field in ("price", "qty"):
         error = positive_number(body.get(field), field)
         if error:
-            return error
+            return None, error
 
     # Type: normalize, then allow only the two verbs a ledger knows.
     transaction_type = str(body.get("type", "")).strip().upper()
     if transaction_type not in ("BUY", "SELL"):
-        return jsonify({"error": "type must be BUY or SELL"}), 400
+        return None, (jsonify({"error": "type must be BUY or SELL"}), 400)
+
+    return {
+        "transaction_date": transaction_date,
+        "price": body["price"],
+        "qty": body["qty"],
+        "transaction_type": transaction_type,
+    }, None
+
+@app.route("/api/transactions", methods=["POST"])
+def log_transaction():
+    """Record one transaction. The browser POSTs JSON like:
+        {"ticker": "AAPL", "date": "2026-08-31", "price": 229.50,
+         "qty": 10, "type": "BUY"}
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "expected JSON body with ticker, date, price, qty, type"}), 400
+
+    # --- Ticker: same trim + uppercase normalization as the watchlist add
+    # route — one canonical form everywhere ("aapl" and "AAPL" must match).
+    # (The other four fields share validate_tx_fields with the PUT route.)
+    ticker = str(body.get("ticker", "")).strip().upper()
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+
+    fields, error = validate_tx_fields(body)
+    if error:
+        return error
 
     # Prove the ticker is real BEFORE storing it (same rule as the watchlist
     # add route: unknown tickers get 404, never a row). The successful call
@@ -237,11 +266,11 @@ def log_transaction():
     # All checks passed — write the immutable facts.
     tx_id = db.add_transaction(
         ticker=ticker,
-        transaction_date=transaction_date,
-        price=body["price"],
-        qty=body["qty"],
+        transaction_date=fields["transaction_date"],
+        price=fields["price"],
+        qty=fields["qty"],
         currency=currency,
-        transaction_type=transaction_type,
+        transaction_type=fields["transaction_type"],
     )
 
     # 201 Created, echoing the stored row (note the DB's explicit column
@@ -249,11 +278,11 @@ def log_transaction():
     return jsonify({
         "id": tx_id,
         "ticker": ticker,
-        "transaction_date": transaction_date,
-        "price": body["price"],
-        "qty": body["qty"],
+        "transaction_date": fields["transaction_date"],
+        "price": fields["price"],
+        "qty": fields["qty"],
         "currency": currency,
-        "transaction_type": transaction_type,
+        "transaction_type": fields["transaction_type"],
     }), 201
 
 
@@ -322,6 +351,65 @@ def list_transactions():
         tx["day_gain_pct"] = quote["change_pct"]
 
     return jsonify(transactions)
+
+
+@app.route("/api/transactions/<int:tx_id>", methods=["PUT"])
+def edit_transaction(tx_id):
+    """Correct the user-typed facts of ONE existing transaction. The
+    browser PUTs JSON like:
+        {"date": "2026-08-30", "price": 231.10, "qty": 12, "type": "BUY"}
+
+    The body is exactly those four fields — nothing else. Ticker and
+    currency are NOT editable (see the section banner above: identity and
+    its yfinance-derived fact). If a client sends a "ticker" anyway it is
+    ignored outright — the route never reads it.
+    """
+    # 404 BEFORE validation: when the id is the wrong part, "no transaction
+    # with that id" is the useful answer — field-checking a nonexistent row
+    # would just confuse. (Flask's <int:tx_id> converter 404s non-numeric
+    # ids before this code even runs.)
+    if db.get_transaction(tx_id) is None:
+        return jsonify({"error": f"no transaction with id {tx_id}"}), 404
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "expected JSON body with date, price, qty, type"}), 400
+
+    # Same validator as POST — one set of rules, no drift (see its docstring).
+    fields, error = validate_tx_fields(body)
+    if error:
+        return error
+
+    # update_transaction's SET list only names the four editable columns,
+    # so ticker/currency physically cannot change here. A False return
+    # means the row vanished between the existence check and the UPDATE
+    # (deleted in another window) — same 404 as above.
+    if not db.update_transaction(
+        tx_id,
+        transaction_date=fields["transaction_date"],
+        price=fields["price"],
+        qty=fields["qty"],
+        transaction_type=fields["transaction_type"],
+    ):
+        return jsonify({"error": f"no transaction with id {tx_id}"}), 404
+
+    # 200 with the truth, RE-READ from the DB: the reply shows exactly what
+    # is now on disk (including the untouched ticker/currency), not what we
+    # think we wrote.
+    return jsonify(db.get_transaction(tx_id))
+
+
+@app.route("/api/transactions/<int:tx_id>", methods=["DELETE"])
+def remove_transaction(tx_id):
+    """Delete one transaction permanently. 204 = gone. 404 = it never
+    existed or was already deleted (double click, or another tab got there
+    first) — the frontend refreshes either way and shows the stored truth,
+    same rule as watchlist removal.
+    """
+    if not db.delete_transaction(tx_id):
+        return jsonify({"error": f"no transaction with id {tx_id}"}), 404
+    # 204 No Content: success with nothing to say — the row is just gone.
+    return "", 204
 
 
 # This guard only runs the block when app.py is executed directly, not

@@ -311,13 +311,32 @@ watchlistEl.addEventListener("click", async (event) => {
 // (price_now, value, total_gain/pct, day_gain/pct — raw floats: its job is
 // numbers, ours is formatting), so all this section does is place text and
 // colours.
+//
+// Presentation: transactions GROUP BY TICKER — one collapsed summary row
+// per ticker (holding-level math, BUY rows only), expandable to the
+// individual transactions underneath. Which groups are open lives in the
+// expandedTickers Set below, because the DOM itself is rebuilt every cycle.
 // ---------------------------------------------------------------------------
 
 // Grab the pieces this section manages, once, at load time.
 const txForm = document.querySelector("#tx-form");
 const txErrorEl = document.querySelector(".tx-error");
+const txEditingEl = document.querySelector(".tx-editing");
+const txEditingTextEl = txEditingEl.querySelector(".tx-editing-text");
+const txCancelBtn = txEditingEl.querySelector(".tx-cancel");
+const txSubmitBtn = txForm.querySelector("button[type=submit]");
 const ledgerBody = document.querySelector("#ledger-body");
 const txDateInput = txForm.elements.date;
+
+// Edit-mode state + the last fetched rows. Both live OUTSIDE the DOM —
+// same reasoning as expandedTickers below: the tbody rebuilds every 60s,
+// so form mode and data must not depend on rows staying put.
+//   editingTxId === null  -> the form is in "log a new transaction" mode
+//   editingTxId === 7     -> the form is editing transaction #7
+let editingTxId = null;
+// The freshest GET result. Action clicks (edit/delete) look rows up HERE,
+// by id — never by scraping the row's cell text back into data.
+let lastTransactions = [];
 
 // Local "today" as YYYY-MM-DD — the date input's default value.
 // Why not new Date().toISOString().slice(0, 10)? toISOString() is UTC: in
@@ -357,17 +376,308 @@ function setLedgerMessage(text) {
     ledgerBody.textContent = "";
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 10; // one cell spanning the whole table (must match the
-                       // <th> count — 10 columns)
+    cell.colSpan = 11; // one cell spanning the whole table (must match the
+                       // <th> count — 11 columns, incl. the actions column)
     cell.className = "empty-state";
     cell.textContent = text;
     row.append(cell);
     ledgerBody.append(row);
 }
 
-// Rebuild the tbody: one <tr> per transaction. Facts are always present;
-// live cells (value/gain) exist only when the backend could quote that
-// ticker — otherwise they gap-fill to "—".
+// Which ledger groups are expanded, keyed by ticker. This lives OUTSIDE
+// the DOM on purpose: renderLedger rebuilds the tbody every poll cycle
+// (watchlist pattern), so expansion state stored only on the rows would be
+// wiped 60 seconds later. A Set gives O(1) add/delete/has — and a ticker
+// that has never been clicked simply isn't in it, which is what "collapsed
+// by default" means in practice.
+const expandedTickers = new Set();
+
+// Build ONE transaction detail row — the same 10 data cells the flat table
+// always had, plus a trailing actions cell (edit/delete), extracted from
+// renderLedger so the grouped view can stamp out one per transaction under
+// its group's summary row. Facts are always present; live cells
+// (value/gain) exist only when the backend could quote that ticker —
+// otherwise they gap-fill to "—".
+function buildTxRow(tx) {
+    const row = document.createElement("tr");
+    row.className = "ledger-row"; // refreshLedger's failure check keys on this class
+    row.dataset.id = tx.id; // action buttons' hook: look this row up by id
+
+    // --- Facts (from the DB, always present) ---
+    const dateCell = document.createElement("td");
+    dateCell.textContent = tx.transaction_date;
+
+    const typeCell = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className =
+        `tx-badge ${tx.transaction_type === "BUY" ? "buy" : "sell"}`;
+    badge.textContent = tx.transaction_type;
+    typeCell.append(badge);
+
+    const tickerCell = document.createElement("td");
+    tickerCell.textContent = tx.ticker;
+
+    const qtyCell = document.createElement("td");
+    qtyCell.className = "num";
+    qtyCell.textContent = formatNumber(tx.qty, 4);
+
+    // Native currency per security — the stored code travels with the
+    // facts (no FX conversion, per the brief).
+    const priceCell = document.createElement("td");
+    priceCell.className = "num";
+    priceCell.textContent = `${formatNumber(tx.price)} ${tx.currency}`;
+
+    // --- Live cells (present only when decorated) ---
+    const hasLive = tx.price_now !== undefined;
+
+    const valueCell = document.createElement("td");
+    valueCell.className = "num ledger-live";
+    const gainCell = document.createElement("td");
+    gainCell.className = "num ledger-live";
+    const gainPctCell = document.createElement("td");
+    gainPctCell.className = "num ledger-live";
+    const dayGainCell = document.createElement("td");
+    dayGainCell.className = "num ledger-live";
+    const dayPctCell = document.createElement("td");
+    dayPctCell.className = "num ledger-live";
+
+    if (hasLive) {
+        valueCell.textContent = `${formatNumber(tx.value)} ${tx.currency}`;
+
+        // Total gain/pct: the position's whole lifetime since purchase.
+        gainCell.textContent = formatSigned(tx.total_gain, tx.currency);
+        gainPctCell.textContent =
+            `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
+
+        // Day gain/pct: TODAY's move only. The % is the ticker's daily
+        // move itself — the same for any position size.
+        dayGainCell.textContent = formatSigned(tx.day_gain, tx.currency);
+        dayPctCell.textContent =
+            `${tx.day_gain_pct >= 0 ? "+" : ""}${tx.day_gain_pct.toFixed(2)}%`;
+
+        // Green for gains, red for losses — the shared pos/neg classes.
+        // Each pair colours independently: a position can be up overall
+        // (green Total) while today is red (neg Day).
+        for (const [cell, value] of [
+            [gainCell, tx.total_gain],
+            [gainPctCell, tx.total_gain_pct],
+            [dayGainCell, tx.day_gain],
+            [dayPctCell, tx.day_gain_pct],
+        ]) {
+            cell.classList.toggle("pos", value >= 0);
+            cell.classList.toggle("neg", value < 0);
+        }
+    } else {
+        // The backend couldn't quote this ticker this cycle. The facts
+        // still show; only the live cells degrade.
+        valueCell.textContent = "—";
+        gainCell.textContent = "—";
+        gainPctCell.textContent = "—";
+        dayGainCell.textContent = "—";
+        dayPctCell.textContent = "—";
+    }
+
+    // --- Actions: edit + delete. They live ONLY on detail rows — a group
+    // summary is an aggregate, not a record. Each button carries data-id;
+    // the delegated listener looks the transaction up by id in
+    // lastTransactions, so these buttons carry no row data themselves.
+    const actionsCell = document.createElement("td");
+    const editBtn = document.createElement("button");
+    editBtn.className = "tx-action-btn edit";
+    editBtn.textContent = "✎";
+    editBtn.title = "Edit this transaction";
+    editBtn.dataset.id = tx.id;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "tx-action-btn delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "Delete this transaction";
+    deleteBtn.dataset.id = tx.id;
+    actionsCell.append(editBtn, deleteBtn);
+
+    row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
+               valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell,
+               actionsCell);
+    return row;
+}
+
+// Build ONE group summary row — the collapsed face of one ticker. It
+// reuses the same 10 columns, but the numbers are GROUP-level:
+//   Qty = NET position: buys add, sells subtract (facts only, so always
+//         computable — even when the group's quote failed this cycle).
+//   Value / Total Gain / Day Gain = sums over BUY rows ONLY. A SELL row's
+//         "value" is what the sold shares would be worth today — summing
+//         that into a group total would inflate it. BUY-only sums mirror
+//         the holdings math Step 3 will formalize; SELL details stay
+//         visible when the group is expanded.
+//   Total Gain % = Σ total_gain ÷ Σ(price × qty of BUYs). Percentages
+//         don't average — the group needs its cost basis back out of the
+//         sums. Guarded: a SELL-only group has no cost basis → "—"
+//         instead of dividing by zero.
+//   Day Gain % = the ticker's daily move itself (price-level, identical
+//         for every row — see the decoration comments in app.py), read
+//         from any decorated row rather than aggregated.
+// Decoration happens per UNIQUE ticker server-side, so within a group
+// either every row has live math or none — no partial-group ambiguity.
+function buildGroupRow(ticker, txs) {
+    const row = document.createElement("tr");
+    row.className = "ledger-group";
+    row.dataset.ticker = ticker; // click-handler hook: find by meaning
+
+    // --- Facts ---
+    const dateCell = document.createElement("td");
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = "▸";
+    dateCell.append(caret, document.createTextNode(
+        txs.length === 1 ? " 1 txn" : ` ${txs.length} txns`));
+
+    // Deliberately blank: a group has no single type — the BUY/SELL mix
+    // becomes visible when expanded.
+    const typeCell = document.createElement("td");
+
+    const tickerCell = document.createElement("td");
+    const tickerEl = document.createElement("strong");
+    tickerEl.textContent = ticker;
+    tickerCell.append(tickerEl);
+
+    let netQty = 0;
+    for (const tx of txs) {
+        netQty += tx.transaction_type === "BUY" ? tx.qty : -tx.qty;
+    }
+    const qtyCell = document.createElement("td");
+    qtyCell.className = "num";
+    qtyCell.textContent = formatNumber(netQty, 4);
+
+    // No single honest price for a group (average cost is Step 3's job) —
+    // the column stays, but reads as empty.
+    const priceCell = document.createElement("td");
+    priceCell.className = "num";
+    priceCell.textContent = "—";
+
+    // --- Live cells (all-or-nothing per group, like the detail rows) ---
+    const hasLive = txs[0].price_now !== undefined;
+
+    const valueCell = document.createElement("td");
+    valueCell.className = "num ledger-live";
+    const gainCell = document.createElement("td");
+    gainCell.className = "num ledger-live";
+    const gainPctCell = document.createElement("td");
+    gainPctCell.className = "num ledger-live";
+    const dayGainCell = document.createElement("td");
+    dayGainCell.className = "num ledger-live";
+    const dayPctCell = document.createElement("td");
+    dayPctCell.className = "num ledger-live";
+
+    if (hasLive) {
+        // One currency per group by construction: it's auto-filled from
+        // the ticker's quote at insert time, so every row in the group
+        // carries the same code.
+        const currency = txs[0].currency;
+
+        let cost = 0;      // Σ price × qty over BUY rows — the % denominator
+        let value = 0;
+        let totalGain = 0;
+        let dayGain = 0;
+        for (const tx of txs) {
+            if (tx.transaction_type !== "BUY") continue;
+            cost += tx.price * tx.qty;
+            value += tx.value;
+            totalGain += tx.total_gain;
+            dayGain += tx.day_gain;
+        }
+
+        // null = "no cost basis to divide by" (SELL-only group) → "—".
+        const totalGainPct = cost > 0 ? (totalGain / cost) * 100 : null;
+
+        valueCell.textContent = `${formatNumber(value)} ${currency}`;
+        gainCell.textContent = formatSigned(totalGain, currency);
+        gainPctCell.textContent = totalGainPct === null
+            ? "—"
+            : `${totalGainPct >= 0 ? "+" : ""}${totalGainPct.toFixed(2)}%`;
+        dayGainCell.textContent = formatSigned(dayGain, currency);
+        dayPctCell.textContent =
+            `${txs[0].day_gain_pct >= 0 ? "+" : ""}${txs[0].day_gain_pct.toFixed(2)}%`;
+
+        // Colour the sums with the same pos/neg rule as the detail rows —
+        // with one guard: a null pct gets no colour, because "—" is
+        // neither green nor red.
+        for (const [cell, cellValue] of [
+            [gainCell, totalGain],
+            [gainPctCell, totalGainPct],
+            [dayGainCell, dayGain],
+            [dayPctCell, txs[0].day_gain_pct],
+        ]) {
+            if (cellValue === null) continue;
+            cell.classList.toggle("pos", cellValue >= 0);
+            cell.classList.toggle("neg", cellValue < 0);
+        }
+    } else {
+        valueCell.textContent = "—";
+        gainCell.textContent = "—";
+        gainPctCell.textContent = "—";
+        dayGainCell.textContent = "—";
+        dayPctCell.textContent = "—";
+    }
+
+    // The actions column's 11th cell exists but stays EMPTY on summary
+    // rows: groups are aggregates, not records — edit/delete belong to the
+    // individual transactions, visible when the group is expanded.
+    const actionsCell = document.createElement("td");
+
+    row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
+               valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell,
+               actionsCell);
+    return row;
+}
+
+// --- Edit mode: the form's second personality -----------------------------
+// The form serves double duty: log mode (default) and edit mode. Reusing
+// it (rather than a separate edit UI) means ONE set of inputs, ONE set of
+// browser validations, ONE submit handler — the same reasoning as Step 2's
+// "inline form, not prompt chain". Mode lives in editingTxId, not the DOM.
+
+// Enter edit mode: prefill from the stored row, lock the ticker (the
+// row's identity — NOT editable; currency was derived from it, so editing
+// the ticker would silently rewrite a yfinance fact), rebrand Log -> Save.
+function enterEditMode(tx) {
+    editingTxId = tx.id;
+    txForm.elements.ticker.value = tx.ticker;
+    // Disabled inputs also drop out of FormData — fitting, since PUT's
+    // contract is exactly the 4 editable fields.
+    txForm.elements.ticker.disabled = true;
+    txForm.elements.date.value = tx.transaction_date;
+    txForm.elements.price.value = tx.price;
+    txForm.elements.qty.value = tx.qty;
+    txForm.elements.type.value = tx.transaction_type;
+    txSubmitBtn.textContent = "Save";
+    txEditingTextEl.textContent =
+        `Editing ${tx.ticker} — ${tx.transaction_type} ` +
+        `${formatNumber(tx.qty, 4)} @ ${formatNumber(tx.price)} on ` +
+        `${tx.transaction_date}. `;
+    txEditingEl.hidden = false;
+    txErrorEl.hidden = true;
+    // The clicked row may sit far below the form — bring the form to it.
+    txForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Leave edit mode: restore the form to "log a new transaction". Also the
+// form's general reset — in log mode the edit-mode side effects are
+// no-ops, so the submit handler can call this on BOTH success paths.
+function exitEditMode() {
+    editingTxId = null;
+    txForm.reset();
+    txForm.elements.ticker.disabled = false;
+    txDateInput.value = todayLocalISO(); // reset() restores HTML defaults;
+                                         // the JS-set date must be re-applied
+    txSubmitBtn.textContent = "Log";
+    txEditingEl.hidden = true;
+    txErrorEl.hidden = true;
+}
+
+// Rebuild the tbody: one collapsed summary row per ticker, followed by that
+// ticker's individual transactions as hidden detail rows. Grouping keeps
+// first-appearance order — the backend list is newest-first, so the most
+// recently transacted ticker lands on top.
 function renderLedger(transactions) {
     if (transactions.length === 0) {
         setLedgerMessage("No transactions yet — log your first above.");
@@ -379,88 +689,104 @@ function renderLedger(transactions) {
     // backend-originated text execute as markup.
     ledgerBody.textContent = "";
 
+    // A Map remembers insertion order (a plain object's key order isn't a
+    // promise we want to lean on) — exactly the "newest ticker first"
+    // grouping we want.
+    const groups = new Map();
     for (const tx of transactions) {
-        const row = document.createElement("tr");
+        if (!groups.has(tx.ticker)) groups.set(tx.ticker, []);
+        groups.get(tx.ticker).push(tx);
+    }
 
-        // --- Facts (from the DB, always present) ---
-        const dateCell = document.createElement("td");
-        dateCell.textContent = tx.transaction_date;
+    for (const [ticker, txs] of groups) {
+        ledgerBody.append(buildGroupRow(ticker, txs));
 
-        const typeCell = document.createElement("td");
-        const badge = document.createElement("span");
-        badge.className =
-            `tx-badge ${tx.transaction_type === "BUY" ? "buy" : "sell"}`;
-        badge.textContent = tx.transaction_type;
-        typeCell.append(badge);
-
-        const tickerCell = document.createElement("td");
-        tickerCell.textContent = tx.ticker;
-
-        const qtyCell = document.createElement("td");
-        qtyCell.className = "num";
-        qtyCell.textContent = formatNumber(tx.qty, 4);
-
-        // Native currency per security — the stored code travels with the
-        // facts (no FX conversion, per the brief).
-        const priceCell = document.createElement("td");
-        priceCell.className = "num";
-        priceCell.textContent = `${formatNumber(tx.price)} ${tx.currency}`;
-
-        // --- Live cells (present only when decorated) ---
-        const hasLive = tx.price_now !== undefined;
-
-        const valueCell = document.createElement("td");
-        valueCell.className = "num ledger-live";
-        const gainCell = document.createElement("td");
-        gainCell.className = "num ledger-live";
-        const gainPctCell = document.createElement("td");
-        gainPctCell.className = "num ledger-live";
-        const dayGainCell = document.createElement("td");
-        dayGainCell.className = "num ledger-live";
-        const dayPctCell = document.createElement("td");
-        dayPctCell.className = "num ledger-live";
-
-        if (hasLive) {
-            valueCell.textContent = `${formatNumber(tx.value)} ${tx.currency}`;
-
-            // Total gain/pct: the position's whole lifetime since purchase.
-            gainCell.textContent = formatSigned(tx.total_gain, tx.currency);
-            gainPctCell.textContent =
-                `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
-
-            // Day gain/pct: TODAY's move only. The % is the ticker's daily
-            // move itself — the same for any position size.
-            dayGainCell.textContent = formatSigned(tx.day_gain, tx.currency);
-            dayPctCell.textContent =
-                `${tx.day_gain_pct >= 0 ? "+" : ""}${tx.day_gain_pct.toFixed(2)}%`;
-
-            // Green for gains, red for losses — the shared pos/neg classes.
-            // Each pair colours independently: a position can be up overall
-            // (green Total) while today is red (neg Day).
-            for (const [cell, value] of [
-                [gainCell, tx.total_gain],
-                [gainPctCell, tx.total_gain_pct],
-                [dayGainCell, tx.day_gain],
-                [dayPctCell, tx.day_gain_pct],
-            ]) {
-                cell.classList.toggle("pos", value >= 0);
-                cell.classList.toggle("neg", value < 0);
-            }
-        } else {
-            // The backend couldn't quote this ticker this cycle. The facts
-            // still show; only the live cells degrade.
-            valueCell.textContent = "—";
-            gainCell.textContent = "—";
-            gainPctCell.textContent = "—";
-            dayGainCell.textContent = "—";
-            dayPctCell.textContent = "—";
+        // Expanded state is consulted from the Set, not the DOM — a group
+        // the user opened stays open across every poll rebuild.
+        const open = expandedTickers.has(ticker);
+        for (const tx of txs) {
+            const detailRow = buildTxRow(tx);
+            detailRow.classList.add("tx-detail");
+            detailRow.dataset.ticker = ticker; // click-handler hook
+            detailRow.hidden = !open; // collapsed by default
+            ledgerBody.append(detailRow);
         }
-
-        row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
-                   valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell);
-        ledgerBody.append(row);
     }
 }
+
+// Expand/collapse on click: ONE delegated listener on the tbody, same
+// pattern as the watchlist's × button — summary rows are rebuilt every
+// cycle, so a listener attached to the rows themselves would die with each
+// rebuild; delegation on the parent survives it.
+ledgerBody.addEventListener("click", (event) => {
+    const groupRow = event.target.closest(".ledger-group");
+    if (!groupRow) return; // click landed on a detail or message row
+
+    const ticker = groupRow.dataset.ticker;
+    const open = !expandedTickers.has(ticker);
+
+    // State first (it must survive the next poll rebuild), then the DOM
+    // for the instant visual flip — no re-fetch, no re-render.
+    if (open) expandedTickers.add(ticker);
+    else expandedTickers.delete(ticker);
+    groupRow.classList.toggle("open", open);
+
+    // CSS.escape: tickers can contain selector-hostile characters
+    // ("BRK.B") — the attribute-selector cousin of encodeURIComponent.
+    ledgerBody.querySelectorAll(
+        `.tx-detail[data-ticker="${CSS.escape(ticker)}"]`
+    ).forEach((detailRow) => { detailRow.hidden = !open; });
+});
+
+// Edit/delete clicks: a SECOND delegated listener on the tbody, kept
+// separate from the group-toggle listener so each concern reads alone.
+// (Action buttons sit inside DETAIL rows, so the group listener's
+// closest(".ledger-group") misses them — no conflict between the two.)
+ledgerBody.addEventListener("click", async (event) => {
+    // --- Edit: find the transaction BY ID in the cached fetch and hand
+    // it to the form. The buttons are rebuilt every cycle, so delegation
+    // is what keeps them alive.
+    const editBtn = event.target.closest(".tx-action-btn.edit");
+    if (editBtn) {
+        const tx = lastTransactions.find(
+            (t) => t.id === Number(editBtn.dataset.id));
+        if (tx) enterEditMode(tx);
+        return;
+    }
+
+    // --- Delete: confirm, DELETE, refresh. Not our click? Done.
+    const deleteBtn = event.target.closest(".tx-action-btn.delete");
+    if (!deleteBtn) return;
+    const tx = lastTransactions.find(
+        (t) => t.id === Number(deleteBtn.dataset.id));
+    if (!tx) return;
+
+    // Deletion is immediate and unrecoverable — the backend keeps no trash
+    // bin. confirm() pauses the script until the user answers.
+    if (!confirm(`Delete ${tx.transaction_type} of ${formatNumber(tx.qty, 4)} ` +
+                 `${tx.ticker} @ ${formatNumber(tx.price)} on ` +
+                 `${tx.transaction_date}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/transactions/${tx.id}`, {
+            method: "DELETE",
+        });
+        // 204 = gone. 404 = already gone (another window beat us to it) —
+        // refreshing either way shows the stored truth, watchlist rule.
+        if (!response.ok && response.status !== 404) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        // If THIS row was open in the form, its edit target is gone —
+        // drop back to log mode rather than submitting into a 404.
+        if (editingTxId === tx.id) exitEditMode();
+        refreshLedger();
+    } catch (err) {
+        console.error("delete transaction failed:", err);
+        alert("Could not reach the server — is it running?");
+    }
+});
 
 // Degrade live cells to "—" when a refresh cycle fails entirely but fact
 // rows from an earlier cycle are still on screen (mirrors the watchlist's
@@ -480,6 +806,7 @@ async function refreshLedger() {
         const response = await fetch("/api/transactions");
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
+        lastTransactions = transactions; // cache for action-click lookups
         renderLedger(transactions);
     } catch (err) {
         console.error("ledger refresh failed:", err);
@@ -493,10 +820,11 @@ async function refreshLedger() {
     }
 }
 
-// Form submit: the ONLY way rows are born. preventDefault stops the
-// browser's native full-page form POST — we want fetch + partial update,
-// not a navigation. The backend remains the real validator: its named
-// 400/404 messages are shown inline, its 201 is the trigger to re-fetch.
+// Form submit: the ONLY way rows are born (POST) or corrected (PUT).
+// preventDefault stops the browser's native full-page form POST — we want
+// fetch + partial update, not a navigation. The backend remains the real
+// validator: its named 400/404 messages are shown inline, its 200/201 is
+// the trigger to re-fetch.
 txForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -516,31 +844,62 @@ txForm.addEventListener("submit", async (event) => {
     txErrorEl.hidden = true;
 
     try {
-        const response = await fetch("/api/transactions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-        });
+        // Branch on mode: PUT for the row being edited (body is exactly
+        // the 4 editable fields — the ticker input is disabled, so it
+        // drops out of FormData, matching the backend's ignore-it rule),
+        // POST for a brand-new row.
+        const response = editingTxId === null
+            ? await fetch("/api/transactions", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(body),
+              })
+            : await fetch(`/api/transactions/${editingTxId}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                      date: body.date,
+                      price: body.price,
+                      qty: body.qty,
+                      type: body.type,
+                  }),
+              });
         if (!response.ok) {
             const err = await response.json().catch(() => null);
             txErrorEl.textContent =
-                err?.error || `Could not log transaction (HTTP ${response.status})`;
+                err?.error || `Could not save transaction (HTTP ${response.status})`;
             txErrorEl.hidden = false;
+            // A 404 while editing means the row no longer exists (deleted
+            // in another window) — editing further is pointless. A 400 is
+            // fixable: stay in edit mode and let the user correct the field.
+            if (response.status === 404 && editingTxId !== null) {
+                exitEditMode();
+            }
             return;
         }
-        // 201: the row exists server-side. Clear the form (reset() restores
-        // HTML-attribute defaults, so the date default — set in JS — must be
-        // re-applied) and pull the truth immediately rather than waiting
-        // for the next poll.
-        txForm.reset();
-        txDateInput.value = todayLocalISO();
+        if (editingTxId === null) {
+            // 201 (log): auto-expand the logged ticker's group BEFORE the
+            // refresh — groups collapse by default, and without this the
+            // transaction just entered would land inside a collapsed
+            // group, making the POST look like it did nothing.
+            expandedTickers.add(body.ticker);
+        }
+        // Success: back to log mode (resets the form AND reapplies the
+        // today-default date in one place), then pull the truth
+        // immediately rather than waiting for the next poll.
+        exitEditMode();
         refreshLedger();
     } catch (err) {
-        console.error("log transaction failed:", err);
+        console.error("save transaction failed:", err);
         txErrorEl.textContent = "Could not reach the server — is it running?";
         txErrorEl.hidden = false;
     }
 });
+
+// Cancel: leave edit mode, back to logging. type="button" in the markup
+// is what stops this button from triggering the form's submit handler —
+// a plain <button> inside a form defaults to submit.
+txCancelBtn.addEventListener("click", exitEditMode);
 
 // Prefill the date input ONCE at load: "today" is the overwhelmingly common
 // answer for a fresh transaction.

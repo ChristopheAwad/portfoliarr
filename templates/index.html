@@ -90,11 +90,13 @@
                 </div>
 
                 <!-- Transaction Ledger card. Two parts:
-                     1. A form to log a BUY/SELL (the only way rows are born)
-                     2. A table whose <tbody> ships EMPTY — main.js rebuilds
-                        the rows from /api/transactions every cycle, exactly
-                        like the watchlist's <ul>. Facts + live gain/value
-                        are painted by JS; a failed quote gap-fills to "—". -->
+                      1. A form that logs a BUY/SELL — and, in edit mode
+                         (prefilled, ticker locked), corrects an existing
+                         one. The only way rows are born OR changed.
+                      2. A table whose <tbody> ships EMPTY — main.js rebuilds
+                         the rows from /api/transactions every cycle, exactly
+                         like the watchlist's <ul>. Facts + live gain/value
+                         are painted by JS; a failed quote gap-fills to "—". -->
                 <div class="card ledger-card">
                     <div class="card-header">
                         <h3>Transactions</h3>
@@ -120,6 +122,16 @@
                         <button type="submit">Log</button>
                     </form>
 
+                    <!-- Edit-mode notice. The form serves double duty:
+                         log mode (default) and edit mode (prefilled, the
+                         ticker input disabled — identity is not editable).
+                         main.js toggles this line, the button text, and a
+                         Cancel click returns to log mode. -->
+                    <p class="tx-editing" hidden>
+                        <span class="tx-editing-text"></span>
+                        <button type="button" class="tx-cancel">Cancel</button>
+                    </p>
+
                     <!-- Backend error messages (bad date, unknown ticker...)
                          land here — inline, watchlist-alert style but quiet. -->
                     <p class="tx-error" hidden></p>
@@ -137,11 +149,20 @@
                                 <th class="num">Total Gain %</th>
                                 <th class="num">Day Gain</th>
                                 <th class="num">Day Gain %</th>
+                                <!-- Blank header over the trailing actions
+                                     column (edit/delete buttons, painted by
+                                     JS on detail rows only). -->
+                                <th class="actions"></th>
                             </tr>
                         </thead>
                         <tbody id="ledger-body">
-                            <!-- main.js fills this: one <tr class="ledger-row">
-                                 per transaction, or a single empty-state row. -->
+                            <!-- main.js fills this: one <tr
+                                 class="ledger-group"> per ticker (collapsed
+                                 summary — click to expand) followed by that
+                                 ticker's hidden <tr class="ledger-row
+                                 tx-detail"> transaction rows, each with
+                                 edit/delete buttons, or a single empty-state
+                                 row. -->
                         </tbody>
                     </table>
                 </div>

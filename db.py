@@ -138,8 +138,10 @@ def remove_symbol(symbol):
 
 # ---------------------------------------------------------------------------
 # TRANSACTION LEDGER — the facts table. add stores what happened; get
-# returns those facts untouched. Any price-dependent value (gain, current
-# value) is computed elsewhere, from live quotes — never stored here.
+# returns those facts untouched; update corrects the user-typed facts
+# (ticker/currency excluded from its SET list by design); delete removes
+# a row for good. Any price-dependent value (gain, current value) is
+# computed elsewhere, from live quotes — never stored here.
 # ---------------------------------------------------------------------------
 
 def add_transaction(ticker, transaction_date, price, qty, currency,
@@ -195,3 +197,67 @@ def get_transactions():
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_transaction(tx_id):
+    """Return ONE transaction as a dict, or None if that id doesn't exist.
+
+    Routes use this for the 404-before-validation check: when a PUT/DELETE
+    names an id, "no transaction with that id" is the most useful error —
+    far better than validating fields for a row that was never there.
+    Same SELECT shape as get_transactions, narrowed to one id.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id, ticker, transaction_date, price, qty, currency,
+                   transaction_type
+            FROM transactions
+            WHERE id = ?
+            """,
+            (tx_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_transaction(tx_id, transaction_date, price, qty, transaction_type):
+    """Correct the user-editable facts of one transaction.
+
+    The SET list names exactly FOUR columns — date, price, qty, type.
+    Ticker and currency are deliberately ABSENT: the ticker is the row's
+    identity, and currency is the yfinance fact derived from it at insert
+    time. Excluding them from the SQL itself (not just the route) means no
+    future caller of this function can accidentally rewrite either.
+
+    Validation has already happened in the route layer (same rules as
+    logging a new transaction — they share one helper). Returns True if a
+    row was actually updated, False if the id doesn't exist (rowcount 0),
+    which the route turns into a 404.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE transactions
+            SET transaction_date = ?, price = ?, qty = ?, transaction_type = ?
+            WHERE id = ?
+            """,
+            (transaction_date, price, qty, transaction_type, tx_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_transaction(tx_id):
+    """Remove one transaction permanently. Returns True if a row was
+    actually deleted, False if the id doesn't exist (route turns that
+    into a 404 — e.g. a second DELETE after the first one succeeded).
+
+    Deletion is IMMEDIATE and unrecoverable: this is the immutable-facts
+    table's one destructive verb, which is exactly why the UI gates it
+    behind a confirm() dialog.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM transactions WHERE id = ?", (tx_id,)
+        )
+        return cursor.rowcount > 0
