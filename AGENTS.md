@@ -8,6 +8,7 @@
 ## Stack & architecture
 - Flask serves JSON; the browser does all rendering (vanilla JS `fetch` + DOM, no framework).
 - Layering: `market_data.py` = data layer (yfinance + caching, knows nothing about Flask); `db.py` = persistence layer (SQLite, knows nothing about Flask/yfinance); `app.py` = routes (decides WHICH symbols); `static/js/main.js` = rendering only.
+- Logging lives ONLY in `app.py` (three tiers, console-only). The pure layers (`market_data.py`, `db.py`) never catch or log — they raise; the route layer catches wide, logs with `exc_info=True`, and translates failures to HTTP.
 - Timeframe buttons (1D–MAX) and `/api/portfolio/history` both go through `PERIOD_MAP` (`market_data.py`) — the route validates client-supplied period keys against it. Adding a timeframe = edit it there once.
 - Quote cache is an in-memory dict in `market_data.py` (TTL 120s), deliberately NOT SQLite despite the brief's stack table. Dies on restart — acceptable. Rework trigger documented in `project-brief.md`.
 - SQLite DBs go in `instance/` (gitignored, per Flask convention).
@@ -36,6 +37,7 @@
 - Ledger table column count (11, incl. the trailing actions column) lives in FOUR places: the `<th>` row (`templates/index.html`), `setLedgerMessage`'s `colSpan`, `buildGroupRow`'s cell list (summary rows end with a BLANK actions cell), AND `buildTxRow`'s cell list (`static/js/main.js`). Adding/removing a column = edit all four.
 - Edits go through `PUT /api/transactions/<id>` with body `{date, price, qty, type}` ONLY — ticker/currency are identity + a yfinance fact and are excluded from the UPDATE's SET list by design. POST and PUT share `validate_tx_fields` in `app.py`; add new field rules there once.
 - Two vocabularies for the same data: the JSON API uses short keys (`date`, `type`); the DB uses explicit columns (`transaction_date`, `transaction_type`). Routes are the translator. PUT's reply is re-read from the DB, not echoed from the request.
+- Importer: `POST /api/transactions/import/preview` and `/commit` share ONE parser (`parse_import_text`, `app.py`). Commit RE-parses the same `{text}` body — never accept a client-sent row list between the two calls. Preview writes NOTHING; every imported row is forced BUY; best-effort per row (200 even when `imported == 0` — the report is the answer).
 - Backend sends raw floats; number formatting and `pos`/`neg` classes are frontend-only.
 
 ## MVP scope guard
