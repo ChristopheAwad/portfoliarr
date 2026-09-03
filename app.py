@@ -1,9 +1,20 @@
+# time gives us perf_counter(), a monotonic high-resolution clock — used
+# by the request-timing hook in the LOGGING section below.
+import time
+
 # Import the Flask class (used to create the app), render_template (serves
 # Jinja2 HTML templates to the browser), jsonify (converts Python
 # dicts/lists into a proper JSON HTTP response, including the
-# Content-Type: application/json header), and request (gives access to the
-# incoming HTTP request's data — we need its JSON body for the add route).
-from flask import Flask, jsonify, render_template, request
+# Content-Type: application/json header), request (gives access to the
+# incoming HTTP request's data — we need its JSON body for the add route),
+# and g (per-request scratch storage — the timing hook stashes its start
+# time there).
+from flask import Flask, g, jsonify, render_template, request
+
+# HTTPException is the base class of Flask/werkzeug's OWN errors (404,
+# 405...). The top-level error handler below must let these pass through
+# untouched — it exists to catch genuine bugs, not Flask's normal replies.
+from werkzeug.exceptions import HTTPException
 
 # Import our data layers. This file is the "route layer": it decides WHICH
 # symbols the page needs and HOW answers map to HTTP; market_data.py handles
@@ -33,6 +44,75 @@ db.init()
 INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^GSPTSE", "BTC-USD"]
 
 
+# ---------------------------------------------------------------------------
+# LOGGING — three tiers, console-only. Flask gives every app a pre-wired
+# logger: `app.logger` writes to stderr, and with debug=True (our dev
+# server) every level shows up with no configuration at all.
+#
+# WHY ALL LOGGING LIVES HERE, IN THE ROUTE LAYER: market_data.py and db.py
+# are pure layers whose contract is "raise and let the route decide" — they
+# know nothing about Flask, and app.logger IS Flask. Exceptions get caught
+# in exactly one place (here), so they get logged in exactly one place.
+#
+# The level vocabulary used throughout this file:
+#   debug   — too chatty to matter by default (timing lines, missing names)
+#   info    — normal client behavior worth recording (a 404 a typo caused)
+#   warning — degraded but recovered (one dead symbol; the rest still served)
+#   error   — a real bug (unhandled exception, below)
+# ---------------------------------------------------------------------------
+
+# TIER 2 — the safety net. Any exception NO route caught lands here: we log
+# the full traceback (exc_info=True) and answer JSON, matching the API's
+# error convention instead of Flask's default HTML error page.
+#
+# Two subtleties worth knowing:
+#  1. HTTP errors (404, 405...) are Exceptions too! Without the isinstance
+#     guard, a typo'd URL would reach this handler and be mislabelled
+#     "internal server error". We pass them through untouched — Flask
+#     already has correct responses for those.
+#  2. With debug=True, Werkzeug's interactive debugger re-raises the
+#     exception BEFORE this handler runs — in dev you see the debugger
+#     page instead. This handler is the PRODUCTION path; the tests
+#     exercise it by pinning PROPAGATE_EXCEPTIONS = False.
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    if isinstance(error, HTTPException):
+        # Flask's own errors: the correct response already exists.
+        return error
+    app.logger.error(
+        "unhandled error on %s %s", request.method, request.path,
+        exc_info=True,
+    )
+    return jsonify({"error": "internal server error"}), 500
+
+
+# TIER 3 — one timing line per request, at debug level. Werkzeug's dev
+# server already prints each request's method/path/status; the one thing
+# its line lacks is DURATION, so that's all we add.
+#
+# g is Flask's per-request scratch storage: every concurrent request gets
+# its own `g`, so stashing the start time here needs no locks or shared
+# dicts — requests can never see each other's values.
+@app.before_request
+def start_request_timer():
+    # perf_counter() over time.time(): it is MONOTONIC (immune to the
+    # system clock jumping around for NTP sync) and high-resolution —
+    # the right tool for measuring durations.
+    g.request_started_at = time.perf_counter()
+
+
+@app.after_request
+def log_request_duration(response):
+    duration_ms = (time.perf_counter() - g.request_started_at) * 1000
+    app.logger.debug(
+        "%s %s -> %s (%.1f ms)",
+        request.method, request.path, response.status_code, duration_ms,
+    )
+    # An after_request hook MUST return the response (modified or not) —
+    # forgetting this breaks every route at once.
+    return response
+
+
 # The @app.route decorator registers this function as the handler for the
 # root URL "/" (e.g. http://localhost:5000/).
 @app.route("/")
@@ -60,11 +140,25 @@ def index_quotes():
         except Exception:
             # Boundary rule: catch WIDE at the edge of the system (yfinance
             # can fail in many ways) and degrade gracefully, per symbol.
+            # TIER 1: on screen the chip just shows "—" with no reason —
+            # this log line IS the reason. exc_info=True attaches the full
+            # traceback, which is exactly what a WIDE catch needs: the
+            # actual cause is the thing we don't know.
+            app.logger.warning(
+                "index quote failed for %s — chip shows \"—\"", symbol,
+                exc_info=True,
+            )
             failures += 1
 
     # Only when EVERY symbol fails is the whole endpoint considered sick:
     # 503 = "Service Unavailable — it's me, not you, try again later."
     if failures == len(INDEX_SYMBOLS):
+        # TIER 1: this is the endpoint's loudest cry for help — every
+        # symbol failing at once usually means Yahoo is down or the
+        # network is gone, not four unlucky symbols.
+        app.logger.warning(
+            "all %d index symbols failed — serving 503", len(INDEX_SYMBOLS)
+        )
         return jsonify({"error": "quote service unavailable"}), 503
 
     # Successes only: failed symbols are simply absent from the list.
@@ -133,6 +227,14 @@ def portfolio_history():
         try:
             histories[symbol] = get_history(symbol, period)
         except Exception:
+            # TIER 1: without a record, a dead ticker is indistinguishable
+            # from "the user never traded it" — both contribute 0 and
+            # flatten the line. The log separates the two.
+            app.logger.warning(
+                "history fetch failed for %s — contributes 0 to the chart",
+                symbol,
+                exc_info=True,
+            )
             histories[symbol] = {}  # he can't be priced; treat as 0
 
     # The x-axis = the union of every ticker's trading days, ascending.
@@ -235,13 +337,23 @@ def watchlist_quotes():
         except Exception:
             # Same per-symbol resilience as the indices bar: a dead symbol
             # just won't appear in "quotes"; its row will gap-fill to "—".
+            app.logger.warning(
+                "watchlist quote failed for %s — row shows \"—\"", symbol,
+                exc_info=True,
+            )
             continue
 
         try:
             quote["name"] = get_name(symbol)
         except Exception:
             # A missing name shouldn't sink the whole row — the frontend
-            # falls back to showing just the symbol.
+            # falls back to showing just the symbol. TIER 1 at DEBUG:
+            # this fires often (Yahoo's heavier metadata endpoint is
+            # flaky), so warning level would bury the interesting lines.
+            app.logger.debug(
+                "no name available for %s — row shows symbol only", symbol,
+                exc_info=True,
+            )
             quote["name"] = None
 
         quotes.append(quote)
@@ -275,6 +387,9 @@ def add_to_watchlist():
         get_quote(symbol)
     except Exception:
         # 404 Not Found: the ticker doesn't exist (or Yahoo can't quote it).
+        # TIER 1 at INFO — expected client behavior (typos happen), so no
+        # traceback: the symbol string IS the story.
+        app.logger.info("watchlist add rejected: unquotable symbol %s", symbol)
         return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
 
     try:
@@ -282,7 +397,14 @@ def add_to_watchlist():
     except Exception:
         # The most likely DB failure here is the PRIMARY KEY violation from
         # adding a duplicate — report it as 409 Conflict ("it's already
-        # there"), which is more precise than a generic 500.
+        # there"), which is more precise than a generic 500. TIER 1: the
+        # 409 reply can't tell a harmless duplicate from a REAL database
+        # problem (locked file, full disk) — the traceback in the log can,
+        # which is why a wide catch here logs at warning with exc_info.
+        app.logger.warning(
+            "watchlist insert failed for %s — serving 409", symbol,
+            exc_info=True,
+        )
         return jsonify({"error": f"{symbol} is already on the watchlist"}), 409
 
     # 201 Created: standard status for "a new resource now exists".
@@ -401,6 +523,9 @@ def log_transaction():
     try:
         quote = get_quote(ticker)
     except Exception:
+        # TIER 1 at INFO — same expected-client-behavior rule as the
+        # watchlist add route: a bad ticker is a typo, not a malfunction.
+        app.logger.info("transaction rejected: unquotable ticker %s", ticker)
         return jsonify({"error": f"unknown or unquotable symbol: {ticker}"}), 404
     currency = quote["currency"]
 
