@@ -782,6 +782,8 @@ ledgerBody.addEventListener("click", async (event) => {
         // drop back to log mode rather than submitting into a 404.
         if (editingTxId === tx.id) exitEditMode();
         refreshLedger();
+        // The header totals depend on the ledger too — refresh both now.
+        refreshPortfolioSummary();
     } catch (err) {
         console.error("delete transaction failed:", err);
         alert("Could not reach the server — is it running?");
@@ -889,6 +891,8 @@ txForm.addEventListener("submit", async (event) => {
         // immediately rather than waiting for the next poll.
         exitEditMode();
         refreshLedger();
+        // The header totals depend on the ledger too — refresh both now.
+        refreshPortfolioSummary();
     } catch (err) {
         console.error("save transaction failed:", err);
         txErrorEl.textContent = "Could not reach the server — is it running?";
@@ -1060,8 +1064,10 @@ importCommitBtn.addEventListener("click", async () => {
         }
         importCommitBtn.hidden = true; // one paste, one commit — re-preview first
         // Pull the truth immediately rather than waiting for the next poll
-        // (same rule as the log form's submit handler).
+        // (same rule as the log form's submit handler) — the ledger AND
+        // the header totals, which are computed from it.
         refreshLedger();
+        refreshPortfolioSummary();
     } catch (err) {
         console.error("import commit failed:", err);
         showImportError("Could not reach the server — is it running?");
@@ -1078,6 +1084,94 @@ function showImportSuccess(count) {
         `Imported ${count} transaction${count === 1 ? "" : "s"} into the ledger.`;
     importReportEl.append(line);
     importReportEl.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// PORTFOLIO HEADER — the "Your Portfolio" card's three live numbers: total
+// value, today's move, and total return. Rendering only, like every section
+// above: GET /api/portfolio/summary computes the raw floats from the ledger
+// + live quotes; this code formats and paints them.
+//
+// The three spans ship blank in index.html ("…") so the old mockup numbers
+// can never masquerade as live data — same rule as the indices chips.
+// ---------------------------------------------------------------------------
+
+// Grab the pieces this section manages, once, at load time.
+const portfolioValueEl = document.getElementById("portfolio-value");
+const portfolioDayChangeEl = document.getElementById("portfolio-day-change");
+const portfolioTotalReturnEl =
+    document.getElementById("portfolio-total-return");
+
+// Degraded state: value "—", change lines blank. Used when the fetch fails
+// entirely AND when the backend reports that nothing priced is contributing
+// (every held ticker unquotable this cycle) — a bare "0.00" would imply the
+// holdings are worthless, when the truth is "we couldn't price them".
+// tooltipText (optional) explains WHY on hover.
+function setPortfolioUnavailable(tooltipText = "") {
+    portfolioValueEl.textContent = "—";
+    portfolioValueEl.title = tooltipText;
+    for (const el of [portfolioDayChangeEl, portfolioTotalReturnEl]) {
+        el.textContent = "";
+        el.classList.remove("pos", "neg");
+    }
+}
+
+// Paint one signed change line: "+30.00 (+5.00%) Today". Same presentation
+// rules as the ledger's signed cells: the sign lives in the DATA as a raw
+// float, so adding the "+" character here is presentation. pct === null
+// means "no meaningful base to divide by" (e.g. a fully-sold portfolio) —
+// the amount still shows, only the % degrades away.
+function paintPortfolioChange(el, value, pct, label) {
+    const sign = value >= 0 ? "+" : "";
+    el.textContent = pct === null
+        ? `${sign}${formatNumber(value)} ${label}`
+        : `${sign}${formatNumber(value)} (${sign}${pct.toFixed(2)}%) ${label}`;
+    el.classList.toggle("pos", value >= 0);
+    el.classList.toggle("neg", value < 0);
+}
+
+// One summary refresh cycle: GET -> paint the three spans.
+async function refreshPortfolioSummary() {
+    try {
+        const response = await fetch("/api/portfolio/summary");
+        // fetch does NOT throw on 4xx/5xx — only on network failure.
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        // "unpriced" lists the tickers the backend couldn't quote this
+        // cycle. They were excluded from EVERY sum, so if the sums are
+        // all zero WHILE that list is non-empty, nothing priced is
+        // contributing — degrade the whole header instead of showing a
+        // hollow "0.00" that would imply worthless holdings.
+        const nothingPriced = data.unpriced.length > 0 &&
+            data.total_value === 0 &&
+            data.day_gain === 0 &&
+            data.total_gain === 0;
+        if (nothingPriced) {
+            setPortfolioUnavailable(
+                `Couldn't price: ${data.unpriced.join(", ")}`
+            );
+            return;
+        }
+
+        // Partial case: paint the priced totals, but say on hover which
+        // tickers are missing. title="" wipes a stale tooltip from an
+        // earlier cycle — the hover text must always match THIS payload.
+        portfolioValueEl.title = data.unpriced.length > 0
+            ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
+            : "";
+        portfolioValueEl.textContent = formatNumber(data.total_value);
+        paintPortfolioChange(
+            portfolioDayChangeEl, data.day_gain, data.day_gain_pct, "Today"
+        );
+        paintPortfolioChange(
+            portfolioTotalReturnEl, data.total_gain, data.total_gain_pct,
+            "Total"
+        );
+    } catch (err) {
+        console.error("portfolio summary refresh failed:", err);
+        setPortfolioUnavailable();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,23 +1321,27 @@ chartButtonsEl.addEventListener("click", (event) => {
 //    starts truly empty and refreshWatchlist paints it within the second.
 setChipState("…");
 
-// 2. Fetch all three sections immediately — no waiting for the first interval.
+// 2. Fetch all four quote-driven sections immediately — no waiting for the
+//    first interval.
 refreshIndices();
 refreshWatchlist();
 refreshLedger();
+refreshPortfolioSummary();
 // The portfolio chart is fetched once at load (its default 5D view) and
 // again only when a timeframe button is clicked — unlike the quote-driven
 // sections, price history doesn't change on a 60s cadence, so it would be
 // wasteful (and Yahoo rate-limit-hammering) to poll it too.
 refreshPortfolioChart();
 
-// 3. Poll. ONE timer drives all cycles: all three sections' data changes at
-//    the same rate, so polling them together keeps them in lockstep and
-//    doubles as the change-detector for anything added through other
-//    windows or tabs (add/remove/log shows up within a minute even without
-//    its own trigger).
+// 3. Poll. ONE timer drives all cycles: all four sections' data changes at
+//    the same rate (the summary is quote-driven too — prices move, totals
+//    follow), so polling them together keeps them in lockstep and doubles
+//    as the change-detector for anything added through other windows or
+//    tabs (add/remove/log shows up within a minute even without its own
+//    trigger).
 setInterval(() => {
     refreshIndices();
     refreshWatchlist();
     refreshLedger();
+    refreshPortfolioSummary();
 }, REFRESH_MS);

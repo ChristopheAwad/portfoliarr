@@ -318,6 +318,140 @@ def portfolio_history():
     return jsonify({"labels": labels, "values": values})
 
 
+# ---------------------------------------------------------------------------
+# PORTFOLIO SUMMARY — the dashboard header's live numbers: total value,
+# today's move, and total return, computed from the ledger + live quotes.
+#
+# The header's numbers used to be hardcoded mockup data ("$143.96" in the
+# template, painted once and never updated). This route is their data
+# source, and the first slice of the brief's full "value summary strip".
+#
+# Two portfolio views, two price sources — deliberately:
+#   /api/portfolio/history  prices the portfolio at HISTORY closes
+#   /api/portfolio/summary  prices it at LIVE quotes (right now)
+# The answers are close but never identical by design: a quote is "the
+# last traded price", a daily bar's close is "where that day ended".
+#
+# CURRENCY (temporary decision, documented in project-brief.md): each
+# holding is valued in its own native currency and the sums add them
+# as-is — the ledger's per-row convention, scaled up to the whole
+# portfolio. One-currency portfolios are exact; mixed ones are a
+# documented approximation until FX conversion exists.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/portfolio/summary")
+def portfolio_summary():
+    """Return the portfolio header's headline numbers as raw floats.
+
+    No parameters: the ledger decides WHAT is held; live quotes decide
+    what it's worth. Shape of the reply:
+        total_value     Σ net_qty × live price (priced tickers only)
+        day_gain        Σ net_qty × quote.change (today's move)
+        day_gain_pct    day_gain ÷ yesterday's value (null if no base)
+        total_gain      total_value − cost_basis (realized + unrealized)
+        total_gain_pct  total_gain ÷ cost_basis (null if no base)
+        cost_basis      Σ ±(price × qty) — buys paid minus sells recouped
+        unpriced        tickers whose quote failed — excluded from ALL sums
+    """
+    # The ledger is the source of truth for what is held. Order doesn't
+    # matter here — everything below is sums, not a forward walk.
+    transactions = db.get_transactions()
+
+    # Pass 1 — FACTS ONLY (no network): fold every transaction into two
+    # per-ticker figures.
+    #   net_qty: BUY adds shares, SELL subtracts — the same fold the
+    #            history route does, but only the final state matters here.
+    #   cost:    Σ ±(price × qty). A buy adds what was PAID; a sell
+    #            SUBTRACTS what was RECOUPED. The gap between today's
+    #            value and this net figure is the position's whole
+    #            lifetime gain (realized on the sells + unrealized on
+    #            what's still held) in ONE formula — no separate
+    #            realized/unrealized bookkeeping.
+    net_qty = {}
+    cost_by_symbol = {}
+    for tx in transactions:
+        symbol = tx["ticker"]
+        sign = 1 if tx["transaction_type"] == "BUY" else -1
+        net_qty[symbol] = net_qty.get(symbol, 0) + sign * tx["qty"]
+        cost_by_symbol[symbol] = (
+            cost_by_symbol.get(symbol, 0.0) + sign * tx["price"] * tx["qty"]
+        )
+
+    # (An empty ledger falls through this loop and returns all zeros +
+    # null pcts below — a normal state, not an error, same rule as the
+    # history route. No special case needed.)
+
+    # One quote per UNIQUE ticker — the same dedup as list_transactions
+    # (30 trades in one ticker pay for exactly one quote; the 120s cache
+    # makes repeats free). Per-symbol resilience, the same rule as
+    # everywhere quotes are fetched: a dead ticker goes into "unpriced"
+    # and contributes to NOTHING — not value, not day move, not cost
+    # basis. Excluding it from the cost basis too is what keeps every
+    # number describing the SAME priced-only slice of the portfolio
+    # (adding its cost but not its value would fake a loss that never
+    # happened). The frontend surfaces the gap via a tooltip.
+    quotes = {}
+    for symbol in net_qty:
+        try:
+            quotes[symbol] = get_quote(symbol)
+        except Exception:
+            # Wide catch on purpose: yfinance fails in many ways, and
+            # the ledger's facts still stand — degrade, never 500.
+            # TIER 1: this log line is the only trace a dead ticker
+            # leaves (on screen it's just absent from the totals).
+            app.logger.warning(
+                "summary quote failed for %s — excluded from all totals",
+                symbol,
+                exc_info=True,
+            )
+            quotes[symbol] = None
+
+    # Pass 2 — price the priced slice. held == 0 (fully-sold ticker)
+    # contributes 0 to value and day move, but its net cost still feeds
+    # cost_basis — which is exactly how a realized gain (bought low,
+    # sold high, nothing left) shows up in total_gain.
+    total_value = 0.0
+    day_gain = 0.0
+    cost_basis = 0.0
+    unpriced = []
+    for symbol, held in net_qty.items():
+        quote = quotes[symbol]
+        if quote is None:
+            unpriced.append(symbol)
+            continue
+        total_value += held * quote["price"]
+        day_gain += held * quote["change"]  # today's move × position size
+        cost_basis += cost_by_symbol[symbol]
+
+    unpriced.sort()  # stable, human-readable order for the tooltip
+
+    # Percentages need a meaningful BASE to divide by — otherwise the
+    # math produces confident-looking nonsense:
+    #   day_gain_pct divides by YESTERDAY'S value (today's minus the day
+    #     move). With nothing held net, there is no base at all.
+    #   total_gain_pct divides by cost basis, which drops to ≤ 0 once
+    #     every position is sold (proceeds outweigh payments).
+    # null tells the frontend to show the signed amount without a %.
+    yesterdays_value = total_value - day_gain
+    day_gain_pct = (
+        day_gain / yesterdays_value * 100 if yesterdays_value > 0 else None
+    )
+    total_gain = total_value - cost_basis
+    total_gain_pct = (
+        total_gain / cost_basis * 100 if cost_basis > 0 else None
+    )
+
+    return jsonify({
+        "total_value": total_value,
+        "day_gain": day_gain,
+        "day_gain_pct": day_gain_pct,
+        "total_gain": total_gain,
+        "total_gain_pct": total_gain_pct,
+        "cost_basis": cost_basis,
+        "unpriced": unpriced,
+    })
+
+
 # JSON endpoint powering the live watchlist. One route, two payloads:
 #   "symbols" — the full stored list (source of truth for which rows exist)
 #   "quotes"  — per-symbol quote dicts, successes only

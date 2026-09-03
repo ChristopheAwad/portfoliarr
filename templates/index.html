@@ -64,9 +64,17 @@
                         <h2>Your Portfolio</h2>
                         <span class="badge">Main</span>
                     </div>
+                    <!-- Live portfolio numbers. These spans ship blank
+                         ("…") on purpose — main.js fills them from
+                         GET /api/portfolio/summary the moment the page
+                         loads (backend sends raw floats; formatting is
+                         frontend-only). The ids are the hooks JS finds
+                         them by; the old mockup numbers are gone so they
+                         can never masquerade as live data. -->
                     <div class="stock-price-container">
-                        <span class="current-price">$143.96</span>
-                        <span class="price-change pos">+1.85 (+1.30%) Today</span>
+                        <span class="current-price" id="portfolio-value">…</span>
+                        <span class="price-change" id="portfolio-day-change">…</span>
+                        <span class="price-change" id="portfolio-total-return">…</span>
                     </div>
 
                     <!-- Chart area. Chart.js paints onto a <canvas> — think

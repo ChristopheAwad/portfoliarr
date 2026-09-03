@@ -78,3 +78,11 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   SQLite as listed in the stack table. Dies on server restart, which is
   acceptable for prices. **Rework trigger:** when the SQLite transaction
   ledger is built, consider moving the price cache into the same database.
+- **The portfolio summary sums native currencies without conversion.**
+  `GET /api/portfolio/summary` adds each holding's value, day move, and
+  net cost in whatever currency Yahoo quotes it — the ledger's per-row
+  convention scaled up to the whole portfolio. With holdings in one
+  currency the totals are exact; across currencies they are a mixed sum
+  (a test in `tests/test_portfolio_summary.py` locks this decision).
+  **Rework trigger:** the dashboard routinely shows holdings in two or
+  more currencies, or the full value-summary strip ships.

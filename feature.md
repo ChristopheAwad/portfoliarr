@@ -1,166 +1,116 @@
-# Feature: Transaction Importer (Paste → Preview → Commit)
+# Feature: Live Portfolio Header (value, day change, total return)
 
 ## Goal
 
-Bulk-load an existing transaction history without typing rows one by one.
-The source is a paste of tab-separated rows:
+The "Your Portfolio" card's numbers are hardcoded mockup data:
 
-```
-CM	16 Mar 2026	132.55	1.296383
-CM	30 Mar 2026	128.89	1.333187
-CM	14 Apr 2026	142.32	1.207422
-CM	27 Apr 2026	149.91	1.146318
-CM	11 May 2026	150.07	1.145075
-CM	25 May 2026	160.07	1.07353
-```
+- `$143.96` — `<span class="current-price">` (templates/index.html:68)
+- `+1.85 (+1.30%) Today` — `<span class="price-change pos">` (line 69)
 
-| Column | Meaning | Ledger mapping |
-|---|---|---|
-| 1 | ticker | `ticker` (trim + uppercase) |
-| 2 | `DD Mon YYYY` date | `transaction_date` (ISO `2026-03-16`) |
-| 3 | price | `price` |
-| 4 | qty (fractional) | `qty` |
-
-No buy/sell column, no currency. Currency is DERIVED from yfinance at
-insert time (same rule as `POST /api/transactions`); the side is ALWAYS BUY.
-
-Two-phase flow, decided with the user: **preview** parses + quote-checks
-the paste and shows the rows (zero writes), then **commit** re-parses and
-writes. The user sees exactly what will land before anything does.
+Nothing in main.js ever touches them. This feature replaces them with
+real computed numbers: **total value**, **day change**, and **total
+return**, each with its % — the first slice of the project brief's full
+"value summary strip" (cost basis stays server-side for now; the strip
+can add it as a fourth number later).
 
 ## Decisions locked (with the user)
 
-Each row names its rework trigger — when it fires, revisit the choice.
-
 | Decision | Choice | Why | Rework trigger |
 |---|---|---|---|
-| Input | Paste textarea | No multipart/file handling anywhere; volumes are tiny | Imports too big to paste comfortably |
-| Side | Every row BUY | Format has no side column | Source starts including sells → dropdown or column |
-| Duplicates | No detection | Rows carry no usable identity | Re-importing becomes routine |
-| Failure policy | Best-effort + report | Matches per-symbol resilience (indices bar, portfolio history): 50 rows shouldn't die on row 17 | — |
-| Parser location | `app.py` | "Which data means what" is a route-layer product decision (same as `INDEX_SYMBOLS`); `db.py`/`market_data.py` stay pure | — |
+| Where computed | New backend route, not client-side sums | main.js is rendering-only (AGENTS.md architecture rule); backend owns market math | — |
+| Scope | Value + day change + total return (3 numbers) | User's choice; full strip (4th number: cost basis) is a later feature reusing this endpoint | The full summary strip ships |
+| Currency | Mixed native-currency sum, documented | MVP no-FX rule, same as the ledger's per-row values | Dashboard routinely shows ≥2 currencies |
+| Unpriced tickers | Excluded from ALL sums + returned in `unpriced` list | Per-symbol resilience (indices bar rule): successes only, frontend flags the gap | — |
+| Display | Plain number, no `$` prefix | The total isn't reliably one currency; chips already show bare numbers | — |
 
-Note: when this ships, the durable "why" gets encoded in code comments next
-to the code (AGENTS.md rule) — this file is wiped per feature.
+## Math (mirrors existing code)
+
+- Net qty per ticker: BUY adds, SELL subtracts — same walk as
+  `portfolio_history` (app.py).
+- `total_value = Σ net_qty × quote.price` (priced tickers only)
+- `day_gain = Σ net_qty × quote.change` — quote.change = live −
+  previous close, the same per-row rule as the ledger's Day column.
+- `cost_basis = Σ ±(price × qty)` over the SAME priced tickers — SELL
+  proceeds subtract, giving net invested capital. Then
+  `total_gain = total_value − cost_basis`, which blends realized +
+  unrealized gains in one formula. (Excluding unpriced tickers from
+  cost_basis too keeps every number describing the same portfolio slice.)
+- `day_gain_pct = day_gain ÷ (total_value − day_gain) × 100` (yesterday's
+  value is the base). `total_gain_pct = total_gain ÷ cost_basis × 100`.
+  Zero/meaningless denominators → `null` → frontend shows the signed
+  amount without a %.
 
 ## Subtasks
 
-### 1. `app.py` — `parse_import_text(text)`
+### 1. `app.py` — `GET /api/portfolio/summary`
 
-One helper both routes share. Returns a list of row dicts, each either the
-normalized fields (`ticker`, `transaction_date`, `price`, `qty`,
-`transaction_type`) with `error: None`, or the offending input with
-`error: "<reason>"` — the report shape both routes build on.
+Placed next to `portfolio_history`. No params, no validation needed.
+Returns raw floats + nullable pcts:
 
-- Split on lines (tolerate `\r\n`), skip blank lines.
-- Split each line on TAB; not exactly 4 fields → that row fails with a reason.
-- Ticker: `strip().upper()` — same canonical form as `log_transaction`.
-- Date: `datetime.strptime(value, "%d %b %Y").date().isoformat()`.
-  VERIFIED: `"16 Mar 2026"` → `2026-03-16`; non-padded `"1 May 2026"` works
-  too. The `.date()` matters — strptime hands back a DATETIME, and its
-  isoformat would smuggle `T00:00:00` into the ledger. `%b` is the
-  abbreviated ENGLISH month; a localized source fails loudly, which is fine.
-- Price/qty: `float()`, must be > 0. Fractional qty (`1.296383`) is exactly
-  why the qty column is REAL.
-- `transaction_type`: forced `"BUY"`.
+```json
+{"total_value": 630.0, "day_gain": 30.0, "day_gain_pct": 5.0,
+ "total_gain": 70.0, "total_gain_pct": 12.5, "cost_basis": 560.0,
+ "unpriced": []}
+```
 
-Deliberately strict: no `$`/comma stripping, no whitespace-split fallback.
-Parse exactly the known format. Caveat to check against the REAL file: the
-chat paste may have been reformatted — if the actual source is space-aligned
-rather than tab-separated, only the splitter changes.
+Empty ledger = normal 200 with zeros + null pcts (same rule as the
+history route). One `get_quote` per unique ticker; a dead ticker lands
+in `unpriced` (sorted) and contributes to nothing.
 
-### 2. `app.py` — `POST /api/transactions/import/preview`
+### 2. `templates/index.html` + `static/style.css`
 
-Body `{text}` (JSON). Parse, then `get_quote` per UNIQUE ticker (same dedup
-as `list_transactions`; the 120s cache makes repeats free). A row whose
-ticker can't be quoted is marked invalid ("unknown or unquotable ticker") —
-same rule as `log_transaction`'s 404. Valid rows get the quote's currency
-attached for display.
+- ids: `portfolio-value`, `portfolio-day-change`, new span
+  `portfolio-total-return`. Mockup numbers → "…".
+- CSS: `.price-change` becomes a stacked block line (value on line 1,
+  two change lines below).
 
-Returns `{"rows": [...], "valid_count": n, "invalid_count": m}`.
-ZERO WRITES — the ledger is untouched; that's what makes the preview
-trustworthy. Empty/missing text → 400.
+### 3. `static/js/main.js` — `refreshPortfolioSummary()`
 
-### 3. `app.py` — `POST /api/transactions/import/commit`
+Fetch → paint. Signed change lines: `+30.00 (+5.00%) Today` /
+`+70.00 (+12.50%) Total`; pos/neg classes; null pct drops the
+parenthetical. Partial unpriced → tooltip on the value names them; all
+contributions zero WHILE tickers are unpriced → whole header degrades
+to "—" (nothing priced is contributing). Fetch failure → "—" too.
 
-Body `{text}` AGAIN — the server re-parses and trusts nothing the client
-could have edited between preview and commit. One parse function, two
-routes, single source of truth.
+Call sites: boot, 60s interval, and next to all three existing
+`refreshLedger()` calls (log/edit submit, delete, import commit).
 
-Per valid row: currency from `get_quote` (unique tickers only),
-`db.add_transaction(..., transaction_type="BUY")`. Best-effort per row:
-a ticker quotable at preview but dead by commit is skipped and reported,
-never fatal.
+### 4. `tests/test_portfolio_summary.py`
 
-Returns `{"imported": n, "failed": [{"row": ..., "error": ...}]}` at 200
-even when `imported == 0` — the request succeeded; the report IS the answer.
+House patterns (`fake_market` style: patch `app_module.get_quote`;
+`client`/`fresh_db` fixtures; seed via `db.add_transaction`):
 
-Currency caveat, documented in the UI hint: the ledger stores the trading
-currency of the ticker AS YAHOO QUOTES IT. `CM` on Yahoo is CIBC's NYSE
-listing (USD — verified live). If a trade actually executed on TSX in CAD,
-the paste must say `CM.TO`. Same rule as logging by hand; the importer
-doesn't guess or convert.
+- empty ledger → zeros, null pcts, 200
+- buy-only math (value, day gain/pct, total gain/pct)
+- buy + sell: netted cost basis, realized+unrealized blend
+- unpriced ticker excluded from every sum and listed
+- all-unpriced → zeros + listed (the frontend "—" shape)
+- fully-sold portfolio → zeros + null pcts
+- mixed currencies sum as-is (documents the temporary decision)
 
-### 4. `templates/index.html` + `static/js/main.js` — the panel
+### 5. `project-brief.md` — temporary decision entry
 
-- "Import" button in the ledger card header.
-- Toggles a small panel: textarea, Preview button, results area.
-- Preview renders rows: valid ones (ticker, date, price, qty, currency);
-  invalid ones red with their reason.
-- "Import N rows" button (only when N > 0) → POST commit → `refreshLedger()`
-  → close panel.
-- Backend sends raw floats; number formatting stays frontend-only (existing
-  rule). Pure fetch + DOM, no new dependencies.
-- Hint text in the panel: every row is logged as a BUY; re-pasting the same
-  rows creates duplicates (no detection); ticker must be the Yahoo form
-  (`CM` = USD NYSE listing, `CM.TO` = CAD TSX listing).
-
-### 5. `tests/test_import.py`
-
-Parser unit tests (pure, no fixtures): happy path; `"1 May 2026"`
-no-leading-zero; bad date; 3-column line; blank lines skipped; lowercase
-ticker.
-
-Route tests, following the house patterns (AGENTS.md): `fresh_db` for the
-DB; `monkeypatch.setattr(app_module, "get_quote", Fake)` — patch WHERE
-IT'S USED (`app.py` imports `get_quote` by name, so rebind it in app's
-namespace, never `market_data`'s).
-
-- preview inserts NOTHING (ledger still empty after the call)
-- commit inserts the rows and derives currency from the fake quote
-- unquotable ticker → its rows land in `failed`, the rest still import
-- missing/empty text → 400
-
-No test touches the network.
-
-### 6. Manual verification
-
-1. `python -m pytest` — full suite green.
-2. `python app.py`; paste the real rows; Preview → check the valid-row list
-   and derived currency against what Yahoo actually says.
-3. Commit → ledger shows the rows grouped under CM; holdings and the
-   portfolio chart react.
-4. Re-paste the same rows → duplicates appear (known, documented behavior).
+Mixed-currency total, rework trigger documented there (permanent home;
+this file gets wiped).
 
 ## Files changed
 
 | File | What changes |
 |---|---|
-| `app.py` | `parse_import_text` + two import routes |
-| `templates/index.html` | Import button + panel markup |
-| `static/js/main.js` | Panel toggle, preview render, commit call |
-| `tests/test_import.py` | New: parser + route tests |
+| `app.py` | `GET /api/portfolio/summary` |
+| `templates/index.html` | ids + third span, mockup numbers removed |
+| `static/style.css` | `.price-change` stacks as block lines |
+| `static/js/main.js` | `refreshPortfolioSummary()` + 5 call sites |
+| `tests/test_portfolio_summary.py` | New: route tests |
 | `feature.md` | This document |
+| `project-brief.md` | Temporary decision entry |
 
-`db.py`, `market_data.py` — **no changes**. The pure layers keep their
-contracts; the browser gets one new panel.
+`db.py`, `market_data.py` — **no changes** (pure layers untouched).
 
-## Non-goals (deliberately)
+## Non-goals
 
-- SELL rows / side selector — rework trigger in the decisions table.
-- Duplicate detection.
-- File upload / multipart.
-- `$`/comma stripping, whitespace-split fallback — strict to the known format.
-- Localized month names — `%b` is English; a changed source fails loudly.
-- FX conversion / ticker-form guessing (`CM` vs `CM.TO`) — the ledger stores
-  what the paste says, same as manual logging.
+- Cost basis / total-return as DISPLAYED strip columns (endpoint returns
+  cost_basis; the UI adds it when the strip ships).
+- FX conversion (see the brief's rule).
+- Chart/header synchronization (header uses live quotes; chart uses
+  history closes — close but not identical by design).

@@ -152,10 +152,29 @@ body {
     margin-right: 12px;
 }
 
+/* The two live change pills (Today's move, then the total return) sit IN
+   A ROW beside the big value: inline-block keeps them in the text flow
+   after the 32px number, and inline boxes align their text baseline with
+   the value's baseline — the standard price-plus-change look on finance
+   sites, no extra CSS needed. Inline flow also wraps gracefully: squeeze
+   the window and the pills drop to the next line. The pill background
+   itself comes from the pos/neg rules below (the watchlist change-tag
+   treatment); inline-block is shrink-to-fit, so the colour hugs the text
+   instead of stretching across the card. main.js toggles pos/neg at paint
+   time, so the pill appears and disappears with the data automatically.
+   Gap logic: the value span already carries margin-right for value→pill;
+   margin-right here spaces pill→pill (and harmlessly trails the last). */
 .price-change {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 2px 6px;
+    border-radius: 4px;
     font-size: 14px;
     white-space: nowrap;
 }
+
+.price-change.pos { background-color: var(--green-bg); }
+.price-change.neg { background-color: var(--red-bg); }
 
 /* Chart Canvas Area. The dashed border / centering / grey tint from the
    placeholder mockup are gone — the chart IS the content now. What remains:
