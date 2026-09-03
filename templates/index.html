@@ -1,32 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Google Finance Clone</title>
+{% extends "base.html" %}
 
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<!-- The dashboard page. Everything shared (head, CDN, navbar, search)
+     lives in base.html; only the dashboard's own layout is here. The
+     script include moved into the `scripts` block, which base.html renders
+     AFTER common.js — the shared helpers must exist before this page's
+     code runs. -->
 
-    <!-- Chart.js, loaded from a public CDN (a free hosted copy — nothing to
-         pip install, it ships straight to the browser). Loading it here adds
-         a global "Chart" class to the page. <head> placement guarantees the
-         library exists before main.js (bottom of <body>) tries to use it. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-</head>
-<body>
+{% block title %}Google Finance Clone{% endblock %}
 
-    <!-- Top Navigation Bar -->
-    <header class="navbar">
-        <div class="nav-left">
-            <span class="logo"><span class="blue">G</span><span class="red">o</span><span class="yellow">o</span><span class="blue">g</span><span class="green">l</span><span class="red">e</span> <span class="gray">Finance</span></span>
-        </div>
-        <div class="search-container">
-            <input type="text" placeholder="Search for stocks & ETFs...">
-        </div>
-    </header>
-
-    <!-- Main Container -->
-    <main class="container">
+{% block content %}
 
         <!-- Market Index Chips. data-symbol is the hook main.js uses to find
              each chip (by meaning, not position). Every chip here is managed:
@@ -215,7 +197,7 @@
 
             <!-- Right Sidebar Column (Watchlist) -->
             <aside class="sidebar">
-                
+
                 <!-- Watchlist Card. Unlike the indices chips above, watchlist
                      rows come and go, so the HTML ships an EMPTY list and
                      main.js builds the rows from /api/watchlist. The list is
@@ -235,10 +217,8 @@
             </aside>
         </div>
 
-    </main>
+{% endblock %}
 
-    <!-- main.js is loaded last so the HTML above exists before it runs.
-         url_for stamps the correct static path at render time. -->
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% endblock %}

@@ -1,12 +1,13 @@
-// Frontend logic for the live indices bar, the live watchlist, AND the
-// transaction ledger.
+// Frontend logic for the DASHBOARD page: the live indices bar, the live
+// watchlist, and the transaction ledger.
 //
 // Talks to the Flask backend over HTTP only (fetch -> JSON -> DOM).
 // Knows nothing about yfinance, Flask, or Python.
-
-// How often to re-fetch quotes, in milliseconds. Matches the backend's
-// design: the 120s TTL means at most every other poll touches Yahoo.
-const REFRESH_MS = 60000;
+//
+// Shared helpers — REFRESH_MS, the formatters (formatPrice/formatNumber/
+// formatSigned), paintChange, and the whole navbar search dropdown — live
+// in common.js, which base.html loads BEFORE this file. They are plain
+// globals here; defining them again would just shadow the shared ones.
 
 // Chips managed by JS = those carrying a data-symbol attribute.
 // Chips without one (the static placeholders) are invisible to this code.
@@ -21,15 +22,6 @@ function setChipState(text) {
         chip.querySelector(".index-price").textContent = text;
         chip.querySelector(".index-change").textContent = "";
     });
-}
-
-// The browser's built-in human formatting engine:
-// 7711.759765625 -> "7,711.76". This is why the backend sends raw floats.
-function formatPrice(value) {
-    return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    }).format(value);
 }
 
 // Fill one chip from one quote object (a parsed piece of the JSON list).
@@ -282,7 +274,6 @@ addTickerBtn.addEventListener("click", async () => {
 watchlistEl.addEventListener("click", async (event) => {
     const removeBtn = event.target.closest(".remove-btn");
     if (!removeBtn) return; // click landed somewhere else in the list
-
     const symbol = removeBtn.dataset.symbol;
     // encodeURIComponent: symbols can contain URL-hostile characters
     // ("^GSPC", "BTC-USD") — encode the PATH, never the whole URL.
@@ -301,6 +292,19 @@ watchlistEl.addEventListener("click", async (event) => {
         console.error("remove ticker failed:", err);
         alert("Could not reach the server — is it running?");
     }
+});
+
+// Navigate: a watchlist ROW is a link to the detail page now (the search
+// dropdown shouldn't be the only way there). A second delegated listener
+// on the same <ul> — delegation again, since rows are rebuilt every cycle.
+// The × button lives INSIDE its row, so this listener must stand down
+// when a click started on it: the remove listener above handles that
+// click, and navigating on top of deleting would be a nasty surprise.
+watchlistEl.addEventListener("click", (event) => {
+    if (event.target.closest(".remove-btn")) return; // that's a removal
+    const row = event.target.closest(".watchlist-item");
+    if (!row) return; // click landed on the list itself
+    window.location.href = `/stock/${encodeURIComponent(row.dataset.symbol)}`;
 });
 
 // ---------------------------------------------------------------------------
@@ -349,24 +353,6 @@ function todayLocalISO() {
     // server-side; "2026-08-05" is the ISO form it demands.
     const pad = (n) => String(n).padStart(2, "0");
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-// Grouped-thousands formatter with a flexible decimal cap. Unlike
-// formatPrice (fixed at 2), maxDigits lets the qty column show fractional
-// amounts ("0.0050" BTC) without trailing-zero spam on whole numbers.
-function formatNumber(value, maxDigits = 2) {
-    return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: maxDigits,
-    }).format(value);
-}
-
-// Signed money text: 12.3 -> "+12.30 CAD", -7.1 -> "-7.10 CAD".
-// Gains are signed in the DATA; the sign character is presentation,
-// so it belongs here (same rule as the chips' "+" prefix).
-function formatSigned(value, currency) {
-    const sign = value >= 0 ? "+" : "";
-    return `${sign}${formatNumber(value)} ${currency}`;
 }
 
 // Replace the tbody's contents with one full-width message row (empty
@@ -536,8 +522,17 @@ function buildGroupRow(ticker, txs) {
     const typeCell = document.createElement("td");
 
     const tickerCell = document.createElement("td");
+    // The group's ticker doubles as a link to the detail page. A real <a>
+    // (not a click handler) means native middle-click / open-in-new-tab
+    // for free — and the expand/collapse listener below must simply stand
+    // down when a click starts on it. Still wrapped in <strong>: same
+    // visual weight as before, the link is only revealed on hover.
+    const tickerLink = document.createElement("a");
+    tickerLink.className = "ticker-link";
+    tickerLink.href = `/stock/${encodeURIComponent(ticker)}`;
+    tickerLink.textContent = ticker;
     const tickerEl = document.createElement("strong");
-    tickerEl.textContent = ticker;
+    tickerEl.append(tickerLink);
     tickerCell.append(tickerEl);
 
     let netQty = 0;
@@ -721,6 +716,11 @@ function renderLedger(transactions) {
 ledgerBody.addEventListener("click", (event) => {
     const groupRow = event.target.closest(".ledger-group");
     if (!groupRow) return; // click landed on a detail or message row
+
+    // ...unless it started on the ticker LINK inside the group row: the
+    // <a>'s native navigation wins, and toggling the group on top of
+    // navigating would fight the page change.
+    if (event.target.closest("a")) return;
 
     const ticker = groupRow.dataset.ticker;
     const open = !expandedTickers.has(ticker);
@@ -908,6 +908,19 @@ txCancelBtn.addEventListener("click", exitEditMode);
 // Prefill the date input ONCE at load: "today" is the overwhelmingly common
 // answer for a fresh transaction.
 txDateInput.value = todayLocalISO();
+
+// Deep-link prefill: the stock detail page's "Log Transaction" button lands
+// here as /?ticker=AAPL#tx-form. The #tx-form anchor scrolls the browser to
+// this form; reading the param here prefills the ticker, so the user's next
+// keystroke is the price. That's the whole integration — no second form on
+// the detail page, ONE form and ONE submit handler for logging (the same
+// reuse rule the edit mode follows).
+const prefillTicker =
+    new URLSearchParams(window.location.search).get("ticker");
+if (prefillTicker) {
+    txForm.elements.ticker.value = prefillTicker.trim().toUpperCase();
+    txForm.elements.ticker.focus();
+}
 
 // ---------------------------------------------------------------------------
 // IMPORT PANEL — bulk-load a pasted batch of transactions. The format is
@@ -1116,19 +1129,8 @@ function setPortfolioUnavailable(tooltipText = "") {
     }
 }
 
-// Paint one signed change line: "+30.00 (+5.00%) Today". Same presentation
-// rules as the ledger's signed cells: the sign lives in the DATA as a raw
-// float, so adding the "+" character here is presentation. pct === null
-// means "no meaningful base to divide by" (e.g. a fully-sold portfolio) —
-// the amount still shows, only the % degrades away.
-function paintPortfolioChange(el, value, pct, label) {
-    const sign = value >= 0 ? "+" : "";
-    el.textContent = pct === null
-        ? `${sign}${formatNumber(value)} ${label}`
-        : `${sign}${formatNumber(value)} (${sign}${pct.toFixed(2)}%) ${label}`;
-    el.classList.toggle("pos", value >= 0);
-    el.classList.toggle("neg", value < 0);
-}
+// (The change-pill painter itself is common.js's paintChange — the stock
+// detail page paints the exact same shape, so the helper moved there.)
 
 // One summary refresh cycle: GET -> paint the three spans.
 async function refreshPortfolioSummary() {
@@ -1161,13 +1163,10 @@ async function refreshPortfolioSummary() {
             ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
             : "";
         portfolioValueEl.textContent = formatNumber(data.total_value);
-        paintPortfolioChange(
-            portfolioDayChangeEl, data.day_gain, data.day_gain_pct, "Today"
-        );
-        paintPortfolioChange(
-            portfolioTotalReturnEl, data.total_gain, data.total_gain_pct,
-            "Total"
-        );
+        paintChange(portfolioDayChangeEl, data.day_gain, data.day_gain_pct,
+                    "Today");
+        paintChange(portfolioTotalReturnEl, data.total_gain,
+                    data.total_gain_pct, "Total");
     } catch (err) {
         console.error("portfolio summary refresh failed:", err);
         setPortfolioUnavailable();
@@ -1175,21 +1174,21 @@ async function refreshPortfolioSummary() {
 }
 
 // ---------------------------------------------------------------------------
-// PORTFOLIO CHART — real portfolio value over time. Chart.js itself came
-// from the CDN <script> tag in index.html, so a global "Chart" class already
-// exists by the time this runs. The CHART is created once, here, with empty
-// data; refreshPortfolioChart() fills it from /api/portfolio/history when
-// the page loads (5D, the default) and every time a timeframe button is
-// clicked.
+// PORTFOLIO CHART — real portfolio value over time. (It began life as
+// hardcoded placeholder data — a learning exercise — before the ledger
+// made real numbers possible.) Chart.js itself comes from the CDN <script>
+// tag in base.html's <head>, so a global "Chart" class already exists by
+// the time this runs.
+//
+// The chart itself is built by common.js's setupTimeframeChart — the stock
+// detail page plots the identical picture with a different endpoint, so
+// the Chart.js config, the 1D–MAX button wiring, and the refresh cycle all
+// moved there. This page's only input is WHERE the data comes from.
 // ---------------------------------------------------------------------------
 
-// The canvas from the HTML — our blank drawing pad — and its "2D context":
-// the object whose methods actually paint pixels onto the pad.
+// The canvas from the HTML — our blank drawing pad — and the timeframe
+// button bar above it.
 const portfolioCanvas = document.getElementById("portfolioChart");
-const portfolioCtx = portfolioCanvas.getContext("2d");
-
-// The timeframe button bar. Delegated listener picks up clicks on any
-// .time-btn, reads its textContent as the period key, and re-fetches.
 const chartButtonsEl = document.querySelector(".chart-timeframe-selectors");
 
 // The default period — must match the `active` button in index.html (5D),
@@ -1197,119 +1196,24 @@ const chartButtonsEl = document.querySelector(".chart-timeframe-selectors");
 // claims is selected.
 const DEFAULT_CHART_PERIOD = "5D";
 
-// A handle on the live chart object. Created once at load with empty
-// data; every refresh just swaps assigns new labels/values and calls
-// update() — no re-creating the Chart, no page reload.
-let portfolioChart = null;
-
-// Guard: the CDN could be unreachable (offline, blocked, down). Without this
-// check, "new Chart(...)" would throw and kill EVERYTHING below in main.js —
-// including the watchlist boot code. One if/else buys graceful degradation.
-if (typeof Chart === "undefined") {
-    console.error("Chart.js failed to load from the CDN — chart skipped");
-} else {
-    portfolioChart = new Chart(portfolioCtx, {
-        // "type" picks the chart family. "line" connects each point to the
-        // next — the classic stock-chart look. Other options: "bar",
-        // "doughnut" (that one is planned for portfolio allocation later).
-        type: "line",
-
-        // Empty by design — refreshPortfolioChart() fills these in. The
-        // dataset object is created here so its presentational config (line
-        // shade, fill, tension) lives in ONE place and survives every refresh.
-        data: {
-            // labels = x-axis categories, one slot per data point. Filled
-            // from the backend's {"labels": [...], "values": [...]}.
-            labels: [],
-            datasets: [
-                {
-                    // A dataset is ONE series of numbers = one line.
-                    label: "Portfolio Value",
-                    // Filled from the backend's "values" list.
-                    data: [],
-                    // Google blue line + a faint translucent fill under it.
-                    borderColor: "#1a73e8",
-                    backgroundColor: "rgba(26, 115, 232, 0.1)",
-                    fill: true,
-                    // tension bends the line between points: 0 = straight
-                    // segments, higher = smoother curves. ~0.3 looks like
-                    // a finance chart without distorting the data.
-                    tension: 0.3,
-                    pointRadius: 3,
-                },
-            ],
-        },
-
-        options: {
-            // responsive: redraw to match the parent .chart-box's size.
-            // maintainAspectRatio: false lets our CSS height (300px) win —
-            // otherwise Chart.js locks in its own width:height ratio.
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                // With only one dataset, the legend ("Portfolio Value"
-                // swatch) adds nothing. Off it comes, for the clean look.
-                legend: { display: false },
-            },
-            scales: {
-                x: { grid: { display: false } }, // no vertical gridlines
-                y: {
-                    grid: { color: "#e0e0e0" },
-                    // beginAtZero: false starts the y-axis near the data's
-                    // minimum instead of 0 — exactly how real stock charts
-                    // make small daily moves visible.
-                    beginAtZero: false,
-                },
-            },
-        },
-    });
-}
-
-// One refresh: GET /api/portfolio/history?period=... then paint.
-// "period" is a PERIOD_MAP key ("5D", "1M", "3M"...) passed through to the
-// backend, which validates it. The chart is mutated in place — Chart.js
-// redraws itself on update(), so swapping the arrays is all it takes.
-async function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
-    // If Chart.js never loaded, portfolioChart is null — nothing to paint.
-    if (!portfolioChart) return;
-
-    try {
-        const response = await fetch(`/api/portfolio/history?period=${period}`);
-        // fetch does NOT throw on 4xx/5xx — only on network failure. A 400
-        // (bad period key) arrives with ok === false; the browser's buttons
-        // only ever send valid keys, so this mainly guards against drift.
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json(); // {labels: [...], values: [...]}
-
-        // Swap the data, then redraw. The presentational config (colour,
-        // tension...) was set once at creation and is untouched here.
-        portfolioChart.data.labels = data.labels;
-        portfolioChart.data.datasets[0].data = data.values;
-        portfolioChart.update();
-    } catch (err) {
-        console.error("portfolio chart refresh failed:", err);
-    }
-}
-
-// Timeframe buttons: ONE delegated listener on the button bar. The buttons
-// are static HTML (never rebuilt), so a direct listener would work too —
-// delegation is used here simply to match the watchlist/ledger pattern and
-// keep all click handling in one place.
-chartButtonsEl.addEventListener("click", (event) => {
-    // Ignore clicks that land on the bar itself (the gap between buttons).
-    const btn = event.target.closest(".time-btn");
-    if (!btn) return;
-
-    // textContent is the period key: "1D", "5D", "3M"... — exactly what the
-    // backend's PERIOD_MAP expects. No separate map to keep in sync.
-    const period = btn.textContent.trim();
-
-    // Swap the active highlight to the clicked button, then fetch+paint.
-    chartButtonsEl.querySelectorAll(".time-btn").forEach((b) =>
-        b.classList.remove("active"));
-    btn.classList.add("active");
-    refreshPortfolioChart(period);
+// Build once at load with empty data; every refresh swaps the arrays and
+// redraws — no re-creating the Chart, no page reload. The factory wires
+// the delegated .time-btn listener too, so a click re-fetches with the
+// clicked button's textContent as the PERIOD_MAP key.
+const portfolioChartHandle = setupTimeframeChart({
+    canvas: portfolioCanvas,
+    buttonBar: chartButtonsEl,
+    datasetLabel: "Portfolio Value",
+    endpoint: "/api/portfolio/history",
+    defaultPeriod: DEFAULT_CHART_PERIOD,
 });
+
+// The boot section below calls this with no argument (the default 5D view);
+// nothing else needs it — button clicks are wired inside the factory.
+function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
+    // If Chart.js never loaded, the handle is null — nothing to paint.
+    if (portfolioChartHandle) portfolioChartHandle.refresh(period);
+}
 
 // ---------------------------------------------------------------------------
 // BOOT — the script's entry point. This block runs top-to-bottom the moment

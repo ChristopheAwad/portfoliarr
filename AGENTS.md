@@ -7,7 +7,8 @@
 
 ## Stack & architecture
 - Flask serves JSON; the browser does all rendering (vanilla JS `fetch` + DOM, no framework).
-- Layering: `market_data.py` = data layer (yfinance + caching, knows nothing about Flask); `db.py` = persistence layer (SQLite, knows nothing about Flask/yfinance); `app.py` = routes (decides WHICH symbols); `static/js/main.js` = rendering only.
+- Two pages, one shared shell: `templates/base.html` owns the head, Chart.js CDN, navbar, and the search box + suggestion dropdown. Pages extend it and fill the `title` / `content` / `scripts` (and optionally `body_attrs`) blocks. `static/js/common.js` (formatters, `paintChange`, search UI, `setupTimeframeChart`) is loaded by base.html BEFORE each page script — page scripts just use the globals.
+- Layering: `market_data.py` = data layer (yfinance + caching, knows nothing about Flask); `db.py` = persistence layer (SQLite, knows nothing about Flask/yfinance); `app.py` = routes (decides WHICH symbols); `static/js/main.js` = dashboard rendering, `static/js/stock.js` = detail-page rendering.
 - Logging lives ONLY in `app.py` (three tiers, console-only). The pure layers (`market_data.py`, `db.py`) never catch or log — they raise; the route layer catches wide, logs with `exc_info=True`, and translates failures to HTTP.
 - Timeframe buttons (1D–MAX) and `/api/portfolio/history` both go through `PERIOD_MAP` (`market_data.py`) — the route validates client-supplied period keys against it. Adding a timeframe = edit it there once.
 - Quote cache is an in-memory dict in `market_data.py` (TTL 120s), deliberately NOT SQLite despite the brief's stack table. Dies on restart — acceptable. Rework trigger documented in `project-brief.md`.
@@ -19,9 +20,9 @@
 - Verify live data: `curl http://localhost:5000/api/indices`
 
 ## Testing
-- Run: `python -m pytest` from the project root. Test files live in `tests/`; shared fixtures (`fresh_db`, `client`) in root `conftest.py`.
+- Run: `python -m pytest` from the project root. Test files live in `tests/`; shared fixtures (`fresh_db`, `client`, `fake_market`) and the `make_quote` helper in root `conftest.py`.
 - Tests never touch the real `instance/` DB — `fresh_db` monkeypatches `db.DB_PATH` to a per-test `tmp_path` file.
-- Patch names WHERE THEY'RE USED, not where they're defined: `market_data` calls `yf` → `monkeypatch.setattr(market_data, "yf", Fake)`; routes call imported `get_quote`/`get_name`/`get_history` → patch on the module: `import app as app_module`, then `monkeypatch.setattr(app_module, "get_quote", ...)`. (`from app import app` binds the Flask object, not the module — classic trap.)
+- Patch names WHERE THEY'RE USED, not where they're defined: `market_data` calls `yf` → `monkeypatch.setattr(market_data, "yf", Fake)`; routes call imported `get_quote`/`get_name`/`get_stats`/`get_history`/`search_tickers` → patch on the module: `import app as app_module`, then `monkeypatch.setattr(app_module, "get_quote", ...)`. (`from app import app` binds the Flask object, not the module — classic trap.)
 - Validator error paths call `jsonify()`, which needs app context → wrap calls in `with app.app_context():`.
 - Importing `app` runs `db.init()` on the real DB once — harmless (idempotent).
 - First run is slow (~90s pandas/numpy warmup), steady state ~17s. No test touches the network.

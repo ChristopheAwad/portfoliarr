@@ -10,7 +10,9 @@
 #     rule "patch where it's USED": app.py did `from market_data import
 #     get_quote`, so the name routes actually look up is app.get_quote.
 #     Patching market_data.get_quote instead would silently do nothing —
-#     the #1 mocking mistake.
+#     the #1 mocking mistake. The `fake_market` fixture + `make_quote`
+#     helper that do this live in conftest.py, because test_stock.py needs
+#     the exact same machinery.
 #   - The throwaway DB (fresh_db, via client): every route that writes
 #     goes to a temp SQLite file, never instance/portfolio.db.
 #
@@ -25,8 +27,6 @@
 #     math per request; an unquotable ticker stays facts-only
 #   - graceful degradation: one dead symbol never sinks the whole answer
 
-from types import SimpleNamespace
-
 import pytest
 
 import db
@@ -35,43 +35,17 @@ import db
 # INSTANCE also named `app`. So `from app import app` hands us the Flask
 # object, NOT the module — and the route functions look up get_quote in
 # the MODULE's namespace. To patch the names the routes actually use, we
-# import the module itself under a different alias.
+# import the module itself under a different alias. (The patching itself
+# happens inside conftest.py's fake_market fixture.)
 import app as app_module
 from app import INDEX_SYMBOLS
 
-
-# ── Helpers & fixtures ────────────────────────────────────────────────
-
-def make_quote(symbol, price, previous_close, currency="USD"):
-    """Build a quote dict in exactly the shape market_data.get_quote
-    returns (raw floats + derived day-move numbers)."""
-    return {
-        "symbol": symbol,
-        "price": price,
-        "previous_close": previous_close,
-        "currency": currency,
-        "change": price - previous_close,
-        "change_pct": (price - previous_close) / previous_close * 100,
-    }
+from conftest import make_quote
 
 
-@pytest.fixture
-def fake_market(monkeypatch):
-    """Swap the three market-data names AS APP.PY USES THEM.
-
-    Patching app.get_quote (not market_data.get_quote!) — see the banner.
-    The patch is a dict lookup, so "unknown symbol" is simulated by the
-    key simply being ABSENT: quotes["NOPE"] raises KeyError, every route
-    catches it, and the resilience paths get exercised exactly as they
-    would with a real Yahoo outage.
-    """
-    quotes, names, histories = {}, {}, {}
-    monkeypatch.setattr(app_module, "get_quote", lambda symbol: quotes[symbol])
-    monkeypatch.setattr(app_module, "get_name", lambda symbol: names[symbol])
-    monkeypatch.setattr(app_module, "get_history",
-                        lambda symbol, period: histories[symbol])
-    return SimpleNamespace(quotes=quotes, names=names, histories=histories)
-
+# ── Helpers ───────────────────────────────────────────────────────────
+# (make_quote and the fake_market fixture live in conftest.py now — shared
+# with test_stock.py. seed_transaction below is routes-file-only.)
 
 def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
                      qty=10, tx_type="BUY", currency="USD"):

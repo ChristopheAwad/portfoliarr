@@ -86,3 +86,17 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   (a test in `tests/test_portfolio_summary.py` locks this decision).
   **Rework trigger:** the dashboard routinely shows holdings in two or
   more currencies, or the full value-summary strip ships.
+- **Stock-detail stats come from the heavy `Ticker.info` endpoint,
+  fetched once per page load and never polled.** The stats grid's numbers
+  (open, day high/low, prev close, volume, 52-week range, market cap)
+  reset at most once per trading day, and `.info` is the slowest call
+  yfinance offers — polling it every 60s would pay its cost for data that
+  cannot move. The quote (fast_info) IS polled; the stats are not.
+  **Rework trigger:** if the grid ever needs intraday freshness, give
+  `get_stats` a short-TTL cache (the quote-cache pattern) rather than
+  polling from the browser.
+- **Ticker search (`/api/search`) is uncached.** Every query is
+  user-typed and effectively unique, so a cache would almost never hit —
+  unlike the quote cache (same symbols every 60s) or the name cache
+  (names never change). **Rework trigger:** Yahoo rate-limiting search
+  traffic → add a short-TTL cache keyed by the lowercased query.

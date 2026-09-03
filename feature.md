@@ -1,116 +1,148 @@
-# Feature: Live Portfolio Header (value, day change, total return)
+# Feature: Ticker Search + Stock Detail Page
 
-## Goal
+## What (user story)
 
-The "Your Portfolio" card's numbers are hardcoded mockup data:
+The navbar's search box becomes real: typing shows live ticker suggestions
+(debounced fetch to the backend → Yahoo's search API). Clicking a suggestion
+(or pressing Enter) navigates to `/stock/<symbol>` — a detail page that looks
+like the dashboard:
 
-- `$143.96` — `<span class="current-price">` (templates/index.html:68)
-- `+1.85 (+1.30%) Today` — `<span class="price-change pos">` (line 69)
+- Large current price + name (where the portfolio value would be)
+- Daily change in $ AND % (pos/neg coloured) — **no total return** (a
+  security has no ledger; that number wouldn't exist)
+- Price-over-time chart with the SAME 1D–MAX timeframe buttons
+  (`PERIOD_MAP` keys, default 5D — no map edits needed)
+- Stats grid: Open, Day High, Day Low, Prev Close, Volume, 52W Range,
+  Market Cap
+- Buttons: **Add to Watchlist** (reuses `POST /api/watchlist`) and
+  **Log Transaction** (navigates to `/?ticker=SYM#tx-form`; main.js reads
+  the `?ticker=` param and prefills the form — ONE form, one submit handler)
 
-Nothing in main.js ever touches them. This feature replaces them with
-real computed numbers: **total value**, **day change**, and **total
-return**, each with its % — the first slice of the project brief's full
-"value summary strip" (cost basis stays server-side for now; the strip
-can add it as a fourth number later).
+Bonus navigation (agreed): watchlist rows and ledger group-row tickers link
+to the detail page too.
 
-## Decisions locked (with the user)
+## Decisions already made (planning session — don't re-litigate)
 
-| Decision | Choice | Why | Rework trigger |
-|---|---|---|---|
-| Where computed | New backend route, not client-side sums | main.js is rendering-only (AGENTS.md architecture rule); backend owns market math | — |
-| Scope | Value + day change + total return (3 numbers) | User's choice; full strip (4th number: cost basis) is a later feature reusing this endpoint | The full summary strip ships |
-| Currency | Mixed native-currency sum, documented | MVP no-FX rule, same as the ledger's per-row values | Dashboard routinely shows ≥2 currencies |
-| Unpriced tickers | Excluded from ALL sums + returned in `unpriced` list | Per-symbol resilience (indices bar rule): successes only, frontend flags the gap | — |
-| Display | Plain number, no `$` prefix | The total isn't reliably one currency; chips already show bare numbers | — |
+- **Scope**: full brief spec for `/stock/<symbol>` (stats grid + both
+  buttons), not just price/chart/day-change.
+- **Reuse strategy**: refactor to shared code — `templates/base.html`
+  (navbar + search + head/CDN) and `static/js/common.js` (formatters,
+  `REFRESH_MS`, `paintChange`, search UI, shared chart helper).
+  NO duplicated navbar/search JS.
+- **"Log Transaction" = URL-param prefill** (`/?ticker=SYM#tx-form`), not an
+  inline form on the detail page.
+- **Search is uncached** (every query is user-typed, hit rate ≈ 0).
+- **Stats are one-shot per page load**, not polled — they come from the heavy
+  `yf.Ticker().info` endpoint and are daily figures; only the quote is polled.
+- **Unquotable symbol → 404** on the single-symbol endpoints (same convention
+  as watchlist-add / transaction-log).
+- Native currency display everywhere, no FX (permanent brief rule).
 
-## Math (mirrors existing code)
+## Subtasks (in order — check off as done)
 
-- Net qty per ticker: BUY adds, SELL subtracts — same walk as
-  `portfolio_history` (app.py).
-- `total_value = Σ net_qty × quote.price` (priced tickers only)
-- `day_gain = Σ net_qty × quote.change` — quote.change = live −
-  previous close, the same per-row rule as the ledger's Day column.
-- `cost_basis = Σ ±(price × qty)` over the SAME priced tickers — SELL
-  proceeds subtract, giving net invested capital. Then
-  `total_gain = total_value − cost_basis`, which blends realized +
-  unrealized gains in one formula. (Excluding unpriced tickers from
-  cost_basis too keeps every number describing the same portfolio slice.)
-- `day_gain_pct = day_gain ÷ (total_value − day_gain) × 100` (yesterday's
-  value is the base). `total_gain_pct = total_gain ÷ cost_basis × 100`.
-  Zero/meaningless denominators → `null` → frontend shows the signed
-  amount without a %.
+- [ ] **1. `market_data.py` data layer** (+ Fake-yf tests)
+      - `search_tickers(query, limit=8)` via `yf.Search(...).quotes`
+        (verified working on yfinance 1.7.0). Normalize to
+        `{symbol, name, exchange, type}` from `symbol` /
+        `shortname`→`longname` fallback / `exchDisp`→`exchange` / `typeDisp`.
+        `[]` on no matches; RAISES on failure (boundary rule, no logging).
+      - `get_stats(symbol)` via one `yf.Ticker(symbol).info` call →
+        `{open, day_high, day_low, prev_close, volume, week52_low,
+        week52_high, market_cap}` (from `open`, `dayHigh`, `dayLow`,
+        `regularMarketPreviousClose`, `volume`, `fiftyTwoWeekLow`,
+        `fiftyTwoWeekHigh`, `marketCap`). Missing fields → `None`
+        (indices/crypto lack some); frontend gap-fills "—".
+      - Tests: Fake `yf` module via `monkeypatch.setattr(market_data, "yf",
+        Fake)` — normalization, longname fallback, empty results, raise
+        propagates.
 
-## Subtasks
+- [x] **2. `app.py` routes** (+ route tests: new `tests/test_search.py`,
+      `tests/test_stock.py`)
+      - `GET /stock/<symbol>` — render `stock.html`, symbol uppercased and
+        passed to the template (becomes `<body data-symbol>` + `<title>`).
+      - `GET /api/search?q=` — q required/non-blank → else 400;
+        success → `{"results": [...]}`; failure → 503 (indices all-fail
+        convention), warning + `exc_info`.
+      - `GET /api/stock/<symbol>` — `dict(get_quote(sym))` (COPY before
+        decorating — cache-mutation rule) + name via `get_name`
+        (failure → `None`, watchlist rule). Quote failure → 404
+        "unknown or unquotable symbol". This is the POLLED endpoint (60s).
+      - `GET /api/stock/<symbol>/stats` — `get_stats` → 200; failure → 404.
+      - `GET /api/stock/<symbol>/history?period=` — validate against
+        `PERIOD_MAP` (same pattern as portfolio history; 400 lists options)
+        → `get_history` dict → sorted `{labels, values}`. Empty dict → 200
+        empty; fetch failure → 404.
+      - Test rule: patch names WHERE USED — `app_module.search_tickers`,
+        `app_module.get_stats`, etc. (`from app import app` binds the Flask
+        object, not the module).
 
-### 1. `app.py` — `GET /api/portfolio/summary`
+- [x] **3. Shared refactor** — `templates/base.html`, `templates/index.html`,
+      `static/js/common.js`
+      - `base.html`: head + Chart.js CDN + navbar. Logo `<span>` becomes
+        `<a href="/">`. Search input gets `id="ticker-search"` + hidden
+        `<div id="search-results">` dropdown. Jinja blocks: `title`,
+        `content`, `scripts`.
+      - `index.html` extends base; dashboard content unchanged — ALL
+        existing hooks preserved (chips `data-symbol`, `portfolio-value`,
+        `ledger-body`, `tx-form`, `import-panel`...).
+      - `common.js` (loads BEFORE page scripts): move `REFRESH_MS`,
+        `formatPrice`, `formatNumber`, `formatSigned` from main.js;
+        generalize `paintPortfolioChange` → `paintChange(el, value, pct,
+        label)`. Search UI: 300ms debounce → `/api/search?q=` → dropdown
+        (createElement + textContent only); click/Enter navigates to
+        `/stock/<encodeURIComponent(symbol)>`; Escape/outside-click hides;
+        "No matches" / "Search unavailable" states.
+      - Verify dashboard looks/behaves identically before moving on.
 
-Placed next to `portfolio_history`. No params, no validation needed.
-Returns raw floats + nullable pcts:
+- [x] **4. Detail page** — `templates/stock.html`, `static/js/stock.js`,
+      `static/style.css`, shared chart helper
+      - `common.js` gains `setupTimeframeChart({canvas, label, endpoint,
+        defaultPeriod})` — creates the Chart.js line (keeps the
+        `typeof Chart === "undefined"` CDN guard), wires the delegated
+        `.time-btn` listener, returns `refresh(period)`. main.js then uses
+        it with `/api/portfolio/history` (kills ~70 duplicated lines).
+      - `stock.html` (extends base): header card (symbol + JS-filled name,
+        large price `<currency>`, day change $/% via `paintChange`,
+        NO total-return span, Add-to-Watchlist + Log-Transaction buttons),
+        chart card (canvas + 1D–MAX, 5D active), stats card (grid, ships
+        "…", 52W Range = `low – high`, Market Cap compact notation "2.52T").
+      - `stock.js`: symbol from `document.body.dataset.symbol`;
+        `refreshStockQuote()` on load + poll; `refreshStockStats()` once;
+        404 → "Unknown symbol" degraded state; Add button → POST
+        `/api/watchlist` (201 → disable + "✓ Watching", 409/404 relayed
+        inline); Log button → `/?ticker=SYM#tx-form`.
+      - CSS: search dropdown, stats grid, watchlist-row hover, ticker-link.
 
-```json
-{"total_value": 630.0, "day_gain": 30.0, "day_gain_pct": 5.0,
- "total_gain": 70.0, "total_gain_pct": 12.5, "cost_basis": 560.0,
- "unpriced": []}
-```
+- [x] **5. `main.js` wiring**
+      - Read `?ticker=` URL param → prefill + focus the tx form (and the
+        `#tx-form` anchor does the scrolling).
+      - Watchlist rows clickable → navigate to detail page (guard: a click
+        on the × remove-btn must NOT navigate).
+      - Ledger group-row ticker cell → `<a class="ticker-link">`; the
+        expand/collapse delegated listener returns early when
+        `event.target.closest("a")`. Cell COUNT unchanged.
 
-Empty ledger = normal 200 with zeros + null pcts (same rule as the
-history route). One `get_quote` per unique ticker; a dead ticker lands
-in `unpriced` (sorted) and contributes to nothing.
+- [x] **6. Docs + verification**
+      - `project-brief.md` Temporary Decisions: (a) stats via heavy `.info`
+        once per load, not polled; (b) search uncached. — DONE
+      - `python -m pytest` green: 115 passed. — DONE
+      - Live curl pass: search / quote / stats / history / 400s / 404s /
+        both page shells (incl. %5EGSPC) — all correct. — DONE
+      - REMAINING (needs a human at the browser): typing in the search box
+        (dropdown, click + Enter navigation), Add-to-Watchlist and
+        Log-Transaction buttons, watchlist/ledger link navigation, and the
+        dashboard looking unchanged.
 
-### 2. `templates/index.html` + `static/style.css`
+## Contracts that must NOT break (AGENTS.md)
 
-- ids: `portfolio-value`, `portfolio-day-change`, new span
-  `portfolio-total-return`. Mockup numbers → "…".
-- CSS: `.price-change` becomes a stacked block line (value on line 1,
-  two change lines below).
-
-### 3. `static/js/main.js` — `refreshPortfolioSummary()`
-
-Fetch → paint. Signed change lines: `+30.00 (+5.00%) Today` /
-`+70.00 (+12.50%) Total`; pos/neg classes; null pct drops the
-parenthetical. Partial unpriced → tooltip on the value names them; all
-contributions zero WHILE tickers are unpriced → whole header degrades
-to "—" (nothing priced is contributing). Fetch failure → "—" too.
-
-Call sites: boot, 60s interval, and next to all three existing
-`refreshLedger()` calls (log/edit submit, delete, import commit).
-
-### 4. `tests/test_portfolio_summary.py`
-
-House patterns (`fake_market` style: patch `app_module.get_quote`;
-`client`/`fresh_db` fixtures; seed via `db.add_transaction`):
-
-- empty ledger → zeros, null pcts, 200
-- buy-only math (value, day gain/pct, total gain/pct)
-- buy + sell: netted cost basis, realized+unrealized blend
-- unpriced ticker excluded from every sum and listed
-- all-unpriced → zeros + listed (the frontend "—" shape)
-- fully-sold portfolio → zeros + null pcts
-- mixed currencies sum as-is (documents the temporary decision)
-
-### 5. `project-brief.md` — temporary decision entry
-
-Mixed-currency total, rework trigger documented there (permanent home;
-this file gets wiped).
-
-## Files changed
-
-| File | What changes |
-|---|---|
-| `app.py` | `GET /api/portfolio/summary` |
-| `templates/index.html` | ids + third span, mockup numbers removed |
-| `static/style.css` | `.price-change` stacks as block lines |
-| `static/js/main.js` | `refreshPortfolioSummary()` + 5 call sites |
-| `tests/test_portfolio_summary.py` | New: route tests |
-| `feature.md` | This document |
-| `project-brief.md` | Temporary decision entry |
-
-`db.py`, `market_data.py` — **no changes** (pure layers untouched).
-
-## Non-goals
-
-- Cost basis / total-return as DISPLAYED strip columns (endpoint returns
-  cost_basis; the UI adds it when the strip ships).
-- FX conversion (see the brief's rule).
-- Chart/header synchronization (header uses live quotes; chart uses
-  history closes — close but not identical by design).
+- Ledger 11-column contract lives in FOUR places (th row, setLedgerMessage
+  colSpan, buildGroupRow, buildTxRow) — this feature touches the group
+  ticker CELL CONTENT only, never the count.
+- `PERIOD_MAP` is the single source of truth for timeframes — new page
+  reuses the same 9 keys/buttons; no map edits.
+- Backend sends raw floats; formatting + pos/neg classes are frontend-only.
+- Logging lives ONLY in app.py; market_data/db raise.
+- Quote dicts come back from the cache SHARED — copy before decorating.
+- Two vocabularies: JSON API short keys vs DB explicit columns (not really
+  triggered here — the stock endpoints have no DB rows — but keep the rule
+  in mind for any reply shapes).

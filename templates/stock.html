@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+<!-- The stock detail page (/stock/<symbol>). Everything shared (head, CDN,
+     navbar, search) lives in base.html. This page mirrors the dashboard's
+     look — a big header card with the price + change pills, a timeframe
+     chart — minus the total-return pill, because a security has no ledger
+     behind it: there is no cost basis, so a "total return" would be a
+     made-up number. The stats grid below the chart is the one card the
+     dashboard doesn't have. -->
+
+{% block title %}{{ symbol }} — Google Finance Clone{% endblock %}
+
+<!-- The symbol is stamped on <body> (via base.html's body_attrs block):
+     stock.js's identity hook. The template renders it uppercased by the
+     route; every fetch below uses the same canonical form. -->
+{% block body_attrs %} data-symbol="{{ symbol }}"{% endblock %}
+
+{% block content %}
+
+        <!-- Header card — the dashboard's "Your Portfolio" card, one
+             security at a time. The name span ships blank: it comes from
+             Yahoo's heavier metadata endpoint via the quote reply, and a
+             flaky name must never blank the price (JS falls back to the
+             bare symbol). The buttons act through the SAME endpoints the
+             dashboard uses — POST /api/watchlist for watching, and a
+             navigate-to-dashboard-with-prefill for logging a transaction. -->
+        <div class="card stock-header-card">
+            <div class="stock-title">
+                <h2>{{ symbol }}</h2>
+                <span class="sub-text" id="stock-name"></span>
+            </div>
+
+            <!-- Live quote numbers. "…" placeholders on purpose — the same
+                 rule as the dashboard: nothing static can masquerade as
+                 live data. Day change is painted by stock.js through
+                 common.js's paintChange (the +$x (+y%) Today pill); there
+                 is deliberately NO total-return pill here. -->
+            <div class="stock-price-container">
+                <span class="current-price" id="stock-price">…</span>
+                <span class="price-change" id="stock-day-change">…</span>
+            </div>
+
+            <!-- Action row. Log Transaction doesn't open a form here — it
+                 jumps to the dashboard's log form with ?ticker= prefilled
+                 (ONE form, one submit handler, same reuse rule the ledger's
+                 edit mode follows). -->
+            <div class="stock-actions">
+                <button class="btn-action" id="add-to-watchlist-btn" type="button">+ Add to Watchlist</button>
+                <button class="btn-action" id="log-tx-btn" type="button">Log Transaction</button>
+                <!-- Inline error for the Add button (unknown ticker, server
+                     unreachable...) — the tx-error pattern, relocated. -->
+                <span class="action-error" id="stock-action-error" hidden></span>
+            </div>
+
+            <!-- Price chart + the SAME timeframe buttons as the dashboard
+                 (their textContent is the PERIOD_MAP key; 5D is the default
+                 view, so it carries `active`). The only difference from the
+                 dashboard's chart is the endpoint the data comes from. -->
+            <div class="chart-box">
+                <canvas id="stockChart"></canvas>
+            </div>
+
+            <div class="chart-timeframe-selectors">
+                <button class="time-btn">1D</button>
+                <button class="time-btn active">5D</button>
+                <button class="time-btn">1M</button>
+                <button class="time-btn">3M</button>
+                <button class="time-btn">6M</button>
+                <button class="time-btn">YTD</button>
+                <button class="time-btn">1Y</button>
+                <button class="time-btn">5Y</button>
+                <button class="time-btn">MAX</button>
+            </div>
+        </div>
+
+        <!-- Stats card — the numbers that reset every trading day, fetched
+             ONCE per page load (not polled): they come from Yahoo's heavy
+             profile endpoint, and 60s polling would pay its cost for data
+             that can't move. A dl (description list) is the honest element
+             for label:value pairs; CSS grids the pairs. Missing fields
+             (an index has no market cap) gap-fill to "—". -->
+        <div class="card stats-card">
+            <h3>Stats</h3>
+            <dl class="stats-grid">
+                <div class="stat"><dt>Open</dt><dd id="stat-open">…</dd></div>
+                <div class="stat"><dt>Day High</dt><dd id="stat-day-high">…</dd></div>
+                <div class="stat"><dt>Day Low</dt><dd id="stat-day-low">…</dd></div>
+                <div class="stat"><dt>Prev Close</dt><dd id="stat-prev-close">…</dd></div>
+                <div class="stat"><dt>Volume</dt><dd id="stat-volume">…</dd></div>
+                <div class="stat"><dt>52W Range</dt><dd id="stat-week52-range">…</dd></div>
+                <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap">…</dd></div>
+            </dl>
+        </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/stock.js') }}"></script>
+{% endblock %}

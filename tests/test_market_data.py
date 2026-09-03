@@ -68,6 +68,7 @@ def fake_yf(monkeypatch):
                       "currency": "USD"},
         "info": {"shortName": "Apple Inc", "longName": None},
         "history": None,  # tests assign a DataFrame here
+        "search": None,   # tests assign a list of Yahoo search hits here
     }
 
     class FakeTicker:
@@ -86,8 +87,16 @@ def fake_yf(monkeypatch):
             calls.append((self.symbol, period, interval))
             return state["history"]
 
+    class FakeSearch:
+        """Stand-in for yf.Search: same constructor signature, same
+        .quotes attribute the real library exposes after its fetch."""
+        def __init__(self, query, max_results=8):
+            calls.append(("search", query, max_results))
+            self.quotes = state["search"]
+
     class FakeYf:
         Ticker = FakeTicker
+        Search = FakeSearch
 
     monkeypatch.setattr(market_data, "yf", FakeYf)
     return SimpleNamespace(calls=calls, state=state)
@@ -184,3 +193,104 @@ def test_history_intraday_bars_use_time_labels(fake_yf):
     result = market_data.get_history("AAPL", "1D")
     assert result == {"09:30": 150.0, "09:35": 151.0}
     assert ("AAPL", "1d", "5m") in fake_yf.calls
+
+
+# ── get_stats: the detail page's stats grid ───────────────────────────
+
+def test_get_stats_extracts_and_renames_the_grid_fields(fake_yf):
+    """Yahoo's camelCase profile → our snake_case grid keys, exactly the
+    translation the route layer relies on."""
+    fake_yf.state["info"] = {
+        "open": 148.0, "dayHigh": 152.0, "dayLow": 147.5,
+        "regularMarketPreviousClose": 145.0, "volume": 55_000_000,
+        "fiftyTwoWeekLow": 164.0, "fiftyTwoWeekHigh": 237.25,
+        "marketCap": 3_500_000_000_000,
+    }
+    assert market_data.get_stats("AAPL") == {
+        "open": 148.0, "day_high": 152.0, "day_low": 147.5,
+        "prev_close": 145.0, "volume": 55_000_000,
+        "week52_low": 164.0, "week52_high": 237.25,
+        "market_cap": 3_500_000_000_000,
+    }
+
+
+def test_get_stats_missing_fields_become_none(fake_yf):
+    """Different security types legitimately lack different figures (an
+    index has no marketCap): absent fields come back None — data the
+    frontend gap-fills with "—", never a crash."""
+    fake_yf.state["info"] = {"open": 5000.0}
+    stats = market_data.get_stats("^GSPC")
+    assert stats["open"] == 5000.0
+    assert stats["market_cap"] is None
+    assert stats["volume"] is None
+
+
+def test_get_stats_prev_close_falls_back_to_alt_spelling(fake_yf):
+    """regularMarketPreviousClose missing → previousClose is the same fact
+    under Yahoo's alternate key (same `or` pattern as get_name)."""
+    fake_yf.state["info"] = {"previousClose": 145.0}
+    assert market_data.get_stats("AAPL")["prev_close"] == 145.0
+
+
+def test_get_stats_empty_profile_raises(fake_yf):
+    """Yahoo returning NOTHING about the symbol is a total failure, not
+    eight quiet Nones — raise the named ValueError the route layer
+    translates into a 404."""
+    fake_yf.state["info"] = {}
+    with pytest.raises(ValueError):
+        market_data.get_stats("NOPE")
+
+
+# ── search_tickers: the navbar's suggestions ──────────────────────────
+
+def test_search_normalizes_yahoo_hits_in_ranked_order(fake_yf):
+    """Hits come back best-first (Yahoo ranks them) with display-friendly
+    fields: shortname→longname and exchDisp→exchange fallbacks applied."""
+    fake_yf.state["search"] = [
+        {"symbol": "AAPL", "shortname": "Apple Inc.", "longname": None,
+         "exchDisp": "NASDAQ", "typeDisp": "Equity"},
+        {"symbol": "APLE", "shortname": None,
+         "longname": "Apple Hospitality REIT, Inc.",
+         "exchange": "NYQ", "typeDisp": "Equity"},
+    ]
+    results = market_data.search_tickers("apple")
+    assert results == [
+        {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ",
+         "type": "Equity"},
+        {"symbol": "APLE", "name": "Apple Hospitality REIT, Inc.",
+         "exchange": "NYQ", "type": "Equity"},
+    ]
+    # The query AND the limit both reached yfinance intact.
+    assert ("search", "apple", 8) in fake_yf.calls
+
+
+def test_search_empty_results_are_a_normal_state(fake_yf):
+    """Gibberish finding nothing is normal — [] , not an error."""
+    fake_yf.state["search"] = []
+    assert market_data.search_tickers("zzzz") == []
+
+
+def test_search_skips_hits_without_a_symbol(fake_yf):
+    """A symbol-less hit can't be navigated to — dropped rather than let
+    the dropdown offer a link to /stock/None."""
+    fake_yf.state["search"] = [
+        {"shortname": "mystery hit with no symbol"},
+        {"symbol": "AAPL", "shortname": "Apple Inc."},
+    ]
+    results = market_data.search_tickers("apple")
+    assert [r["symbol"] for r in results] == ["AAPL"]
+
+
+def test_search_failure_propagates(monkeypatch):
+    """Boundary rule: this layer RAISES, the route layer translates into
+    HTTP (503 here). Verified with its own exploding fake."""
+    class ExplodingSearch:
+        def __init__(self, query, max_results=8):
+            raise ConnectionError("yahoo down")
+
+    class ExplodingYf:
+        Search = ExplodingSearch
+
+    monkeypatch.setattr(market_data, "yf", ExplodingYf)
+    with pytest.raises(ConnectionError):
+        market_data.search_tickers("apple")

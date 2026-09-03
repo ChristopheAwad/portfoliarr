@@ -20,7 +20,9 @@ from werkzeug.exceptions import HTTPException
 # symbols the page needs and HOW answers map to HTTP; market_data.py handles
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
-from market_data import get_quote, get_name, get_history, PERIOD_MAP
+from market_data import (
+    get_quote, get_name, get_stats, get_history, search_tickers, PERIOD_MAP
+)
 import db
 
 # datetime's date/datetime classes know how to both VALIDATE and NORMALIZE
@@ -1074,9 +1076,175 @@ def import_commit():
     return jsonify({"imported": imported_count, "failed": failed})
 
 
+# ---------------------------------------------------------------------------
+# STOCK DETAIL PAGE — /stock/<symbol> plus the JSON endpoints that feed it.
+#
+# The dashboard prices a PORTFOLIO (ledger facts + live quotes); this page
+# prices ONE SECURITY. Same visual shell, simpler math: a stock has no
+# ledger behind it, so there is no cost basis — and therefore no total
+# return, the one dashboard number this page deliberately lacks.
+#
+# Three endpoints, sized to their data's weight and refresh rhythm:
+#   /api/stock/<symbol>           light  (fast_info)  — polled every 60s
+#   /api/stock/<symbol>/stats     heavy  (Ticker.info) — once per page load
+#   /api/stock/<symbol>/history   medium (bar closes)  — per button click
+#
+# ERROR CONVENTION (differs from the dashboard's multi-symbol endpoints on
+# purpose): an unquotable symbol here is 404, not graceful degradation —
+# when ONE symbol is the entire request there is nothing left to degrade
+# to. Same verdict as watchlist-add and transaction-log.
+#
+# /api/search lives in this section too: it exists to feed the navbar's
+# suggestion dropdown, whose whole job is navigating to this page.
+# ---------------------------------------------------------------------------
+
+
+@app.route("/stock/<symbol>")
+def stock_page(symbol):
+    """Render the detail-page shell. Rendering NEVER touches the network:
+    the template ships blank placeholders and stock.js fills them from the
+    JSON endpoints below — the same "browser does all rendering" rule as
+    the dashboard. The uppercased symbol rides into the template so it can
+    stamp <body data-symbol> (stock.js's identity hook) and <title>."""
+    return render_template("stock.html", symbol=symbol.strip().upper())
+
+
+@app.route("/api/search")
+def ticker_search():
+    """Turn a free-text query into ticker suggestions for the navbar.
+
+    ?q=apple  ->  {"results": [{symbol, name, exchange, type}, ...]}
+
+    An empty/missing q is a 400 BEFORE any network call (nothing to
+    search). Empty results are a normal 200 with an empty list — the
+    dropdown shows "No matches". A failed Yahoo search is a 503: the
+    SEARCH service is unavailable and the dropdown says so, but the page
+    keeps working — search is an entry point, not the page's data.
+    """
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify({"error": "query parameter q is required"}), 400
+
+    try:
+        results = search_tickers(query)
+    except Exception:
+        # Wide catch on purpose: yfinance fails in many ways. TIER 1 at
+        # warning WITH the traceback — a dead search is a degraded app
+        # (everything else still works), and the cause is not knowable
+        # from the outside.
+        app.logger.warning(
+            "ticker search failed for %r — serving 503", query, exc_info=True,
+        )
+        return jsonify({"error": "search service unavailable"}), 503
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/stock/<symbol>")
+def stock_quote(symbol):
+    """One security's live quote + display name — the detail page's polled
+    endpoint (every 60s, like the dashboard's sections).
+
+    Reply shape: the get_quote dict (symbol, price, previous_close,
+    currency, change, change_pct) plus "name" — None when Yahoo's heavier
+    name endpoint flakes, so the header falls back to the bare symbol
+    (same degrade rule as the watchlist rows).
+    """
+    # Same normalize-to-canonical-form rule as every route that takes a
+    # symbol from the URL: "aapl" and "AAPL" must hit the same cache slot.
+    symbol = symbol.strip().upper()
+
+    try:
+        # COPY before decorating: get_quote hands back the object SHARED
+        # with the cache — mutating it (adding "name") would leak our edit
+        # into every future cache hit (the watchlist route learned this
+        # first; same rule, new caller).
+        quote = dict(get_quote(symbol))
+    except Exception:
+        # TIER 1 at INFO, no traceback: an unquotable symbol on a page the
+        # user navigated to is usually a typo or a delisted ticker —
+        # expected client behavior; the symbol string IS the story.
+        app.logger.info("stock quote failed for %s — serving 404", symbol)
+        return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
+
+    try:
+        quote["name"] = get_name(symbol)
+    except Exception:
+        # A missing name must not sink the quote — TIER 1 at DEBUG, same
+        # rule as the watchlist route (this endpoint is the flaky one).
+        app.logger.debug(
+            "no name available for %s — header shows symbol only", symbol,
+            exc_info=True,
+        )
+        quote["name"] = None
+
+    return jsonify(quote)
+
+
+@app.route("/api/stock/<symbol>/stats")
+def stock_stats(symbol):
+    """The detail page's stats grid, fetched ONCE per page load (not
+    polled): these numbers reset daily, and the endpoint behind them
+    (Ticker.info) is the heaviest one yfinance offers."""
+    symbol = symbol.strip().upper()
+
+    try:
+        return jsonify(get_stats(symbol))
+    except Exception:
+        # The quote worked (the page rendered) but stats didn't — degraded,
+        # not dead. TIER 1 at warning with traceback: on screen the grid
+        # just gap-fills to "—" and this log line is the reason.
+        app.logger.warning(
+            "stats fetch failed for %s — serving 404", symbol, exc_info=True,
+        )
+        return jsonify({"error": f"no stats available for {symbol}"}), 404
+
+
+@app.route("/api/stock/<symbol>/history")
+def stock_history(symbol):
+    """One security's close prices over a timeframe — the raw line the
+    chart plots. Same ?period= contract as /api/portfolio/history
+    (validated against the same PERIOD_MAP), but no ledger math: the
+    values ARE the closes.
+
+    get_history returns {label: close}; Chart.js wants parallel arrays, so
+    sort the labels once and walk them. Plain-string labels sort
+    chronologically in both shapes: "YYYY-MM-DD" dates, and (for the 1D
+    intraday view) "HH:MM" times within their single day.
+    """
+    symbol = symbol.strip().upper()
+
+    period = request.args.get("period", "5D").upper()
+    if period not in PERIOD_MAP:
+        # Identical validation to the portfolio route — same dict, same
+        # "here are the valid options" reply.
+        options = ", ".join(sorted(PERIOD_MAP))
+        return jsonify({"error": f"period must be one of: {options}"}), 400
+
+    try:
+        closes = get_history(symbol, period)
+    except Exception:
+        # TIER 1 at warning: a chart that can't load is degraded page state
+        # (the header/stats may still be fine) — the traceback says why.
+        app.logger.warning(
+            "history fetch failed for %s — serving 404", symbol,
+            exc_info=True,
+        )
+        return jsonify({"error": f"no history available for {symbol}"}), 404
+
+    labels = sorted(closes)
+    return jsonify({
+        "labels": labels,
+        "values": [closes[label] for label in labels],
+    })
+
+
 # This guard only runs the block when app.py is executed directly, not
 # when it is imported by another module.
 if __name__ == "__main__":
     # Start the built-in Flask development server, with debug mode enabled
     # (auto-reloads on code changes and shows detailed error pages).
-    app.run(debug=True)
+    # host="0.0.0.0" means "listen on ALL network interfaces", so the server
+    # is reachable from other machines on the LAN via this machine's IP
+    # (e.g. http://<machine-ip>:5000), not just from this machine itself.
+    app.run(debug=True, host="0.0.0.0")

@@ -1,7 +1,9 @@
 """Market data access layer.
 
-Fetches quotes from Yahoo Finance via yfinance, with a short-lived
-in-memory cache so repeated requests don't hammer Yahoo (rate limits).
+Fetches market data from Yahoo Finance via yfinance: live quotes (with a
+short-lived in-memory cache so repeated requests don't hammer Yahoo),
+company names, stats-grid numbers, price history, and free-text ticker
+search.
 
 This module knows nothing about Flask or HTTP — routes decide that.
 """
@@ -109,6 +111,58 @@ def get_name(symbol):
     return name
 
 
+def get_stats(symbol):
+    """Return the stock detail page's stats-grid numbers for `symbol`.
+
+    Shares the heavy `Ticker.info` endpoint with get_name (the full
+    company profile — slower than fast_info but the only place Yahoo
+    exposes these fields). Deliberately NOT cached: names never change,
+    but these figures reset every trading day, so a process-lifetime
+    cache would serve yesterday's numbers all week. The route fetches
+    stats once per page load, so the cost is one call per visit.
+
+    Returns snake_case keys for the grid — the route layer's convention
+    of translating Yahoo's camelCase at this boundary:
+        open / day_high / day_low   today's bar so far
+        prev_close                  yesterday's last price
+        volume                      shares traded today
+        week52_low / week52_high    the 52-week range
+        market_cap                  shares outstanding × price
+
+    MISSING FIELDS → None, not an error: different security types
+    legitimately lack different figures (an index has no marketCap, crypto
+    has no volume on some venues). The frontend gap-fills those cells with
+    "—", the same visual convention as a failed quote. Only TOTAL failure
+    (Yahoo returns nothing at all) raises — the boundary rule: this layer
+    reports, the route layer decides the HTTP response.
+    """
+    info = yf.Ticker(symbol).info
+
+    # An empty profile means Yahoo knows nothing about this symbol —
+    # fail loudly with a named error instead of returning eight Nones
+    # that would masquerade as "real but empty" stats.
+    if not info:
+        raise ValueError(f"no stats data for {symbol}")
+
+    # .get() everywhere: absent fields become None (see docstring). The
+    # prev_close fallback covers Yahoo's two spellings of the same fact —
+    # most tickers carry "regularMarketPreviousClose", a few only
+    # "previousClose". (Same `or` fallback pattern as get_name.)
+    return {
+        "open": info.get("open"),
+        "day_high": info.get("dayHigh"),
+        "day_low": info.get("dayLow"),
+        "prev_close": (
+            info.get("regularMarketPreviousClose")
+            or info.get("previousClose")
+        ),
+        "volume": info.get("volume"),
+        "week52_low": info.get("fiftyTwoWeekLow"),
+        "week52_high": info.get("fiftyTwoWeekHigh"),
+        "market_cap": info.get("marketCap"),
+    }
+
+
 def get_history(symbol, period_key):
     """Return a {label: close_price} dict for `symbol` over a timeframe.
 
@@ -150,3 +204,45 @@ def get_history(symbol, period_key):
             else ts.strftime("%H:%M")
         result[label] = float(row["Close"])
     return result
+
+
+def search_tickers(query, limit=8):
+    """Search Yahoo's ticker universe for a free-text query.
+
+    Powers the navbar's search suggestions. yf.Search is Yahoo's own
+    search endpoint — the same one finance.yahoo.com's search box uses —
+    so anything typed there finds here: stocks, ETFs, indices, crypto,
+    international tickers (the brief's "anything Yahoo has is searchable").
+
+    Returns a list of normalized hits, best match first (Yahoo ranks
+    them), each shaped for the dropdown:
+        symbol    "AAPL", "BTC-USD" — the navigation target
+        name      "Apple Inc." — shortname, falling back to longname
+                  (same `or` fallback as get_name)
+        exchange  "NASDAQ" — the FRIENDLY display name (exchDisp) when
+                  Yahoo offers it, the raw code ("NMS") otherwise
+        type      "Equity", "ETF", "Index", "Cryptocurrency" — lets the
+                  dropdown badge what kind of thing each hit is
+
+    No cache, on purpose (decision recorded in feature.md): searches are
+    user-typed and effectively unique, so a cache would almost never hit —
+    unlike quotes (same symbol every 60s) or names (never change).
+
+    Returns [] when nothing matches — a normal state, not an error.
+    Raises on network failure — the boundary rule: this layer reports,
+    the route layer decides the HTTP response.
+    """
+    results = []
+    for hit in yf.Search(query, max_results=limit).quotes:
+        symbol = hit.get("symbol")
+        # A hit without a symbol can't be navigated to — skip it rather
+        # than let the dropdown offer a link to /stock/None.
+        if not symbol:
+            continue
+        results.append({
+            "symbol": symbol,
+            "name": hit.get("shortname") or hit.get("longname"),
+            "exchange": hit.get("exchDisp") or hit.get("exchange"),
+            "type": hit.get("typeDisp"),
+        })
+    return results
