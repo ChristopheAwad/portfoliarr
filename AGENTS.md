@@ -11,10 +11,20 @@ Follow these steps in order — never skip one:
 1. **Plan before code.** Work out the whole feature first (subtasks, files to touch, data flow) and write the plan to `feature.md`. Overwrite any previous feature's content.
 2. **Approval gate.** Summarize the plan for the user and ask whether to proceed. Do not write implementation code until the user says yes.
 3. **Tests first.** The plan's first part is its test plan: detailed pytest unit tests that will run at the end to prove the feature works. Cover every part of the feature AND edge cases (empty/invalid input, boundary values, failure paths). Writing these tests is the first implementation step; they must fail until the feature exists.
-4. **Implement.** Build the feature. Done only when the FULL suite is green: `python -m pytest` (new tests + all existing ones).
+4. **Implement.** Build the feature, parallelizing independent chunks with subagents (see **Parallel implementation** below). Done only when the FULL suite is green: `python -m pytest` (new tests + all existing ones).
 5. **GUI gate.** With all tests passing, ask the user to check the feature in the browser GUI. Wait for their confirmation.
 6. **Commit gate.** Only after the user approves the GUI, ask if you should commit and push to the GitHub repo. Never commit/push without that explicit yes.
 - Resuming work? Read `feature.md` to see which step you're on and continue from there.
+
+## Parallel implementation (subagents)
+Use subagents to run independent implementation chunks concurrently — but only where it actually helps.
+- Split at natural seams only (e.g., Python backend vs. frontend JS, unrelated modules). If chunk B needs chunk A's output, do them sequentially yourself — fake parallelism just creates merge conflicts.
+- Tests first still governs: the failing test suite exists BEFORE any chunk is delegated. Subagents implement; they never write the tests that judge their own work.
+- Brief each subagent like a new teammate: exact files to touch, the relevant Stack & architecture rules, and EVERY "Contracts that are easy to break" entry its files touch. A subagent starts with fresh context — it will break contracts you didn't spell out.
+- The lead keeps the gates: plan, user approval, final integration, and the FULL-suite `python -m pytest` run are always yours. Subagents may run scoped tests for their chunk only; the green light is yours to confirm.
+- Review every subagent's diff before integrating — you own the result.
+- Never delegate: the plan, any gate (approval/GUI/commit), or anything touching git.
+- Small fixes rarely need this; don't parallelize for its own sake.
 
 ## Stack & architecture
 - Flask serves JSON; the browser does all rendering (vanilla JS `fetch` + DOM, no framework).
