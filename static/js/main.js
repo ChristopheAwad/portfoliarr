@@ -906,6 +906,181 @@ txCancelBtn.addEventListener("click", exitEditMode);
 txDateInput.value = todayLocalISO();
 
 // ---------------------------------------------------------------------------
+// IMPORT PANEL — bulk-load a pasted batch of transactions. The format is
+// four tab-separated columns per line: ticker, "16 Mar 2026" date, price,
+// qty; every row is a BUY (the format has no side column — see the panel's
+// hint text). Two phases, mirroring the backend's two routes:
+//   Preview -> POST /api/transactions/import/preview — parses + quote-checks
+//              server-side, writes NOTHING; the report is the whole truth
+//   Commit  -> POST /api/transactions/import/commit — the SAME text again;
+//              the server re-parses and writes only the rows that pass
+// The frontend never parses or edits rows: it ships the paste verbatim to
+// both routes, so the server's verdict is the single source of truth and
+// nothing the browser did in between can change what gets stored.
+// ---------------------------------------------------------------------------
+
+const importBtn = document.querySelector("#import-btn");
+const importPanel = document.querySelector("#import-panel");
+const importTextEl = document.querySelector("#import-text");
+const importPreviewBtn = document.querySelector("#import-preview-btn");
+const importCommitBtn = document.querySelector("#import-commit-btn");
+const importCloseBtn = document.querySelector("#import-close-btn");
+const importReportEl = document.querySelector("#import-report");
+
+// Toggle the panel. The hidden attribute is the one source of truth — no
+// extra "open" class to keep in sync. Focus goes to the textarea so the
+// very next keystroke lands in the paste area.
+importBtn.addEventListener("click", () => {
+    importPanel.hidden = !importPanel.hidden;
+    if (!importPanel.hidden) importTextEl.focus();
+});
+
+importCloseBtn.addEventListener("click", () => {
+    importPanel.hidden = true;
+});
+
+// Render the report area from a payload: a counts line, then one line per
+// row — valid rows with their normalized facts, broken rows in red with
+// the backend's reason (including its line number, so the user can find
+// the bad line in their paste). createElement + textContent throughout:
+// the paste is USER input and this report renders it back — innerHTML
+// would turn a crafted line into executable markup.
+// summaryText overrides the default "N valid, M invalid" line — the
+// commit path uses it for a post-import receipt instead.
+function renderImportReport(payload, summaryText) {
+    importReportEl.textContent = "";
+    if (payload.rows.length === 0) {
+        importReportEl.hidden = true; // nothing to say (e.g. no failures)
+        return;
+    }
+
+    const summary = document.createElement("p");
+    summary.className = "import-summary";
+    summary.textContent =
+        summaryText ||
+        `${payload.valid_count} valid, ${payload.invalid_count} invalid`;
+    importReportEl.append(summary);
+
+    for (const row of payload.rows) {
+        const line = document.createElement("p");
+        if (row.error !== null) {
+            line.className = "import-row-bad";
+            line.textContent = `Line ${row.line}: ${row.raw} — ${row.error}`;
+        } else {
+            // Same formatting rules as the ledger rows: raw floats in,
+            // human text out. formatNumber's maxDigits keeps fractional
+            // qtys (1.296383) honest without trailing-zero spam.
+            line.className = "import-row-ok";
+            line.textContent =
+                `Line ${row.line}: BUY ${formatNumber(row.qty, 4)} ` +
+                `${row.ticker} @ ${formatNumber(row.price)} ` +
+                `${row.currency} on ${row.transaction_date}`;
+        }
+        importReportEl.append(line);
+    }
+    importReportEl.hidden = false;
+}
+
+// Show a single red line (HTTP-level errors, network failures) in the
+// report area — inline, matching the tx-error pattern above.
+function showImportError(text) {
+    importReportEl.textContent = "";
+    const line = document.createElement("p");
+    line.className = "import-row-bad";
+    line.textContent = text;
+    importReportEl.append(line);
+    importReportEl.hidden = false;
+}
+
+// Preview: the dress rehearsal. Nothing is stored; the report shows
+// exactly what commit WOULD store. The Import button only appears when at
+// least one row is valid — committing zero rows is not an action.
+importPreviewBtn.addEventListener("click", async () => {
+    importCommitBtn.hidden = true; // stale verdict until this preview lands
+    try {
+        const response = await fetch("/api/transactions/import/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: importTextEl.value }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => null);
+            showImportError(
+                err?.error || `Preview failed (HTTP ${response.status})`
+            );
+            return;
+        }
+        const payload = await response.json();
+        renderImportReport(payload);
+        importCommitBtn.hidden = payload.valid_count === 0;
+        importCommitBtn.textContent =
+            `Import ${payload.valid_count} row` +
+            `${payload.valid_count === 1 ? "" : "s"}`;
+    } catch (err) {
+        console.error("import preview failed:", err);
+        showImportError("Could not reach the server — is it running?");
+    }
+});
+
+// Commit: same paste, write half. Afterwards the report becomes the
+// receipt — a success summary, or the failed rows if the batch was
+// partial. The panel stays OPEN (unlike the original plan's "close
+// panel"): closing it would hide the failure report, and the ledger
+// refresh below is visible either way. The user closes when done.
+importCommitBtn.addEventListener("click", async () => {
+    try {
+        const response = await fetch("/api/transactions/import/commit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: importTextEl.value }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => null);
+            showImportError(
+                err?.error || `Import failed (HTTP ${response.status})`
+            );
+            return;
+        }
+        const payload = await response.json();
+        if (payload.failed.length > 0) {
+            // Partial success: show ONLY what failed (the imported rows
+            // are already visible in the ledger behind the panel), with
+            // a receipt-style summary instead of the preview counts.
+            renderImportReport(
+                {
+                    rows: payload.failed,
+                    valid_count: 0,
+                    invalid_count: payload.failed.length,
+                },
+                `Imported ${payload.imported}, ` +
+                `${payload.failed.length} failed:`
+            );
+        } else {
+            showImportSuccess(payload.imported);
+        }
+        importCommitBtn.hidden = true; // one paste, one commit — re-preview first
+        // Pull the truth immediately rather than waiting for the next poll
+        // (same rule as the log form's submit handler).
+        refreshLedger();
+    } catch (err) {
+        console.error("import commit failed:", err);
+        showImportError("Could not reach the server — is it running?");
+    }
+});
+
+// Success receipt: the report area doubles as one, so the panel gives
+// feedback instead of silently sitting there after a clean import.
+function showImportSuccess(count) {
+    importReportEl.textContent = "";
+    const line = document.createElement("p");
+    line.className = "import-summary";
+    line.textContent =
+        `Imported ${count} transaction${count === 1 ? "" : "s"} into the ledger.`;
+    importReportEl.append(line);
+    importReportEl.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
 // PORTFOLIO CHART — real portfolio value over time. Chart.js itself came
 // from the CDN <script> tag in index.html, so a global "Chart" class already
 // exists by the time this runs. The CHART is created once, here, with empty

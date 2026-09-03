@@ -23,10 +23,13 @@ from werkzeug.exceptions import HTTPException
 from market_data import get_quote, get_name, get_history, PERIOD_MAP
 import db
 
-# datetime's date class knows how to both VALIDATE and NORMALIZE dates:
-# date.fromisoformat("2026-08-31") raises ValueError on garbage, and its
-# .isoformat() hands back the same canonical "YYYY-MM-DD" text we store.
-from datetime import date
+# datetime's date/datetime classes know how to both VALIDATE and NORMALIZE
+# dates: date.fromisoformat("2026-08-31") raises ValueError on garbage, and
+# its .isoformat() hands back the same canonical "YYYY-MM-DD" text we store.
+# datetime.strptime is the importer's counterpart: it reads the paste's
+# "16 Mar 2026" format into a real datetime object, raising ValueError on
+# anything that isn't one.
+from datetime import date, datetime
 
 # Create the Flask application instance named "app". This object holds the
 # routes, config, and is what runs our web server.
@@ -676,6 +679,265 @@ def remove_transaction(tx_id):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
     # 204 No Content: success with nothing to say — the row is just gone.
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# TRANSACTION IMPORTER — bulk-load a pasted batch of transactions.
+#
+# The source format (feature.md): tab-separated rows, four columns each —
+#     CM<TAB>16 Mar 2026<TAB>132.55<TAB>1.296383
+# No side column (every row is a BUY) and no currency (derived from
+# yfinance, exactly as POST /api/transactions does for hand-logged rows).
+#
+# Two routes, one parse function:
+#   preview — parse + quote-check, return the report, write NOTHING. The
+#             user sees exactly what commit would store before agreeing.
+#   commit  — re-parse the SAME text (the server trusts nothing the client
+#             could have edited between the two calls), then write.
+# Best-effort per row, matching this codebase's resilience philosophy
+# (indices bar, portfolio history): 50 rows shouldn't die because row 17
+# has a typo — valid rows import, broken rows come back with reasons.
+# ---------------------------------------------------------------------------
+
+
+def parse_import_text(text):
+    """Parse a paste of tab-separated transaction rows into report dicts.
+
+    Returns a list where every item describes ONE line of the paste:
+      * a valid row: the normalized fields (ticker, transaction_date,
+        price, qty, transaction_type) with error=None
+      * a broken row: error="<human-readable reason>" — whichever fields
+        parsed before the failure are filled in, the rest stay None
+    Both shapes carry "line" (1-based position in the paste) and "raw"
+    (the original text) so a report can point at the exact spot. Broken
+    rows are DATA, not exceptions: one bad line must never abort the
+    whole batch — the report needs the good rows AND the bad reasons.
+
+    Deliberately STRICT: exactly four tab-separated columns, no "$"
+    stripping, no whitespace-split fallback. Parsing exactly the known
+    format keeps every failure loud (a named error the user can fix)
+    instead of silently storing a mis-parsed fact.
+    """
+    rows = []
+    # splitlines() handles both Unix (\n) and Windows (\r\n) endings, and
+    # a trailing newline simply produces no extra element. Blank lines are
+    # paste noise — skipped, but they still COUNT for line numbering, so
+    # the report's line numbers match what the user sees in their editor.
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        # Every line gets a row dict up front — even one that fails at the
+        # first check must appear in the report (with its reason).
+        row = {
+            "line": line_no,
+            "raw": line,
+            "ticker": None,
+            "transaction_date": None,
+            "price": None,
+            "qty": None,
+            "transaction_type": None,
+            "error": None,
+        }
+        rows.append(row)
+
+        fields = line.split("\t")
+        if len(fields) != 4:
+            row["error"] = (
+                f"expected 4 tab-separated columns, got {len(fields)}"
+            )
+            continue
+
+        # .strip() per field: padded columns ("CM ␣␣\t16 Mar 2026 ␣") are
+        # paste cosmetics, not a different format.
+        ticker, date_text, price_text, qty_text = (
+            field.strip() for field in fields
+        )
+
+        # Ticker: same trim + uppercase normalization as log_transaction —
+        # "cm" and "CM" must land as the same ledger identity.
+        row["ticker"] = ticker.upper()
+        if not ticker:
+            row["error"] = "ticker is required"
+            continue
+
+        # Date: strptime both VALIDATES ("16 Mar 2026" — day, abbreviated
+        # English month, year) and PARSES it. The .date() matters: strptime
+        # returns a DATETIME, and its isoformat() would smuggle a
+        # "T00:00:00" tail into the ledger's date column. (A non-padded
+        # day like "1 May 2026" parses fine.)
+        try:
+            row["transaction_date"] = datetime.strptime(
+                date_text, "%d %b %Y"
+            ).date().isoformat()
+        except ValueError:
+            row["error"] = f"date must be like '16 Mar 2026', got '{date_text}'"
+            continue
+
+        # Numbers: float() accepts everything the format promises, and a
+        # fractional qty like 1.296383 is exactly why the qty column is
+        # REAL. Strings like "10" never reach here as strings — the paste
+        # is text, so EVERY value arrives as a string and gets converted.
+        try:
+            row["price"] = float(price_text)
+        except ValueError:
+            row["error"] = f"price must be a number, got '{price_text}'"
+            continue
+        try:
+            row["qty"] = float(qty_text)
+        except ValueError:
+            row["error"] = f"qty must be a number, got '{qty_text}'"
+            continue
+
+        # Same > 0 rule as validate_tx_fields: however well "0" or "-3"
+        # parses, it's nonsense in a ledger.
+        if row["price"] <= 0:
+            row["error"] = f"price must be greater than 0, got '{price_text}'"
+            continue
+        if row["qty"] <= 0:
+            row["error"] = f"qty must be greater than 0, got '{qty_text}'"
+            continue
+
+        # The format has no side column: every imported row is a BUY.
+        # (Rework trigger documented in feature.md: the day the source
+        # includes sells, this fixed assignment becomes a column read.)
+        row["transaction_type"] = "BUY"
+
+    return rows
+
+
+def _import_text_or_error():
+    """Shared body check for both import routes: unwrap {"text": "..."}.
+
+    Returns (text, None) on success, (None, (response, status)) when the
+    body is missing, not JSON, not a dict, or carries blank text — the
+    same (value, error) convention as validate_tx_fields.
+    """
+    body = request.get_json(silent=True)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return None, (
+            jsonify({"error": "expected JSON body like {\"text\": \"<pasted rows>\"}"}),
+            400,
+        )
+    return text, None
+
+
+def _quote_unique_tickers(rows):
+    """One get_quote per UNIQUE ticker among the parseable rows.
+
+    Same dedup idea as list_transactions: a batch of 30 CM trades pays for
+    exactly ONE quote. Unquotable tickers map to None rather than raising —
+    the caller decides what "can't be priced" means for its row (here: the
+    row can't be stored, because currency comes FROM the quote).
+    """
+    quotes = {}
+    for row in rows:
+        if row["error"] is not None or row["ticker"] in quotes:
+            continue
+        try:
+            quotes[row["ticker"]] = get_quote(row["ticker"])
+        except Exception:
+            # Wide catch on purpose: yfinance fails in many ways, and a
+            # dead ticker is data (a report line), not a crash.
+            quotes[row["ticker"]] = None
+    return quotes
+
+
+@app.route("/api/transactions/import/preview", methods=["POST"])
+def import_preview():
+    """Parse the paste and quote-check its tickers. Writes NOTHING.
+
+    Returns {"rows": [...], "valid_count": n, "invalid_count": m}, where
+    valid rows are decorated with their yfinance-derived "currency". The
+    zero-writes rule is what makes the preview trustworthy: the ledger is
+    untouched, so previewing is always safe, and the user sees exactly
+    what commit will store — including the currency the ticker implies
+    (CM quotes as USD on Yahoo; CM.TO would quote as CAD).
+    """
+    text, error = _import_text_or_error()
+    if error:
+        return error
+
+    rows = parse_import_text(text)
+    quotes = _quote_unique_tickers(rows)
+
+    for row in rows:
+        if row["error"] is not None:
+            continue  # already broken at parse time — leave that reason
+        quote = quotes[row["ticker"]]
+        if quote is None:
+            # Same rule as log_transaction's 404: the ticker isn't proven
+            # real, and with no quote there is no currency — no row.
+            row["error"] = "unknown or unquotable ticker"
+        else:
+            row["currency"] = quote["currency"]
+
+    valid_count = sum(1 for row in rows if row["error"] is None)
+    return jsonify({
+        "rows": rows,
+        "valid_count": valid_count,
+        "invalid_count": len(rows) - valid_count,
+    })
+
+
+@app.route("/api/transactions/import/commit", methods=["POST"])
+def import_commit():
+    """Write the paste's valid rows into the ledger. Best-effort per row.
+
+    Body {"text": ...} AGAIN — the same text preview saw. Re-parsing
+    server-side (instead of trusting a client-sent row list) means the
+    ledger only ever stores what THIS parse says; the browser had no
+    opportunity to edit anything in between.
+
+    Returns {"imported": n, "failed": [...]} at 200 even when imported
+    is 0 — the request succeeded; the report IS the answer. A 400 would
+    claim the request was malformed, when the honest story is "nothing
+    qualified".
+    """
+    text, error = _import_text_or_error()
+    if error:
+        return error
+
+    rows = parse_import_text(text)
+    quotes = _quote_unique_tickers(rows)
+
+    imported_count = 0
+    failed = []
+    for row in rows:
+        if row["error"] is not None:
+            failed.append(row)  # parse-stage failure: report it, skip it
+            continue
+
+        quote = quotes[row["ticker"]]
+        if quote is None:
+            # Quotable at preview but dead by commit (Yahoo hiccup) is the
+            # same verdict as any other bad ticker: skip, report, never
+            # fatal to the rest of the batch.
+            row["error"] = "unknown or unquotable ticker"
+            failed.append(row)
+            continue
+
+        # All checks passed — write the immutable facts (BUY forced by the
+        # parser, currency from the quote, same as hand-logged rows).
+        row["currency"] = quote["currency"]
+        row["id"] = db.add_transaction(
+            ticker=row["ticker"],
+            transaction_date=row["transaction_date"],
+            price=row["price"],
+            qty=row["qty"],
+            currency=quote["currency"],
+            transaction_type=row["transaction_type"],
+        )
+        imported_count += 1
+
+    # TIER 1 at INFO: a batch with failures is normal client behavior (a
+    # paste with typos), fully visible in the response — this line is the
+    # audit trail, not a cry for help.
+    app.logger.info(
+        "import committed: %d imported, %d failed", imported_count, len(failed)
+    )
+    return jsonify({"imported": imported_count, "failed": failed})
 
 
 # This guard only runs the block when app.py is executed directly, not

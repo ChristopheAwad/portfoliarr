@@ -106,6 +106,7 @@
                 <div class="card ledger-card">
                     <div class="card-header">
                         <h3>Transactions</h3>
+                        <button class="btn-text" id="import-btn" type="button">Import</button>
                     </div>
 
                     <!-- The inline log form. name= attributes are what JS
@@ -141,6 +142,36 @@
                     <!-- Backend error messages (bad date, unknown ticker...)
                          land here — inline, watchlist-alert style but quiet. -->
                     <p class="tx-error" hidden></p>
+
+                    <!-- Import panel. Hidden until the Import button in the
+                         card header toggles it. A textarea, not a file
+                         upload: the paste IS the file at these sizes, and
+                         a textarea needs no multipart handling anywhere.
+                         Format (one per line, tab-separated):
+                             CM<TAB>16 Mar 2026<TAB>132.55<TAB>1.296383
+                         Every row is logged as a BUY — the format has no
+                         side column (documented in the hint below). -->
+                    <div id="import-panel" class="import-panel" hidden>
+                        <textarea id="import-text" rows="6"
+                                  placeholder="One transaction per line, four tab-separated columns:&#10;CM&#9;16 Mar 2026&#9;132.55&#9;1.296383"></textarea>
+                        <div class="import-actions">
+                            <button type="button" id="import-preview-btn">Preview</button>
+                            <!-- Commit starts hidden: it only appears after
+                                 a preview finds at least one valid row —
+                                 there is nothing to import otherwise. -->
+                            <button type="button" id="import-commit-btn" hidden>Import</button>
+                            <button type="button" id="import-close-btn" class="btn-quiet">Close</button>
+                        </div>
+                        <p class="import-hint">
+                            Every row is logged as a BUY. Ticker must be Yahoo's form
+                            (CM = NYSE/USD, CM.TO = TSX/CAD). Re-pasting the same rows
+                            creates duplicates — there is no duplicate detection.
+                        </p>
+                        <!-- Preview/commit report lands here: valid rows
+                             listed with their facts, broken rows red with
+                             their reason. Rebuilt by main.js every click. -->
+                        <div id="import-report" hidden></div>
+                    </div>
 
                     <table class="ledger-table">
                         <thead>

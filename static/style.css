@@ -19,6 +19,15 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
+/* The hidden attribute's built-in display:none lives in the BROWSER's
+   stylesheet, and any author display rule (like .import-panel's flex)
+   outranks it — so an element with both "hidden" and a CSS display
+   property still renders. This guard restores the attribute's authority
+   for every element at once (the standard HTML5 Boilerplate fix). */
+[hidden] {
+    display: none !important;
+}
+
 body {
     background-color: var(--bg-color);
     color: var(--text-primary);
@@ -303,6 +312,100 @@ body {
     color: var(--red-neg);
     font-size: 13px;
     margin-bottom: 10px;
+}
+
+/* Import panel (transaction importer). A boxed sub-card inside the ledger
+   card: the border sets it apart from the log form above it. */
+.import-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+/* Monospace: the paste is column-aligned tab-separated data, and only a
+   monospace font keeps those columns visually lined up. */
+.import-panel textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 13px;
+    resize: vertical;
+    outline: none;
+}
+
+.import-panel textarea:focus {
+    border-color: var(--blue-accent);
+}
+
+.import-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.import-actions button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: var(--blue-accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.import-actions button:hover {
+    background: #1557b0;
+}
+
+/* The Close button is navigation, not an action on data — muted variant
+   so the blue buttons (Preview/Import) stay the obvious next step. */
+.import-actions button.btn-quiet {
+    background: none;
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
+.import-actions button.btn-quiet:hover {
+    background: none;
+    color: var(--text-primary);
+}
+
+.import-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+/* The report: capped height with its own scrollbar, so a 100-line paste
+   can't stretch the dashboard. word-break lets long raw lines wrap
+   instead of blowing out the card width. */
+#import-report {
+    font-size: 12px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+#import-report p {
+    margin: 2px 0;
+    word-break: break-all;
+}
+
+.import-summary {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.import-row-bad {
+    color: var(--red-neg);
 }
 
 .ledger-table {
