@@ -83,7 +83,7 @@ def make_quote(symbol, price, previous_close, currency="USD"):
 
 @pytest.fixture
 def fake_market(monkeypatch):
-    """Swap the four market-data names AS APP.PY USES THEM.
+    """Swap the market-data names AS APP.PY USES THEM.
 
     Patching app.get_quote (not market_data.get_quote!) — the golden
     mocking rule "patch where it's USED": app.py did `from market_data
@@ -95,12 +95,23 @@ def fake_market(monkeypatch):
     key simply being ABSENT: quotes["NOPE"] raises KeyError, every route
     catches it, and the resilience paths get exercised exactly as they
     would with a real Yahoo outage.
+
+    The FX helpers get the same treatment: fx_rates is keyed "USDCAD"
+    (the live-rate lookup), fx_on is keyed (pair, "YYYY-MM-DD") (the
+    historical-rate lookup). An ABSENT key = "Yahoo couldn't answer" —
+    the exact failure path the routes' fallbacks exist for.
     """
     quotes, names, histories, stats = {}, {}, {}, {}
+    fx_rates, fx_on = {}, {}
     monkeypatch.setattr(app_module, "get_quote", lambda symbol: quotes[symbol])
     monkeypatch.setattr(app_module, "get_name", lambda symbol: names[symbol])
     monkeypatch.setattr(app_module, "get_history",
                         lambda symbol, period: histories[symbol])
     monkeypatch.setattr(app_module, "get_stats", lambda symbol: stats[symbol])
+    monkeypatch.setattr(app_module, "get_fx_rate",
+                        lambda base, target: fx_rates[f"{base}{target}"])
+    monkeypatch.setattr(app_module, "get_fx_rate_on",
+                        lambda base, target, date_iso:
+                            fx_on[(f"{base}{target}", date_iso)])
     return SimpleNamespace(quotes=quotes, names=names, histories=histories,
-                           stats=stats)
+                           stats=stats, fx_rates=fx_rates, fx_on=fx_on)

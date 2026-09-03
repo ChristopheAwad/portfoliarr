@@ -76,6 +76,15 @@ def init():
         #                    fractional shares and crypto amounts work.
         #   currency         The security's TRADING currency ("USD", "CAD"),
         #                    auto-filled by the route layer from yfinance.
+        #   fx_rate          The USD→CAD conversion rate ON THE
+        #                    TRANSACTION'S DATE (the USDCAD=X close that
+        #                    day), auto-derived by the route layer from
+        #                    yfinance — a historical FACT, stored once
+        #                    and never recomputed. CAD rows store 1.0;
+        #                    NULL means "rate unknown" (pre-feature rows,
+        #                    or Yahoo couldn't answer) and display falls
+        #                    back to the live rate. Nullable on purpose:
+        #                    a missing fact must not block a real one.
         #   transaction_type The CHECK constraint is a second line of
         #                    defence behind route validation: the database
         #                    itself refuses anything that isn't BUY or SELL.
@@ -88,9 +97,39 @@ def init():
                 price            REAL NOT NULL,
                 qty              REAL NOT NULL,
                 currency         TEXT NOT NULL,
+                fx_rate          REAL,
                 transaction_type TEXT NOT NULL CHECK (transaction_type IN ('BUY', 'SELL'))
             )
             """
+        )
+
+        # Migration for databases created BEFORE fx_rate existed (the
+        # feature shipped after the first ledger did). CREATE TABLE IF
+        # NOT EXISTS won't add a column to an existing table, so we ask
+        # the table what it has (PRAGMA table_info) and ALTER only when
+        # the column is missing — which makes this idempotent, like
+        # every other part of init(). New databases already have the
+        # column and skip the ALTER entirely.
+        columns = {
+            row[1]  # PRAGMA table_info rows: (cid, name, type, notnull, dflt_value, pk)
+            for row in conn.execute(
+                "PRAGMA table_info(transactions)"
+            ).fetchall()
+        }
+        if "fx_rate" not in columns:
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN fx_rate REAL"
+            )
+
+        # Backfill what migration CAN know: a CAD row needs no conversion
+        # (the rate is exactly 1.0 — a true fact, not a guess). USD rows
+        # from before the feature keep NULL: we genuinely don't know what
+        # the rate was on their dates, and inventing one now would bake a
+        # lie into the facts table. Display falls back to the live rate
+        # for them; editing a row backfills its real date-based fact.
+        conn.execute(
+            "UPDATE transactions SET fx_rate = 1.0"
+            " WHERE currency = 'CAD' AND fx_rate IS NULL"
         )
 
 
@@ -138,21 +177,26 @@ def remove_symbol(symbol):
 
 # ---------------------------------------------------------------------------
 # TRANSACTION LEDGER — the facts table. add stores what happened; get
-# returns those facts untouched; update corrects the user-typed facts
-# (ticker/currency excluded from its SET list by design); delete removes
-# a row for good. Any price-dependent value (gain, current value) is
-# computed elsewhere, from live quotes — never stored here.
+# returns those facts untouched; update corrects the user-typed facts plus
+# the date-derived fx_rate (ticker/currency excluded from its SET list by
+# design); delete removes a row for good. Any price-dependent value (gain,
+# current value) is computed elsewhere, from live quotes — never stored.
 # ---------------------------------------------------------------------------
 
 def add_transaction(ticker, transaction_date, price, qty, currency,
-                    transaction_type):
+                    transaction_type, fx_rate):
     """Insert one BUY or SELL row. Returns the new row's auto-numbered id.
 
     Validation has already happened in the route layer (fields checked,
-    ticker proven real, currency fetched from Yahoo) — this function is the
-    dumb, trusted writer. If the route slipped a bad transaction_type past
-    its checks, the table's CHECK constraint raises IntegrityError here:
-    defence in depth means BOTH layers would have to fail.
+    ticker proven real, currency + fx_rate fetched from Yahoo) — this
+    function is the dumb, trusted writer. fx_rate arrives EXPLICITLY
+    (no default): it is an immutable fact like the price itself, and a
+    silent default could only ever invent one. CAD rows carry 1.0; USD
+    rows carry the transaction date's USDCAD close (or None when Yahoo
+    couldn't answer — the display layer's cue to fall back). If the route
+    slipped a bad transaction_type past its checks, the table's CHECK
+    constraint raises IntegrityError here: defence in depth means BOTH
+    layers would have to fail.
 
     Same ? placeholder rule as add_symbol: values travel separately from
     SQL text, so even hostile input is inert data, never executable SQL.
@@ -161,11 +205,12 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
         cursor = conn.execute(
             """
             INSERT INTO transactions
-                (ticker, transaction_date, price, qty, currency,
+                (ticker, transaction_date, price, qty, currency, fx_rate,
                  transaction_type)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (ticker, transaction_date, price, qty, currency, transaction_type),
+            (ticker, transaction_date, price, qty, currency, fx_rate,
+             transaction_type),
         )
         # lastrowid: the id SQLite just assigned to THIS insert. Telling the
         # caller which row was created makes the route's 201 response more
@@ -191,7 +236,7 @@ def get_transactions():
         rows = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   transaction_type
+                   fx_rate, transaction_type
             FROM transactions
             ORDER BY transaction_date DESC, id DESC
             """
@@ -212,7 +257,7 @@ def get_transaction(tx_id):
         row = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   transaction_type
+                   fx_rate, transaction_type
             FROM transactions
             WHERE id = ?
             """,
@@ -221,14 +266,19 @@ def get_transaction(tx_id):
     return dict(row) if row else None
 
 
-def update_transaction(tx_id, transaction_date, price, qty, transaction_type):
+def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
+                       fx_rate):
     """Correct the user-editable facts of one transaction.
 
-    The SET list names exactly FOUR columns — date, price, qty, type.
+    The SET list names FIVE columns — date, price, qty, type, fx_rate.
     Ticker and currency are deliberately ABSENT: the ticker is the row's
     identity, and currency is the yfinance fact derived from it at insert
-    time. Excluding them from the SQL itself (not just the route) means no
-    future caller of this function can accidentally rewrite either.
+    time. fx_rate IS yfinance-derived too, but it derives from the DATE —
+    so when the user corrects the date, a stale rate would be a wrong
+    fact, and fx_rate travels with the date (the one documented
+    exception). Excluding ticker/currency from the SQL itself (not just
+    the route) means no future caller of this function can accidentally
+    rewrite either.
 
     Validation has already happened in the route layer (same rules as
     logging a new transaction — they share one helper). Returns True if a
@@ -239,10 +289,11 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type):
         cursor = conn.execute(
             """
             UPDATE transactions
-            SET transaction_date = ?, price = ?, qty = ?, transaction_type = ?
+            SET transaction_date = ?, price = ?, qty = ?, transaction_type = ?,
+                fx_rate = ?
             WHERE id = ?
             """,
-            (transaction_date, price, qty, transaction_type, tx_id),
+            (transaction_date, price, qty, transaction_type, fx_rate, tx_id),
         )
         return cursor.rowcount > 0
 

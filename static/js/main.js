@@ -332,6 +332,22 @@ const txSubmitBtn = txForm.querySelector("button[type=submit]");
 const ledgerBody = document.querySelector("#ledger-body");
 const txDateInput = txForm.elements.date;
 
+// The ledger's display currency, read fresh from the toggle on EVERY
+// fetch (not cached in a variable — the checkbox is the single source of
+// truth, so clicks, polls and refetches can never disagree).
+//   unchecked (default) → ?currency=CAD    everything in CAD
+//   checked             → ?currency=NATIVE USD rows back in USD
+// This is the ONLY endpoint the toggle touches: the portfolio total and
+// the chart are computed CAD-always server-side. The toggle starts
+// unchecked on every page load (session-only, by design).
+const usdNativeToggle = document.querySelector("#usd-native-toggle");
+
+function ledgerCurrencyParam() {
+    return usdNativeToggle && usdNativeToggle.checked
+        ? "currency=native"
+        : "currency=CAD";
+}
+
 // Edit-mode state + the last fetched rows. Both live OUTSIDE the DOM —
 // same reasoning as expandedTickers below: the tbody rebuilds every 60s,
 // so form mode and data must not depend on rows staying put.
@@ -407,11 +423,15 @@ function buildTxRow(tx) {
     qtyCell.className = "num";
     qtyCell.textContent = formatNumber(tx.qty, 4);
 
-    // Native currency per security — the stored code travels with the
-    // facts (no FX conversion, per the brief).
+    // Price display: in CAD mode the backend converts each row at its
+    // STORED fx rate (the buy-date fact — frozen forever); in native
+    // mode the display fields simply equal the native facts. The ?? 
+    // fallbacks keep old cached payloads harmless.
+    const displayCurrency = tx.display_currency || tx.currency;
     const priceCell = document.createElement("td");
     priceCell.className = "num";
-    priceCell.textContent = `${formatNumber(tx.price)} ${tx.currency}`;
+    priceCell.textContent =
+        `${formatNumber(tx.price_display ?? tx.price)} ${displayCurrency}`;
 
     // --- Live cells (present only when decorated) ---
     const hasLive = tx.price_now !== undefined;
@@ -428,16 +448,20 @@ function buildTxRow(tx) {
     dayPctCell.className = "num ledger-live";
 
     if (hasLive) {
-        valueCell.textContent = `${formatNumber(tx.value)} ${tx.currency}`;
+        // The live cells are in display_currency: CAD when the row was
+        // converted (value & day gain at the LIVE rate, the cost side at
+        // the stored rate — the backend's two-rate contract), native
+        // otherwise. Raw floats in, text out, as always.
+        valueCell.textContent = `${formatNumber(tx.value)} ${displayCurrency}`;
 
         // Total gain/pct: the position's whole lifetime since purchase.
-        gainCell.textContent = formatSigned(tx.total_gain, tx.currency);
+        gainCell.textContent = formatSigned(tx.total_gain, displayCurrency);
         gainPctCell.textContent =
             `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
 
         // Day gain/pct: TODAY's move only. The % is the ticker's daily
-        // move itself — the same for any position size.
-        dayGainCell.textContent = formatSigned(tx.day_gain, tx.currency);
+        // move itself — the same for any position size or currency.
+        dayGainCell.textContent = formatSigned(tx.day_gain, displayCurrency);
         dayPctCell.textContent =
             `${tx.day_gain_pct >= 0 ? "+" : ""}${tx.day_gain_pct.toFixed(2)}%`;
 
@@ -564,10 +588,11 @@ function buildGroupRow(ticker, txs) {
     dayPctCell.className = "num ledger-live";
 
     if (hasLive) {
-        // One currency per group by construction: it's auto-filled from
-        // the ticker's quote at insert time, so every row in the group
-        // carries the same code.
-        const currency = txs[0].currency;
+        // One display currency per group by construction: the backend
+        // converts (or not) per row, and every row of a group shares the
+        // same ticker and rate situation. In CAD mode that's "CAD"; in
+        // native mode the group's own trading currency.
+        const currency = txs[0].display_currency || txs[0].currency;
 
         let cost = 0;      // Σ price × qty over BUY rows — the % denominator
         let value = 0;
@@ -575,7 +600,11 @@ function buildGroupRow(ticker, txs) {
         let dayGain = 0;
         for (const tx of txs) {
             if (tx.transaction_type !== "BUY") continue;
-            cost += tx.price * tx.qty;
+            // price_display is the row's CAD cost per share (stored fx
+            // rate) in CAD mode — so cost lands in the SAME currency as
+            // value/totalGain and the % below stays a true ratio. In
+            // native mode it equals the native price.
+            cost += (tx.price_display ?? tx.price) * tx.qty;
             value += tx.value;
             totalGain += tx.total_gain;
             dayGain += tx.day_gain;
@@ -802,10 +831,13 @@ function markLedgerUnavailable() {
 
 // One ledger refresh cycle: GET -> rebuild rows. The backend's quote cache
 // means at most every other cycle touches Yahoo — same rhythm as the chips
-// and the watchlist.
+// and the watchlist. The display-currency param rides along on every
+// fetch, so a toggle click and the 60s poll always agree on the mode.
 async function refreshLedger() {
     try {
-        const response = await fetch("/api/transactions");
+        const response = await fetch(
+            `/api/transactions?${ledgerCurrencyParam()}`
+        );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
         lastTransactions = transactions; // cache for action-click lookups
@@ -821,6 +853,11 @@ async function refreshLedger() {
         }
     }
 }
+
+// The toggle: one click = one immediate ledger refetch (waiting up to a
+// minute for the next poll would make the checkbox feel broken). Nothing
+// else refreshes — the summary and chart are CAD in both modes.
+usdNativeToggle.addEventListener("change", () => refreshLedger());
 
 // Form submit: the ONLY way rows are born (POST) or corrected (PUT).
 // preventDefault stops the browser's native full-page form POST — we want
@@ -1162,7 +1199,11 @@ async function refreshPortfolioSummary() {
         portfolioValueEl.title = data.unpriced.length > 0
             ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
             : "";
-        portfolioValueEl.textContent = formatNumber(data.total_value);
+        // The summary is ALWAYS CAD (the ledger toggle never touches it)
+        // and the reply declares that — paint the code so a converted
+        // total can't be misread as native.
+        portfolioValueEl.textContent =
+            `${formatNumber(data.total_value)} ${data.currency || "CAD"}`;
         paintChange(portfolioDayChangeEl, data.day_gain, data.day_gain_pct,
                     "Today");
         paintChange(portfolioTotalReturnEl, data.total_gain,
@@ -1203,7 +1244,9 @@ const DEFAULT_CHART_PERIOD = "5D";
 const portfolioChartHandle = setupTimeframeChart({
     canvas: portfolioCanvas,
     buttonBar: chartButtonsEl,
-    datasetLabel: "Portfolio Value",
+    // The chart plots the CAD total in every mode — label it so the
+    // currency is never guessed at.
+    datasetLabel: "Portfolio Value (CAD)",
     endpoint: "/api/portfolio/history",
     defaultPeriod: DEFAULT_CHART_PERIOD,
 });

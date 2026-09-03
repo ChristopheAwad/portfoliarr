@@ -12,6 +12,11 @@ import time
 
 import yfinance as yf
 
+# date/timedelta build the lookup window for get_fx_rate_on: it fetches a
+# small calendar range of daily bars around the transaction's date and
+# picks the close on-or-before it.
+from datetime import date, timedelta
+
 # How long a cached quote stays trustworthy, in seconds.
 TTL_SECONDS = 120
 
@@ -204,6 +209,78 @@ def get_history(symbol, period_key):
             else ts.strftime("%H:%M")
         result[label] = float(row["Close"])
     return result
+
+
+# ── FX rates — the CAD display layer's exchange rates ─────────────────
+#
+# Yahoo lists currency pairs as regular quotable symbols: "USDCAD=X" is
+# "how many CAD one USD buys", and its live price / daily closes are
+# fetched exactly like any stock's. That means the LIVE rate rides the
+# existing quote cache for free (same symbol every 60s poll), while the
+# HISTORICAL rate is a one-shot history fetch per lookup.
+#
+# Only base→target pairs in Yahoo's "<BASE><TARGET>=X" form are supported
+# here — the app's display policy is USD↔CAD, nothing else.
+
+
+def get_fx_rate(base, target):
+    """Return the LIVE exchange rate: how many `target` units one `base`
+    unit buys right now.
+
+    Same-currency asks (CAD→CAD) answer 1.0 WITHOUT touching the network
+    — a rate of one is arithmetic, not data. Anything else builds the
+    Yahoo pair symbol and goes through get_quote, inheriting its 120s
+    cache and its raise-on-failure boundary rule.
+    """
+    if base == target:
+        return 1.0
+    return get_quote(f"{base}{target}=X")["price"]
+
+
+def get_fx_rate_on(base, target, date_iso):
+    """Return the pair's daily CLOSE on-or-before `date_iso` — the
+    historical fact a ledger row stores as its conversion rate.
+
+    Why on-or-before: the ledger's dates are calendar days, markets close
+    on weekends/holidays, and a Saturday buy's "rate at the time of
+    buying" is the last close the market actually printed (Friday's).
+    That's the same spirit as the portfolio chart's next-trading-day
+    rule, applied to a cost fact instead of a value.
+
+    The fetch is a small calendar WINDOW (ten days back covers every
+    long weekend; one day forward so the date itself is included —
+    yfinance's `end` is exclusive) rather than a PERIOD_MAP period,
+    because the input here is a specific date, not a chart button.
+
+    Raises ValueError when no bar covers the date (a Yahoo gap, a brand-
+    new pair) — the route layer decides what an unavailable historical
+    rate means (fall back to the live rate, store NULL, ...).
+    """
+    if base == target:
+        return 1.0
+
+    d = date.fromisoformat(date_iso)
+    df = yf.Ticker(f"{base}{target}=X").history(
+        start=(d - timedelta(days=10)).isoformat(),
+        end=(d + timedelta(days=1)).isoformat(),
+        interval="1d",
+    )
+
+    # Walk the (ascending) bars and keep the last close whose calendar
+    # day is on-or-before the target date. A bar AFTER it means we've
+    # walked past the answer — stop early.
+    rate = None
+    for ts, row in df.iterrows():
+        if ts.date() <= d:
+            rate = float(row["Close"])
+        else:
+            break
+
+    if rate is None:
+        raise ValueError(
+            f"no {base}{target} close on or before {date_iso}"
+        )
+    return rate
 
 
 def search_tickers(query, limit=8):

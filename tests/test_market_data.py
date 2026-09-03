@@ -81,10 +81,14 @@ def fake_yf(monkeypatch):
         def info(self):
             return state["info"]
 
-        def history(self, period, interval):
+        def history(self, period=None, interval="1d", start=None, end=None):
             # Record the unpacked PERIOD_MAP values so tests can prove the
-            # mapping reaches yfinance intact.
-            calls.append((self.symbol, period, interval))
+            # mapping reaches yfinance intact. The start/end form is the
+            # date-window fetch (get_fx_rate_on); record it distinctly.
+            if period is not None:
+                calls.append((self.symbol, period, interval))
+            else:
+                calls.append(("range", self.symbol, start, end))
             return state["history"]
 
     class FakeSearch:
@@ -239,6 +243,95 @@ def test_get_stats_empty_profile_raises(fake_yf):
     fake_yf.state["info"] = {}
     with pytest.raises(ValueError):
         market_data.get_stats("NOPE")
+
+
+# ── FX helpers: the CAD display layer's exchange rates ───────────────
+
+def test_fx_rate_same_currency_shortcuts_to_one_without_network(
+        fake_yf, monkeypatch):
+    """CAD→CAD is 1.0 by definition — no Yahoo call may happen (proved by
+    an attribute access on the fake RAISING if the code ever touched yf)."""
+    class Exploding:
+        def __getattr__(self, name):
+            raise AssertionError("network touched for a same-currency rate")
+
+    monkeypatch.setattr(market_data, "yf", Exploding)
+    assert market_data.get_fx_rate("CAD", "CAD") == 1.0
+
+
+def test_fx_rate_quotes_the_pair_symbol(fake_yf):
+    """USD→CAD is Yahoo's 'USDCAD=X' pair: the live rate IS its last
+    price. The fake's canned fast_info price is what comes back, and the
+    construction log proves the pair symbol was used verbatim."""
+    fake_yf.state["fast_info"] = {"lastPrice": 1.3821,
+                                  "previousClose": 1.38,
+                                  "currency": "CAD"}
+    assert market_data.get_fx_rate("USD", "CAD") == 1.3821
+    assert "USDCAD=X" in fake_yf.calls
+
+
+def test_fx_rate_is_cached_like_any_quote(fake_yf):
+    """The rate rides the existing quote cache (TTL 120s): a second call
+    within the window is a pure dict hit — one construction only."""
+    fake_yf.state["fast_info"] = {"lastPrice": 1.3821,
+                                  "previousClose": 1.38,
+                                  "currency": "CAD"}
+    market_data.get_fx_rate("USD", "CAD")
+    market_data.get_fx_rate("USD", "CAD")
+    assert fake_yf.calls == ["USDCAD=X"]
+
+
+def test_fx_rate_failure_propagates(fake_yf):
+    """Boundary rule: this layer RAISES; the route layer decides what a
+    dead FX pair means (degrade to native, exclude, fall back)."""
+    fake_yf.state["fast_info"] = {"lastPrice": None,
+                                  "previousClose": 1.38,
+                                  "currency": "CAD"}
+    with pytest.raises(ValueError):
+        market_data.get_fx_rate("USD", "CAD")
+
+
+def test_fx_rate_on_returns_the_close_on_the_date(fake_yf):
+    """The historical FACT a ledger row stores: the pair's daily close on
+    the transaction's date (last bar on-or-before it)."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [1.402, 1.411, 1.398]},
+        index=pd.to_datetime(["2026-08-27", "2026-08-28", "2026-08-31"]),
+    )
+    assert market_data.get_fx_rate_on("USD", "CAD", "2026-08-31") == 1.398
+    # The date-window fetch reached yfinance (start = date − 10d grace
+    # window, end = date + 1d so the date itself is included).
+    assert ("range", "USDCAD=X", "2026-08-21", "2026-09-01") in fake_yf.calls
+
+
+def test_fx_rate_on_weekend_falls_back_to_prior_close(fake_yf):
+    """A Saturday buy has no bar — the last close ON OR BEFORE it (Friday)
+    is the rate 'at the time of buying'."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [1.411, 1.398]},
+        index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
+    )
+    assert market_data.get_fx_rate_on("USD", "CAD", "2026-08-29") == 1.411
+
+
+def test_fx_rate_on_same_currency_shortcuts(fake_yf, monkeypatch):
+    class Exploding:
+        def __getattr__(self, name):
+            raise AssertionError("network touched for a same-currency rate")
+
+    monkeypatch.setattr(market_data, "yf", Exploding)
+    assert market_data.get_fx_rate_on("CAD", "CAD", "2026-08-31") == 1.0
+
+
+def test_fx_rate_on_raises_when_no_bar_covers_the_date(fake_yf):
+    """No close on-or-before the date (Yahoo gap, brand-new pair) is a
+    named ValueError — the route's cue to fall back to the live rate."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [1.398]},
+        index=pd.to_datetime(["2026-09-08"]),   # strictly AFTER the date
+    )
+    with pytest.raises(ValueError):
+        market_data.get_fx_rate_on("USD", "CAD", "2026-08-31")
 
 
 # ── search_tickers: the navbar's suggestions ──────────────────────────

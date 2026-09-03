@@ -198,6 +198,28 @@ a.logo { text-decoration: none; }
     font-weight: 600;
 }
 
+/* The ledger's display-currency toggle ("Show USD in USD"). Sits at the
+   right edge of the portfolio card's title row — margin-left: auto pushes
+   it away from the title + badge cluster to the card's far side. A plain
+   checkbox (not a styled fake switch) keeps the native control: keyboard
+   and screen-reader behavior for free, and no CSS state to keep in sync. */
+.fx-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.fx-toggle input {
+    accent-color: var(--blue-accent);
+    cursor: pointer;
+}
+
 .stock-price-container {
     margin: 12px 0 20px 0;
 }

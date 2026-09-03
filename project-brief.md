@@ -8,7 +8,7 @@ No news, no AI, no social features.
 
 ## Data Source
 
-Prices and historical charts come from the [Yahoo Finance Python library](https://github.com/ranaroussi/yfinance). Anything Yahoo has is searchable and chartable — US/Canadian stocks, ETFs, international tickers, indices, crypto. Quotes display in each security's native currency (no FX conversion for MVP).
+Prices and historical charts come from the [Yahoo Finance Python library](https://github.com/ranaroussi/yfinance). Anything Yahoo has is searchable and chartable — US/Canadian stocks, ETFs, international tickers, indices, crypto. Portfolio views (summary strip, value chart, ledger) display in CAD by default; the watchlist, index chips, and the stock detail page display in each security's native currency.
 
 ## Tech Stack
 
@@ -43,9 +43,10 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - Transaction ledger: buy and sell events with dates and prices
 - yfinance for all market data; anything Yahoo has is searchable
 - Price cache with short TTL to avoid hammering Yahoo
-- Native currency display per security (no FX conversion)
+- CAD display conversion for portfolio views (USD↔CAD only, via
+  Yahoo's `USDCAD=X` pair), with a ledger toggle for native-USD display
 
-**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios.
+**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios, currencies other than USD/CAD.
 
 ## Design Rules (permanent)
 
@@ -53,6 +54,19 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   price, qty, currency, buy/sell type). Anything market-dependent — total
   value, gain $/% — is computed at display time from live quotes, never
   stored: stored copies would freeze stale the moment they were written.
+- **The portfolio's display currency is CAD.** The summary strip, the
+  value chart, and the ledger convert USD amounts at Yahoo's `USDCAD=X`
+  rate; the watchlist, index chips, and stock detail page stay native.
+  The ledger's "Show USD in USD" toggle flips ONLY the ledger back to
+  native display — the total value and chart are CAD in every mode.
+  Two rates by design: current values (value, day gain) use the LIVE
+  rate because they answer "what would a sell bring in today?", while
+  past costs (the ledger's Price column, the cost basis) use each
+  transaction's STORED `fx_rate` — the USDCAD close on the transaction's
+  date, captured at log time and never recomputed. A CAD gain therefore
+  includes currency movement; that is the honest CAD picture. When a
+  rate is unavailable, affected rows/holdings degrade (native display,
+  unpriced, zero contribution) — never a fake 1:1 rate.
 
 ## Temporary Decisions (will need rework in the future)
 
@@ -79,13 +93,18 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   acceptable for prices. **Rework trigger:** when the SQLite transaction
   ledger is built, consider moving the price cache into the same database.
 - **The portfolio summary sums native currencies without conversion.**
-  `GET /api/portfolio/summary` adds each holding's value, day move, and
+  ~~`GET /api/portfolio/summary` adds each holding's value, day move, and
   net cost in whatever currency Yahoo quotes it — the ledger's per-row
   convention scaled up to the whole portfolio. With holdings in one
   currency the totals are exact; across currencies they are a mixed sum
-  (a test in `tests/test_portfolio_summary.py` locks this decision).
-  **Rework trigger:** the dashboard routinely shows holdings in two or
-  more currencies, or the full value-summary strip ships.
+  (a test in `tests/test_portfolio_summary.py` locks this decision).~~
+  **RESOLVED — rework done.** Its own rework trigger fired (holdings in
+  two currencies): the summary, chart, and ledger now display in CAD,
+  converted at Yahoo's `USDCAD=X` pair — the ledger's per-row native
+  display survives only in the watchlist, chips, and stock page, and
+  behind the ledger's "Show USD in USD" toggle. The locking test was
+  rewritten to lock the CONVERSION (`test_mixed_currencies_convert_to_cad`)
+  and the rule moved to Design Rules. Kept here as decision history.
 - **Stock-detail stats come from the heavy `Ticker.info` endpoint,
   fetched once per page load and never polled.** The stats grid's numbers
   (open, day high/low, prev close, volume, 52-week range, market cap)

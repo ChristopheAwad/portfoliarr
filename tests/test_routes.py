@@ -48,10 +48,13 @@ from conftest import make_quote
 # with test_stock.py. seed_transaction below is routes-file-only.)
 
 def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
-                     qty=10, tx_type="BUY", currency="USD"):
+                     qty=10, tx_type="BUY", currency="USD", fx_rate=None):
     """Insert a ledger row through the db layer (never raw SQL) and
-    return its auto-numbered id."""
-    return db.add_transaction(ticker, date, price, qty, currency, tx_type)
+    return its auto-numbered id. fx_rate defaults to None ("pre-feature
+    row, rate unknown") so tests that don't care about conversion don't
+    have to pretend a rate; conversion tests pass it explicitly."""
+    return db.add_transaction(ticker, date, price, qty, currency, tx_type,
+                              fx_rate)
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────
@@ -170,8 +173,11 @@ def test_indices_all_succeed_returns_full_list(client, fake_market):
 def test_log_transaction_201_echoes_db_vocabulary(client, fake_market):
     """POST takes BROWSER keys (date/type) and answers with DB keys
     (transaction_date/transaction_type) — the route is the translator.
-    Currency comes from the quote, never from the user."""
+    Currency comes from the quote, never from the user — and so does the
+    fx_rate, derived from the transaction's DATE (the USDCAD close that
+    day): a past-fact conversion rate, stored once and never recomputed."""
     fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
+    fake_market.fx_on[("USDCAD", "2026-08-31")] = 1.4123
     res = client.post("/api/transactions", json={
         "ticker": "aapl", "date": "2026-08-31",
         "price": 229.5, "qty": 10, "type": "buy",
@@ -182,9 +188,57 @@ def test_log_transaction_201_echoes_db_vocabulary(client, fake_market):
     assert body["transaction_date"] == "2026-08-31"
     assert body["transaction_type"] == "BUY"
     assert body["currency"] == "USD"
+    assert body["fx_rate"] == 1.4123
     assert isinstance(body["id"], int)
     # ...and the fact actually landed in the ledger.
-    assert len(db.get_transactions()) == 1
+    assert db.get_transactions()[0]["fx_rate"] == 1.4123
+
+
+def test_log_cad_ticker_stores_fx_1_without_any_fx_call(client, fake_market):
+    """A CAD security needs no exchange rate — the rate IS 1.0. Proved by
+    the fx dicts staying empty: any FX fetch would raise KeyError and
+    fail the test."""
+    fake_market.quotes["RY.TO"] = make_quote("RY.TO", 51.0, 50.0,
+                                             currency="CAD")
+    res = client.post("/api/transactions", json={
+        "ticker": "RY.TO", "date": "2026-08-31",
+        "price": 51.0, "qty": 10, "type": "BUY",
+    })
+    assert res.status_code == 201
+    assert db.get_transactions()[0]["fx_rate"] == 1.0
+    assert fake_market.fx_rates == {} and fake_market.fx_on == {}
+
+
+def test_log_usd_ticker_falls_back_to_live_rate_when_history_fails(
+        client, fake_market):
+    """The date's close couldn't be fetched (Yahoo gap) but the LIVE rate
+    could: the row stores the live rate rather than nothing. A visible
+    approximation — the log line is the audit trail."""
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
+    fake_market.fx_rates["USDCAD"] = 1.38   # live works; fx_on stays empty
+
+    res = client.post("/api/transactions", json={
+        "ticker": "AAPL", "date": "2026-08-31",
+        "price": 229.5, "qty": 10, "type": "BUY",
+    })
+    assert res.status_code == 201
+    assert db.get_transactions()[0]["fx_rate"] == 1.38
+
+
+def test_log_usd_ticker_with_no_fx_at_all_stores_null(client, fake_market):
+    """Neither the date's close nor the live rate answered: the ledger
+    fact is still stored, with fx_rate NULL ("rate unknown") — display
+    falls back to the live rate per request, and the row can be edited
+    later to backfill the real fact. Never a 500 for a missing rate."""
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
+    # both fx dicts deliberately empty
+
+    res = client.post("/api/transactions", json={
+        "ticker": "AAPL", "date": "2026-08-31",
+        "price": 229.5, "qty": 10, "type": "BUY",
+    })
+    assert res.status_code == 201
+    assert db.get_transactions()[0]["fx_rate"] is None
 
 
 def test_log_unknown_ticker_returns_404(client, fake_market):
@@ -225,11 +279,15 @@ def test_list_decorates_rows_with_live_math(client, fake_market):
         total_gain_% = 50 / 100 × 100      = 50
         day_gain     = (150 − 140) × 10    = 100
         day_gain_%   = 10 / 140 × 100      = 7.1428...
+    ?currency=native pins the NATIVE display math (the CAD-conversion
+    contract lives in test_currency_display.py) — and the empty fx dicts
+    prove native mode never asks for a rate.
     """
-    seed_transaction()
+    seed_transaction(fx_rate=1.40)
     fake_market.quotes["AAPL"] = make_quote("AAPL", 150.0, 140.0)
 
-    row = client.get("/api/transactions").get_json()[0]
+    row = client.get("/api/transactions?currency=native").get_json()[0]
+    assert fake_market.fx_rates == {} and fake_market.fx_on == {}
     assert row["price"] == 100.0            # the stored fact, untouched
     assert row["price_now"] == 150.0
     assert row["value"] == pytest.approx(1500.0)
@@ -258,12 +316,16 @@ def test_edit_404_comes_before_validation(client):
     assert res.status_code == 404
 
 
-def test_edit_updates_four_fields_and_ignores_ticker(client, fake_market):
-    """THE edit boundary (AGENTS.md): a PUT may rewrite date/price/qty/
-    type — and a 'ticker' in the body is IGNORED outright. The response is
-    re-read from the DB, so it shows the truth on disk, including the
-    untouched ticker/currency."""
-    tx_id = seed_transaction(ticker="AAPL", currency="USD")
+def test_edit_updates_four_fields_ignores_ticker_rederives_fx(
+        client, fake_market):
+    """THE edit boundary (AGENTS.md), evolved: a PUT may rewrite date/
+    price/qty/type — and a 'ticker' in the body is IGNORED outright. The
+    date-derived fx_rate is re-derived from the NEW date (a stale rate
+    would be a wrong fact after a date correction); currency still never
+    moves. The response is re-read from the DB, so it shows the truth on
+    disk."""
+    tx_id = seed_transaction(ticker="AAPL", currency="USD", fx_rate=1.40)
+    fake_market.fx_on[("USDCAD", "2026-08-02")] = 1.3777
     res = client.put(f"/api/transactions/{tx_id}", json={
         "date": "2026-08-02", "price": 110.0, "qty": 7,
         "type": "sell",
@@ -277,6 +339,7 @@ def test_edit_updates_four_fields_and_ignores_ticker(client, fake_market):
     assert body["transaction_type"] == "SELL"
     assert body["ticker"] == "AAPL"         # identity survives
     assert body["currency"] == "USD"        # yfinance fact survives
+    assert body["fx_rate"] == 1.3777        # ...re-derived from the new date
 
 
 # ── Transactions: DELETE ──────────────────────────────────────────────
@@ -315,8 +378,11 @@ def test_history_buy_applies_from_its_date_onward(client, fake_market):
         08-27: nothing held            → 0
         08-28: buy 10 AAPL @ close 110 → 1100
         08-31: still 10 @ close 120    → 1200
+    (Seeded CAD — the chart's display currency IS CAD, so a CAD holding
+    needs no FX work; the empty fx dict proves none was fetched.)
     """
-    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10)
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="CAD")
     fake_market.histories["AAPL"] = {
         "2026-08-27": 100.0, "2026-08-28": 110.0, "2026-08-31": 120.0,
     }
@@ -324,6 +390,45 @@ def test_history_buy_applies_from_its_date_onward(client, fake_market):
     body = client.get("/api/portfolio/history?period=5D").get_json()
     assert body["labels"] == ["2026-08-27", "2026-08-28", "2026-08-31"]
     assert body["values"] == [0.0, 1100.0, 1200.0]
+    assert fake_market.fx_rates == {} and fake_market.fx_on == {}
+
+
+def test_history_usd_holdings_convert_at_the_live_rate(client, fake_market):
+    """The chart is ALWAYS CAD (the ledger toggle never touches it — it
+    plots the portfolio total). A USD holding's whole line scales by the
+    flat LIVE rate: history is context, not a sell price, so a per-point
+    historical rate was deliberately skipped.
+        08-28: 10 × 110 × 1.5 = 1650
+        08-31: 10 × 120 × 1.5 = 1800
+    """
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="USD", fx_rate=1.4)
+    fake_market.histories["AAPL"] = {
+        "2026-08-27": 100.0, "2026-08-28": 110.0, "2026-08-31": 120.0,
+    }
+    fake_market.fx_rates["USDCAD"] = 1.5
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["values"] == [0.0, 1650.0, 1800.0]
+
+
+def test_history_mixed_currencies_sum_in_cad(client, fake_market):
+    """One chart, two currencies, one CAD line: the USD ticker's points
+    scale by the live rate, the CAD ticker passes through."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=1,
+                     currency="USD", fx_rate=1.4)
+    seed_transaction(ticker="RY.TO", date="2026-08-28", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {"2026-08-28": 100.0, "2026-08-31": 110.0}
+    fake_market.histories["RY.TO"] = {"2026-08-28": 50.0, "2026-08-31": 52.0}
+    fake_market.fx_rates["USDCAD"] = 1.5
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    assert body["values"] == [
+        pytest.approx(1 * 100 * 1.5 + 10 * 50.0),   # 650.0
+        pytest.approx(1 * 110 * 1.5 + 10 * 52.0),   # 685.0
+    ]
 
 
 def test_history_sell_reduces_value_and_unpriced_ticker_contributes_zero(
@@ -334,10 +439,14 @@ def test_history_sell_reduces_value_and_unpriced_ticker_contributes_zero(
            its holdings exist but are valued at zero, never a crash.
         08-28: 10×100 (AAPL) + 5×0 (BAD) = 1000
         08-31:  6×110 (AAPL) + 5×0 (BAD) =  660
+    (Seeded CAD — the dead-ticker rule is orthogonal to currency.)
     """
-    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10, tx_type="BUY")
-    seed_transaction(ticker="AAPL", date="2026-08-31", qty=4, tx_type="SELL")
-    seed_transaction(ticker="BAD", date="2026-08-28", qty=5, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10, tx_type="BUY",
+                     currency="CAD")
+    seed_transaction(ticker="AAPL", date="2026-08-31", qty=4, tx_type="SELL",
+                     currency="CAD")
+    seed_transaction(ticker="BAD", date="2026-08-28", qty=5, tx_type="BUY",
+                     currency="CAD")
     fake_market.histories["AAPL"] = {
         "2026-08-28": 100.0, "2026-08-31": 110.0,
     }   # "BAD" deliberately absent → get_history raises → valued at 0
@@ -345,3 +454,20 @@ def test_history_sell_reduces_value_and_unpriced_ticker_contributes_zero(
     body = client.get("/api/portfolio/history?period=5D").get_json()
     assert body["labels"] == ["2026-08-28", "2026-08-31"]
     assert body["values"] == [1000.0, 660.0]
+
+
+def test_history_fx_failure_makes_usd_holdings_contribute_zero(
+        client, fake_market):
+    """Same per-ticker resilience rule, new trigger: without a live USDCAD
+    rate a USD holding has no honest CAD value, so its line contributes 0
+    while the CAD holding carries the chart. Never a 500."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="USD", fx_rate=1.4)
+    seed_transaction(ticker="RY.TO", date="2026-08-28", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {"2026-08-28": 100.0}
+    fake_market.histories["RY.TO"] = {"2026-08-28": 50.0}
+    # fx_rates deliberately empty → no live rate → AAPL contributes 0
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["values"] == [500.0]   # RY.TO only

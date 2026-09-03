@@ -1,148 +1,98 @@
-# Feature: Ticker Search + Stock Detail Page
+# Feature: CAD Display Conversion + "Show USD in USD" Ledger Toggle
 
 ## What (user story)
 
-The navbar's search box becomes real: typing shows live ticker suggestions
-(debounced fetch to the backend → Yahoo's search API). Clicking a suggestion
-(or pressing Enter) navigates to `/stock/<symbol>` — a detail page that looks
-like the dashboard:
-
-- Large current price + name (where the portfolio value would be)
-- Daily change in $ AND % (pos/neg coloured) — **no total return** (a
-  security has no ledger; that number wouldn't exist)
-- Price-over-time chart with the SAME 1D–MAX timeframe buttons
-  (`PERIOD_MAP` keys, default 5D — no map edits needed)
-- Stats grid: Open, Day High, Day Low, Prev Close, Volume, 52W Range,
-  Market Cap
-- Buttons: **Add to Watchlist** (reuses `POST /api/watchlist`) and
-  **Log Transaction** (navigates to `/?ticker=SYM#tx-form`; main.js reads
-  the `?ticker=` param and prefills the form — ONE form, one submit handler)
-
-Bonus navigation (agreed): watchlist rows and ledger group-row tickers link
-to the detail page too.
+Everything is either CAD or USD. The dashboard's portfolio views (summary
+strip, value chart, transaction ledger) display in **CAD by default**: USD
+holdings convert at Yahoo's `USDCAD=X` FX rate. A dashboard toggle
+("Show USD in USD") flips **only the ledger** back to native-USD display —
+the total value and chart are ALWAYS CAD regardless. Watchlist, index
+chips, stock detail page, and importer report stay native currency always.
 
 ## Decisions already made (planning session — don't re-litigate)
 
-- **Scope**: full brief spec for `/stock/<symbol>` (stats grid + both
-  buttons), not just price/chart/day-change.
-- **Reuse strategy**: refactor to shared code — `templates/base.html`
-  (navbar + search + head/CDN) and `static/js/common.js` (formatters,
-  `REFRESH_MS`, `paintChange`, search UI, shared chart helper).
-  NO duplicated navbar/search JS.
-- **"Log Transaction" = URL-param prefill** (`/?ticker=SYM#tx-form`), not an
-  inline form on the detail page.
-- **Search is uncached** (every query is user-typed, hit rate ≈ 0).
-- **Stats are one-shot per page load**, not polled — they come from the heavy
-  `yf.Ticker().info` endpoint and are daily figures; only the quote is polled.
-- **Unquotable symbol → 404** on the single-symbol endpoints (same convention
-  as watchlist-add / transaction-log).
-- Native currency display everywhere, no FX (permanent brief rule).
+- **Scope of CAD conversion**: summary strip + chart + ledger ONLY.
+  Watchlist, chips, stock page: native forever.
+- **Toggle**: flips only the ledger; session-only (no localStorage);
+  always starts CAD; label "Show USD in USD". Never touches the summary
+  or chart ("not affecting the total portfolio value" — user requirement).
+- **Historical FX is a FACT** (user requirement): every transaction stores
+  `fx_rate` = the USDCAD=X daily close **on the transaction's date** (last
+  close on-or-before it), derived automatically from Yahoo at
+  log/import/edit time. Never changes afterwards. Used for the Price
+  column and cost basis (past facts). **Current values (price_now, value,
+  day gain) use the LIVE rate** — "I need today's CAD value of a potential
+  sell". Consequence: CAD gain % includes currency movement (honest).
+- **Legacy rows** (pre-feature USD rows, fx_rate NULL) → display falls
+  back to the live rate per request; editing a row backfills the real
+  date-based fact. CAD rows backfill to 1.0 in the migration.
+- **Chart FX = flat live rate** (user choice, not per-point history).
+  FX failure → USD tickers contribute 0 (per-ticker resilience rule).
+- **PUT contract unchanged**: body stays `{date, price, qty, type}`;
+  `fx_rate` is re-derived server-side from the new date (Yahoo-derived
+  fact that follows the DATE, unlike currency which follows the
+  non-editable ticker).
+- **API surface**: ledger + watchlist stay raw-facts-plus-display-math;
+  ledger rows gain `price_display` + `display_currency` (always present,
+  equal to the native facts in native mode). Stored `price`/`currency`
+  stay native so edit-mode prefill and group-% math can't corrupt facts.
+- **Conversion is math → backend-only** (routes); frontend stays a pure
+  renderer. `?currency=` values: `CAD` (server default) | `native`;
+  anything else → 400 listing options (same pattern as `?period=`).
+- **Summary/chart/ledger in CAD mode treat non-USD-non-CAD currencies**
+  as convertible-failure (unpriced / native-degrade / contribute-0) —
+  only USD↔CAD is supported (user: everything will be CAD or USD).
 
 ## Subtasks (in order — check off as done)
 
-- [ ] **1. `market_data.py` data layer** (+ Fake-yf tests)
-      - `search_tickers(query, limit=8)` via `yf.Search(...).quotes`
-        (verified working on yfinance 1.7.0). Normalize to
-        `{symbol, name, exchange, type}` from `symbol` /
-        `shortname`→`longname` fallback / `exchDisp`→`exchange` / `typeDisp`.
-        `[]` on no matches; RAISES on failure (boundary rule, no logging).
-      - `get_stats(symbol)` via one `yf.Ticker(symbol).info` call →
-        `{open, day_high, day_low, prev_close, volume, week52_low,
-        week52_high, market_cap}` (from `open`, `dayHigh`, `dayLow`,
-        `regularMarketPreviousClose`, `volume`, `fiftyTwoWeekLow`,
-        `fiftyTwoWeekHigh`, `marketCap`). Missing fields → `None`
-        (indices/crypto lack some); frontend gap-fills "—".
-      - Tests: Fake `yf` module via `monkeypatch.setattr(market_data, "yf",
-        Fake)` — normalization, longname fallback, empty results, raise
-        propagates.
-
-- [x] **2. `app.py` routes** (+ route tests: new `tests/test_search.py`,
-      `tests/test_stock.py`)
-      - `GET /stock/<symbol>` — render `stock.html`, symbol uppercased and
-        passed to the template (becomes `<body data-symbol>` + `<title>`).
-      - `GET /api/search?q=` — q required/non-blank → else 400;
-        success → `{"results": [...]}`; failure → 503 (indices all-fail
-        convention), warning + `exc_info`.
-      - `GET /api/stock/<symbol>` — `dict(get_quote(sym))` (COPY before
-        decorating — cache-mutation rule) + name via `get_name`
-        (failure → `None`, watchlist rule). Quote failure → 404
-        "unknown or unquotable symbol". This is the POLLED endpoint (60s).
-      - `GET /api/stock/<symbol>/stats` — `get_stats` → 200; failure → 404.
-      - `GET /api/stock/<symbol>/history?period=` — validate against
-        `PERIOD_MAP` (same pattern as portfolio history; 400 lists options)
-        → `get_history` dict → sorted `{labels, values}`. Empty dict → 200
-        empty; fetch failure → 404.
-      - Test rule: patch names WHERE USED — `app_module.search_tickers`,
-        `app_module.get_stats`, etc. (`from app import app` binds the Flask
-        object, not the module).
-
-- [x] **3. Shared refactor** — `templates/base.html`, `templates/index.html`,
-      `static/js/common.js`
-      - `base.html`: head + Chart.js CDN + navbar. Logo `<span>` becomes
-        `<a href="/">`. Search input gets `id="ticker-search"` + hidden
-        `<div id="search-results">` dropdown. Jinja blocks: `title`,
-        `content`, `scripts`.
-      - `index.html` extends base; dashboard content unchanged — ALL
-        existing hooks preserved (chips `data-symbol`, `portfolio-value`,
-        `ledger-body`, `tx-form`, `import-panel`...).
-      - `common.js` (loads BEFORE page scripts): move `REFRESH_MS`,
-        `formatPrice`, `formatNumber`, `formatSigned` from main.js;
-        generalize `paintPortfolioChange` → `paintChange(el, value, pct,
-        label)`. Search UI: 300ms debounce → `/api/search?q=` → dropdown
-        (createElement + textContent only); click/Enter navigates to
-        `/stock/<encodeURIComponent(symbol)>`; Escape/outside-click hides;
-        "No matches" / "Search unavailable" states.
-      - Verify dashboard looks/behaves identically before moving on.
-
-- [x] **4. Detail page** — `templates/stock.html`, `static/js/stock.js`,
-      `static/style.css`, shared chart helper
-      - `common.js` gains `setupTimeframeChart({canvas, label, endpoint,
-        defaultPeriod})` — creates the Chart.js line (keeps the
-        `typeof Chart === "undefined"` CDN guard), wires the delegated
-        `.time-btn` listener, returns `refresh(period)`. main.js then uses
-        it with `/api/portfolio/history` (kills ~70 duplicated lines).
-      - `stock.html` (extends base): header card (symbol + JS-filled name,
-        large price `<currency>`, day change $/% via `paintChange`,
-        NO total-return span, Add-to-Watchlist + Log-Transaction buttons),
-        chart card (canvas + 1D–MAX, 5D active), stats card (grid, ships
-        "…", 52W Range = `low – high`, Market Cap compact notation "2.52T").
-      - `stock.js`: symbol from `document.body.dataset.symbol`;
-        `refreshStockQuote()` on load + poll; `refreshStockStats()` once;
-        404 → "Unknown symbol" degraded state; Add button → POST
-        `/api/watchlist` (201 → disable + "✓ Watching", 409/404 relayed
-        inline); Log button → `/?ticker=SYM#tx-form`.
-      - CSS: search dropdown, stats grid, watchlist-row hover, ticker-link.
-
-- [x] **5. `main.js` wiring**
-      - Read `?ticker=` URL param → prefill + focus the tx form (and the
-        `#tx-form` anchor does the scrolling).
-      - Watchlist rows clickable → navigate to detail page (guard: a click
-        on the × remove-btn must NOT navigate).
-      - Ledger group-row ticker cell → `<a class="ticker-link">`; the
-        expand/collapse delegated listener returns early when
-        `event.target.closest("a")`. Cell COUNT unchanged.
-
-- [x] **6. Docs + verification**
-      - `project-brief.md` Temporary Decisions: (a) stats via heavy `.info`
-        once per load, not polled; (b) search uncached. — DONE
-      - `python -m pytest` green: 115 passed. — DONE
-      - Live curl pass: search / quote / stats / history / 400s / 404s /
-        both page shells (incl. %5EGSPC) — all correct. — DONE
-      - REMAINING (needs a human at the browser): typing in the search box
-        (dropdown, click + Enter navigation), Add-to-Watchlist and
-        Log-Transaction buttons, watchlist/ledger link navigation, and the
-        dashboard looking unchanged.
+- [x] **1. Tests first** (all red before implementation):
+      - `tests/test_market_data.py`: `get_fx_rate` (same-currency → 1.0
+        with no network; live rate via `USDCAD=X` quote, cached; raises).
+        `get_fx_rate_on(date)` (close on-or-before date; weekend → prior
+        Friday; empty window → ValueError).
+      - `tests/test_db.py`: migration adds `fx_rate` to a legacy table;
+        CAD rows backfill 1.0, USD stay NULL; add/get roundtrip carries
+        fx_rate; update_transaction writes it.
+      - fx-at-log-date derivation: POST /api/transactions stores the tx
+        date's rate; PUT re-derives on date change; import preview shows
+        it, commit stores it (new tests/test_currency_display.py).
+      - Summary: rewrite `test_mixed_currencies_sum_as_is` (the locking
+        test FLIPS to lock conversion); cost basis uses per-tx stored fx;
+        live-FX failure → unpriced; legacy NULL fx → live-rate fallback;
+        reply carries `"currency": "CAD"`; CAD-only portfolio makes no FX
+        call.
+      - Ledger `?currency=`: CAD default conversions (price_display at
+        stored fx, value/gains at live rate, pct includes FX); `native`
+        pins today's shape; invalid param 400; unquoted rows; live-FX
+        failure → full native degrade; watchlist-stays-native regression.
+      - History: USD contributions × flat live rate; FX failure → 0;
+        CAD-only makes no FX call; existing history tests reseeded CAD.
+- [x] **2. `db.py`** — migration (ALTER TABLE + CAD backfill), column in
+      SELECT lists, add/update params.
+- [x] **3. `market_data.py`** — `get_fx_rate`, `get_fx_rate_on`.
+- [x] **4. `app.py` fx derivation** — shared `_fx_rate_for_date` (history
+      → fallback live rate + warning); POST/PUT/import.
+- [x] **5. `app.py` summary conversion** — cost × stored fx, value/day ×
+      live rate; FX failure → unpriced; `"currency": "CAD"`.
+- [x] **6. `app.py` ledger `?currency=`** + price_display/display_currency.
+- [x] **7. `app.py` history conversion** — flat live rate.
+- [x] **8. Frontend** — toggle in portfolio card header; ledger fetches
+      carry the param; buildTxRow/buildGroupRow use price_display/
+      display_currency; summary value paints "CAD" suffix; chart dataset
+      label "(CAD)". GUI-verified by the user (no JS test infra).
+- [x] **9. Docs** — project-brief.md: resolve the mixed-currency temporary
+      decision (keep as history), add a permanent display-currency design
+      rule, update Data Source + MVP scope lines. AGENTS.md: update the
+      native-currency scope line.
+- [x] **10. Verify** — `python -m pytest` fully green; live curl pass
+      (summary/ledger CAD + native, history, fx degradation); GUI gate
+      with the user; commit gate.
 
 ## Contracts that must NOT break (AGENTS.md)
 
-- Ledger 11-column contract lives in FOUR places (th row, setLedgerMessage
-  colSpan, buildGroupRow, buildTxRow) — this feature touches the group
-  ticker CELL CONTENT only, never the count.
-- `PERIOD_MAP` is the single source of truth for timeframes — new page
-  reuses the same 9 keys/buttons; no map edits.
-- Backend sends raw floats; formatting + pos/neg classes are frontend-only.
-- Logging lives ONLY in app.py; market_data/db raise.
-- Quote dicts come back from the cache SHARED — copy before decorating.
-- Two vocabularies: JSON API short keys vs DB explicit columns (not really
-  triggered here — the stock endpoints have no DB rows — but keep the rule
-  in mind for any reply shapes).
+- Ledger table HTML column count stays 11 (no new visible columns).
+- PUT body = exactly the 4 editable fields; ticker/currency never user-
+  writable; fx_rate is server-derived, never accepted from clients.
+- Backend sends raw floats; formatting stays frontend-only.
+- Patch-where-used mocking; logging only in app.py; pure layers raise.
+- Quote dicts are SHARED with the cache — copy before decorating.

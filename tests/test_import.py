@@ -52,12 +52,19 @@ def make_quote(symbol, currency="USD"):
 
 @pytest.fixture
 def fake_market(monkeypatch):
-    """Patch get_quote AS APP.PY USES IT: a dict lookup where a missing
-    key raises KeyError — which is exactly what the routes' except blocks
-    see during a real Yahoo failure for an unknown symbol."""
+    """Patch get_quote AND the FX helpers AS APP.PY USES THEM: dict
+    lookups where a missing key raises KeyError — which is exactly what
+    the routes' except blocks see during a real Yahoo failure for an
+    unknown symbol (or an unavailable FX rate)."""
     quotes = {}
+    fx_rates, fx_on = {}, {}
     monkeypatch.setattr(app_module, "get_quote", lambda symbol: quotes[symbol])
-    return SimpleNamespace(quotes=quotes)
+    monkeypatch.setattr(app_module, "get_fx_rate",
+                        lambda base, target: fx_rates[f"{base}{target}"])
+    monkeypatch.setattr(app_module, "get_fx_rate_on",
+                        lambda base, target, date_iso:
+                            fx_on[(f"{base}{target}", date_iso)])
+    return SimpleNamespace(quotes=quotes, fx_rates=fx_rates, fx_on=fx_on)
 
 
 # ── Parser unit tests (pure — no Flask, no DB, no network) ────────────
@@ -155,9 +162,12 @@ def test_parse_rejects_non_positive_numbers(price, qty):
 
 def test_preview_reports_rows_and_derived_currency(client, fake_market):
     """The preview is a dress rehearsal: valid rows decorated with the
-    quote's currency (CM on Yahoo = the NYSE listing = USD) — and the
-    ledger untouched. THE zero-writes assertion."""
+    quote's currency (CM on Yahoo = the NYSE listing = USD) AND the
+    date-derived fx_rate — so the user sees exactly what commit will
+    store, including the conversion fact. The ledger stays untouched:
+    THE zero-writes assertion."""
     fake_market.quotes["CM"] = make_quote("CM", currency="USD")
+    fake_market.fx_on[("USDCAD", "2026-03-16")] = 1.3725
 
     res = client.post("/api/transactions/import/preview", json={"text": PASTE})
     body = res.get_json()
@@ -165,6 +175,7 @@ def test_preview_reports_rows_and_derived_currency(client, fake_market):
     assert body["valid_count"] == 1
     assert body["invalid_count"] == 0
     assert body["rows"][0]["currency"] == "USD"
+    assert body["rows"][0]["fx_rate"] == 1.3725
     assert body["rows"][0]["error"] is None
     assert db.get_transactions() == []   # preview stores NOTHING
 
@@ -215,8 +226,11 @@ def test_preview_rejects_bad_bodies_with_400(client, kwargs):
 def test_commit_inserts_rows_and_derives_currency(client, fake_market):
     """The whole pipeline in one test: paste in, ledger row out — with
     the ticker normalized, the date converted, the currency taken from
-    the quote, and the type forced to BUY."""
+    the quote, the fx_rate derived from the row's OWN date (a batch can
+    span dates; each row freezes the rate of ITS day), and the type
+    forced to BUY."""
     fake_market.quotes["CM"] = make_quote("CM", currency="USD")
+    fake_market.fx_on[("USDCAD", "2026-03-16")] = 1.3725
 
     res = client.post("/api/transactions/import/commit", json={"text": PASTE})
     body = res.get_json()
@@ -230,7 +244,22 @@ def test_commit_inserts_rows_and_derives_currency(client, fake_market):
     assert row["price"] == 132.55
     assert row["qty"] == 1.296383
     assert row["currency"] == "USD"
+    assert row["fx_rate"] == 1.3725
     assert row["transaction_type"] == "BUY"
+
+
+def test_commit_cad_ticker_stores_fx_1_without_any_fx_call(client,
+                                                           fake_market):
+    """A CAD ticker (CM.TO = the TSX listing) needs no exchange rate —
+    the stored rate IS 1.0. The empty fx dicts prove no FX fetch happened
+    even though the batch was imported."""
+    fake_market.quotes["CM.TO"] = make_quote("CM.TO", currency="CAD")
+    res = client.post("/api/transactions/import/commit", json={
+        "text": "CM.TO\t16 Mar 2026\t51.20\t100",
+    })
+    assert res.status_code == 200
+    assert db.get_transactions()[0]["fx_rate"] == 1.0
+    assert fake_market.fx_rates == {} and fake_market.fx_on == {}
 
 
 def test_commit_best_effort_skips_dead_ticker(client, fake_market):

@@ -2,8 +2,19 @@
 
 ## Read first
 - `project-brief.md` — authoritative spec (stack, UI, MVP scope); takes precedence over assumptions.
-- `feature.md` — context file for the feature in progress; read it before resuming work. If empty and we're starting to work on a new feature, populate it first with subtasks.
+- `feature.md` — context file for the feature in progress; read it before resuming work. Starting a new feature? Follow the **Feature workflow** section below: write the plan there first and get user approval before any implementation code.
 - Design decisions that outlive a feature go in their permanent home: the "why" lives in code comments next to the code, cross-cutting rules go in `project-brief.md`'s Design Rules section. Never leave durable rationale only in `feature.md` — it's wiped per feature, so no long-lived file may reference it.
+
+## Feature workflow (required)
+Applies to every NEW feature; small bug fixes and one-line tweaks skip the gate.
+Follow these steps in order — never skip one:
+1. **Plan before code.** Work out the whole feature first (subtasks, files to touch, data flow) and write the plan to `feature.md`. Overwrite any previous feature's content.
+2. **Approval gate.** Summarize the plan for the user and ask whether to proceed. Do not write implementation code until the user says yes.
+3. **Tests first.** The plan's first part is its test plan: detailed pytest unit tests that will run at the end to prove the feature works. Cover every part of the feature AND edge cases (empty/invalid input, boundary values, failure paths). Writing these tests is the first implementation step; they must fail until the feature exists.
+4. **Implement.** Build the feature. Done only when the FULL suite is green: `python -m pytest` (new tests + all existing ones).
+5. **GUI gate.** With all tests passing, ask the user to check the feature in the browser GUI. Wait for their confirmation.
+6. **Commit gate.** Only after the user approves the GUI, ask if you should commit and push to the GitHub repo. Never commit/push without that explicit yes.
+- Resuming work? Read `feature.md` to see which step you're on and continue from there.
 
 ## Stack & architecture
 - Flask serves JSON; the browser does all rendering (vanilla JS `fetch` + DOM, no framework).
@@ -36,13 +47,14 @@
 - Adding an index chip = TWO edits: symbol in `INDEX_SYMBOLS` (`app.py`) AND a chip with matching `data-symbol` in `templates/index.html`. JS finds chips by `data-symbol`, not position.
 - `/api/indices` returns successes only (failed symbols absent); `503` only when ALL symbols fail; frontend gap-fills missing chips with "—". Keep both sides in sync.
 - Ledger table column count (11, incl. the trailing actions column) lives in FOUR places: the `<th>` row (`templates/index.html`), `setLedgerMessage`'s `colSpan`, `buildGroupRow`'s cell list (summary rows end with a BLANK actions cell), AND `buildTxRow`'s cell list (`static/js/main.js`). Adding/removing a column = edit all four.
-- Edits go through `PUT /api/transactions/<id>` with body `{date, price, qty, type}` ONLY — ticker/currency are identity + a yfinance fact and are excluded from the UPDATE's SET list by design. POST and PUT share `validate_tx_fields` in `app.py`; add new field rules there once.
+- Edits go through `PUT /api/transactions/<id>` with body `{date, price, qty, type}` ONLY — ticker/currency are identity + a yfinance fact and are excluded from the UPDATE's SET list by design (`fx_rate` IS in the SET list: it's yfinance-derived but derives from the DATE, so it must follow date corrections). POST and PUT share `validate_tx_fields` in `app.py`; add new field rules there once.
+- Display currency: the summary strip, value chart, and ledger are CAD (summary/chart ALWAYS; the ledger via `?currency=CAD|NATIVE` — the dashboard toggle flips ONLY that param). Ledger rows' stored facts (`price`, `currency`, `fx_rate`) stay native and feed the edit form; display fields (`price_display`, `display_currency`) are converted. Cost side = stored `fx_rate` (frozen at buy date); value side = live rate. USD↔CAD only — anything else degrades (native display / unpriced / contributes 0), never a fake 1:1 rate.
 - Two vocabularies for the same data: the JSON API uses short keys (`date`, `type`); the DB uses explicit columns (`transaction_date`, `transaction_type`). Routes are the translator. PUT's reply is re-read from the DB, not echoed from the request.
 - Importer: `POST /api/transactions/import/preview` and `/commit` share ONE parser (`parse_import_text`, `app.py`). Commit RE-parses the same `{text}` body — never accept a client-sent row list between the two calls. Preview writes NOTHING; every imported row is forced BUY; best-effort per row (200 even when `imported == 0` — the report is the answer).
 - Backend sends raw floats; number formatting and `pos`/`neg` classes are frontend-only.
 
 ## MVP scope guard
-Not in MVP: dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios. Quotes display in native currency — no FX conversion.
+Not in MVP: dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios, currencies other than USD/CAD. Portfolio views (summary strip, value chart, ledger) display in CAD (see Design Rules in `project-brief.md`); the watchlist, index chips, and stock detail page stay native.
 
 ## Working style (user preference)
 - User is an absolute beginner learning everything: break features into digestible topics and explain concepts as you go.

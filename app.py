@@ -21,7 +21,8 @@ from werkzeug.exceptions import HTTPException
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
 from market_data import (
-    get_quote, get_name, get_stats, get_history, search_tickers, PERIOD_MAP
+    get_quote, get_name, get_stats, get_history, search_tickers,
+    get_fx_rate, get_fx_rate_on, PERIOD_MAP
 )
 import db
 
@@ -242,6 +243,37 @@ def portfolio_history():
             )
             histories[symbol] = {}  # he can't be priced; treat as 0
 
+    # DISPLAY CURRENCY — the chart is ALWAYS CAD (the dashboard's ledger
+    # toggle never touches it: this line IS the portfolio total). Each
+    # ticker's currency comes from the LEDGER FACTS (stored at insert
+    # time) — no quotes needed here, this route deliberately prices from
+    # historical closes alone.
+    currency_by_symbol = {}
+    for tx in transactions:
+        currency_by_symbol.setdefault(tx["ticker"], tx["currency"])
+
+    # ONE live USDCAD rate per request, fetched only when a held ticker
+    # actually trades in USD (a CAD-only portfolio makes no FX call). The
+    # rate applies FLAT to every point — history is context, not a sell
+    # price, so a per-point historical rate was deliberately skipped
+    # (documented in project-brief.md). If the rate is unavailable, USD
+    # tickers contribute 0: no honest CAD number, no fake 1:1 rate.
+    usd_tickers = sorted(
+        symbol for symbol, currency in currency_by_symbol.items()
+        if currency == "USD"
+    )
+    live_rate = None
+    if usd_tickers:
+        try:
+            live_rate = get_fx_rate("USD", "CAD")
+        except Exception:
+            app.logger.warning(
+                "live USDCAD rate unavailable — USD tickers (%s) "
+                "contribute 0 to the chart",
+                ", ".join(usd_tickers),
+                exc_info=True,
+            )
+
     # The x-axis = the union of every ticker's trading days, ascending.
     # Build a set first (O(1) membership), then sort once.
     all_labels = set()
@@ -307,14 +339,26 @@ def portfolio_history():
                     tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
                 )
 
-        # Sum each ticker's held quantity × its close price at this label.
+        # Sum each ticker's held quantity × its close price at this label
+        # (× the live rate for USD tickers — one CAD line). Non-USD/CAD
+        # ledger currencies are treated like an unavailable rate: their
+        # holdings contribute 0 rather than a wrong currency's number.
         total = 0.0
         for symbol, held in net_qty.items():
-            if held != 0:
-                # .get(label, 0): a day where Yahoo has no bar for this
-                # ticker (holiday, delisted) counts as holding it at 0 —
-                # a deliberate flat line rather than a gap.
-                total += held * histories[symbol].get(label, 0)
+            if held == 0:
+                continue
+            close = histories[symbol].get(label, 0)
+            currency = currency_by_symbol.get(symbol)
+            if currency == "USD":
+                if live_rate is None:
+                    continue   # unconvertible — contributes 0 this period
+                close *= live_rate
+            elif currency != "CAD":
+                continue       # unsupported currency — contributes 0
+            # .get(label, 0): a day where Yahoo has no bar for this
+            # ticker (holiday, delisted) counts as holding it at 0 —
+            # a deliberate flat line rather than a gap.
+            total += held * close
         values.append(total)
 
     return jsonify({"labels": labels, "values": values})
@@ -334,50 +378,76 @@ def portfolio_history():
 # The answers are close but never identical by design: a quote is "the
 # last traded price", a daily bar's close is "where that day ended".
 #
-# CURRENCY (temporary decision, documented in project-brief.md): each
-# holding is valued in its own native currency and the sums add them
-# as-is — the ledger's per-row convention, scaled up to the whole
-# portfolio. One-currency portfolios are exact; mixed ones are a
-# documented approximation until FX conversion exists.
+# CURRENCY (permanent decision, documented in project-brief.md's Design
+# Rules): the summary displays in CAD — ALWAYS, regardless of the
+# dashboard's "Show USD in USD" ledger toggle (that toggle flips only the
+# ledger; the portfolio total is deliberately untouched by it). USD
+# amounts convert at the LIVE USDCAD rate (current value = a potential
+# sell), while the cost basis converts each transaction at its OWN stored
+# fx_rate (a past fact — see _derive_fx_rate). A CAD total gain therefore
+# includes currency movement, which is the honest CAD picture.
 # ---------------------------------------------------------------------------
 
 @app.route("/api/portfolio/summary")
 def portfolio_summary():
-    """Return the portfolio header's headline numbers as raw floats.
+    """Return the portfolio header's headline numbers as raw floats, in
+    CAD.
 
     No parameters: the ledger decides WHAT is held; live quotes decide
-    what it's worth. Shape of the reply:
-        total_value     Σ net_qty × live price (priced tickers only)
-        day_gain        Σ net_qty × quote.change (today's move)
+    what it's worth; the live USDCAD rate converts it. Shape of the reply:
+        total_value     Σ net_qty × live price × rate (priced tickers)
+        day_gain        Σ net_qty × quote.change × rate (today's move)
         day_gain_pct    day_gain ÷ yesterday's value (null if no base)
         total_gain      total_value − cost_basis (realized + unrealized)
         total_gain_pct  total_gain ÷ cost_basis (null if no base)
-        cost_basis      Σ ±(price × qty) — buys paid minus sells recouped
-        unpriced        tickers whose quote failed — excluded from ALL sums
+        cost_basis      Σ ±(price × qty × that tx's fx_rate) — buys paid
+                        minus sells recouped, each at ITS day's rate
+        unpriced        tickers excluded from ALL sums: quote failed, FX
+                        unavailable for a USD holding, or a currency the
+                        CAD display doesn't support
+        currency        "CAD" — declared so the frontend can label it
     """
     # The ledger is the source of truth for what is held. Order doesn't
     # matter here — everything below is sums, not a forward walk.
     transactions = db.get_transactions()
 
-    # Pass 1 — FACTS ONLY (no network): fold every transaction into two
-    # per-ticker figures.
-    #   net_qty: BUY adds shares, SELL subtracts — the same fold the
-    #            history route does, but only the final state matters here.
-    #   cost:    Σ ±(price × qty). A buy adds what was PAID; a sell
-    #            SUBTRACTS what was RECOUPED. The gap between today's
-    #            value and this net figure is the position's whole
-    #            lifetime gain (realized on the sells + unrealized on
-    #            what's still held) in ONE formula — no separate
-    #            realized/unrealized bookkeeping.
+    # Pass 1 — FACTS ONLY (no network): fold every transaction into per-
+    # ticker figures.
+    #   net_qty:    BUY adds shares, SELL subtracts — the same fold the
+    #               history route does, but only the final state matters.
+    #   cost_stored: Σ ±(price × qty × stored fx_rate) — the CAD cost of
+    #               every transaction whose rate is a known fact. CAD rows
+    #               carry fx_rate 1.0, so one formula serves both.
+    #   cost_unrated: Σ ±(price × qty) for USD rows whose fx_rate is NULL
+    #               (pre-feature rows, or Yahoo couldn't answer at insert
+    #               time). Their rate is genuinely unknown — they convert
+    #               at the LIVE rate as a documented per-request fallback.
+    #   A buy adds what was PAID; a sell SUBTRACTS what was RECOUPED. The
+    #   gap between today's value and this net figure is the position's
+    #   whole lifetime gain (realized + unrealized) in ONE formula.
     net_qty = {}
-    cost_by_symbol = {}
+    cost_stored = {}
+    cost_unrated = {}
+    has_unrated = False
     for tx in transactions:
         symbol = tx["ticker"]
         sign = 1 if tx["transaction_type"] == "BUY" else -1
         net_qty[symbol] = net_qty.get(symbol, 0) + sign * tx["qty"]
-        cost_by_symbol[symbol] = (
-            cost_by_symbol.get(symbol, 0.0) + sign * tx["price"] * tx["qty"]
-        )
+        if tx["currency"] == "USD" and tx["fx_rate"] is None:
+            cost_unrated[symbol] = (
+                cost_unrated.get(symbol, 0.0)
+                + sign * tx["price"] * tx["qty"]
+            )
+            has_unrated = True
+        else:
+            # USD rows use their stored rate; every other currency uses 1
+            # (CAD rows store exactly that; non-USD/CAD rows never reach a
+            # cost that matters — they're excluded from all sums below).
+            rate = tx["fx_rate"] if tx["currency"] == "USD" else 1.0
+            cost_stored[symbol] = (
+                cost_stored.get(symbol, 0.0)
+                + sign * tx["price"] * tx["qty"] * rate
+            )
 
     # (An empty ledger falls through this loop and returns all zeros +
     # null pcts below — a normal state, not an error, same rule as the
@@ -408,10 +478,31 @@ def portfolio_summary():
             )
             quotes[symbol] = None
 
-    # Pass 2 — price the priced slice. held == 0 (fully-sold ticker)
-    # contributes 0 to value and day move, but its net cost still feeds
-    # cost_basis — which is exactly how a realized gain (bought low,
-    # sold high, nothing left) shows up in total_gain.
+    # ONE live USDCAD rate for the whole response — fetched only when
+    # something actually needs converting (a USD-priced holding, or a
+    # legacy NULL-fx row needing the fallback). A CAD-only portfolio
+    # makes no FX call at all. If the rate is unavailable, USD holdings
+    # join "unpriced": without it there is no honest CAD number, and a
+    # fake 1:1 rate would quietly misstate the whole portfolio.
+    needs_live_rate = has_unrated or any(
+        quote is not None and quote["currency"] == "USD"
+        for quote in quotes.values()
+    )
+    live_rate = None
+    if needs_live_rate:
+        try:
+            live_rate = get_fx_rate("USD", "CAD")
+        except Exception:
+            app.logger.warning(
+                "live USDCAD rate unavailable — USD holdings excluded "
+                "from the summary",
+                exc_info=True,
+            )
+
+    # Pass 2 — price the priced slice in CAD. held == 0 (fully-sold
+    # ticker) contributes 0 to value and day move, but its net cost still
+    # feeds cost_basis — which is exactly how a realized gain (bought
+    # low, sold high, nothing left) shows up in total_gain.
     total_value = 0.0
     day_gain = 0.0
     cost_basis = 0.0
@@ -421,9 +512,30 @@ def portfolio_summary():
         if quote is None:
             unpriced.append(symbol)
             continue
-        total_value += held * quote["price"]
-        day_gain += held * quote["change"]  # today's move × position size
-        cost_basis += cost_by_symbol[symbol]
+        # The QUOTE's currency is the live truth (it's the same source the
+        # ledger's currency was derived from at insert time). Only USD↔CAD
+        # conversion is supported: anything else is excluded, not faked.
+        currency = quote["currency"]
+        if currency not in ("USD", "CAD"):
+            app.logger.warning(
+                "summary cannot convert %s (%s) — excluded from all totals",
+                symbol, currency,
+            )
+            unpriced.append(symbol)
+            continue
+        if currency == "USD" and live_rate is None:
+            unpriced.append(symbol)   # no FX → no honest CAD number
+            continue
+        value_rate = live_rate if currency == "USD" else 1.0
+        total_value += held * quote["price"] * value_rate
+        day_gain += held * quote["change"] * value_rate
+        # Cost: stored-rate amounts pass through; legacy unrated amounts
+        # (USD rows with fx_rate NULL) convert at the live rate.
+        cost_basis += (
+            cost_stored.get(symbol, 0.0)
+            + cost_unrated.get(symbol, 0.0)
+              * (live_rate if currency == "USD" else 1.0)
+        )
 
     unpriced.sort()  # stable, human-readable order for the tooltip
 
@@ -451,6 +563,7 @@ def portfolio_summary():
         "total_gain_pct": total_gain_pct,
         "cost_basis": cost_basis,
         "unpriced": unpriced,
+        "currency": "CAD",
     })
 
 
@@ -633,6 +746,83 @@ def validate_tx_fields(body):
         "transaction_type": transaction_type,
     }, None
 
+
+def _derive_fx_rate(currency, transaction_date):
+    """Derive a transaction's conversion FACT: how many CAD one unit of
+    `currency` bought on `transaction_date`.
+
+    THE LEDGER STORES THE HISTORICAL RATE, DELIBERATELY. The Price column
+    and the cost basis describe the PAST — what the shares cost when they
+    were bought — so they convert at the rate of the BUYING day (the
+    USDCAD close on-or-before the transaction date) and freeze there
+    forever. A rate change years later can never rewrite what a past
+    trade cost. Current values (price_now, value, day gain) are a
+    different story — they use the LIVE rate, because they answer "what
+    would a sell bring in today?" (see list_transactions).
+
+    Fallback ladder, best-effort like everything touching Yahoo:
+      1. the date's historical close (the honest fact),
+      2. the live rate (a visible approximation when the date's close is
+         unavailable — the warning log is the audit trail),
+      3. None ("rate unknown") — the ledger fact is still stored; the
+         display layer falls back to the live rate per request, and
+         editing the row later backfills the real date-based fact.
+    """
+    if currency == "CAD":
+        return 1.0  # the true rate — CAD needs no conversion, ever
+    if currency != "USD":
+        # Only USD↔CAD is supported (the user's securities are CAD/USD).
+        # Null is honest: display keeps such rows in their native currency.
+        return None
+
+    try:
+        return get_fx_rate_on("USD", "CAD", transaction_date)
+    except Exception:
+        # TIER 1 at warning: degraded-but-recovered (a live-rate fallback
+        # follows). exc_info carries the actual cause — the thing a WIDE
+        # catch exists for.
+        app.logger.warning(
+            "no USDCAD close on or before %s — falling back to the live rate",
+            transaction_date, exc_info=True,
+        )
+
+    try:
+        return get_fx_rate("USD", "CAD")
+    except Exception:
+        app.logger.warning(
+            "live USDCAD rate unavailable — fx_rate stored as NULL for %s",
+            transaction_date, exc_info=True,
+        )
+        return None
+
+
+def _derive_fx_rates_for_rows(rows, quotes):
+    """Decorate every VALID import row with its fx_rate, memoized per
+    (currency, date) — a batch of 30 rows spanning 3 dates pays for 3
+    history lookups, not 30.
+
+    Shared by BOTH import routes. Preview uses it to SHOW what would be
+    stored; commit uses it to STORE them (each route derives from the
+    same paste independently — commit never trusts preview's work, only
+    the same paste). Rows with no quote are skipped: the caller marks
+    them failed separately, and a row without a currency has no
+    conversion fact to derive.
+    """
+    memo = {}
+    for row in rows:
+        if row["error"] is not None:
+            continue
+        quote = quotes[row["ticker"]]
+        if quote is None:
+            continue  # unquotable — the caller's verdict loop reports it
+        key = (quote["currency"], row["transaction_date"])
+        if key not in memo:
+            memo[key] = _derive_fx_rate(
+                quote["currency"], row["transaction_date"]
+            )
+        row["fx_rate"] = memo[key]
+
+
 @app.route("/api/transactions", methods=["POST"])
 def log_transaction():
     """Record one transaction. The browser POSTs JSON like:
@@ -668,6 +858,10 @@ def log_transaction():
         return jsonify({"error": f"unknown or unquotable symbol: {ticker}"}), 404
     currency = quote["currency"]
 
+    # Derive the conversion FACT (see _derive_fx_rate): the USDCAD close
+    # on the transaction's date, stored once and never recomputed.
+    fx_rate = _derive_fx_rate(currency, fields["transaction_date"])
+
     # All checks passed — write the immutable facts.
     tx_id = db.add_transaction(
         ticker=ticker,
@@ -676,6 +870,7 @@ def log_transaction():
         qty=fields["qty"],
         currency=currency,
         transaction_type=fields["transaction_type"],
+        fx_rate=fx_rate,
     )
 
     # 201 Created, echoing the stored row (note the DB's explicit column
@@ -687,20 +882,48 @@ def log_transaction():
         "price": fields["price"],
         "qty": fields["qty"],
         "currency": currency,
+        "fx_rate": fx_rate,
         "transaction_type": fields["transaction_type"],
     }), 201
 
 
 @app.route("/api/transactions")
 def list_transactions():
-    """Return every transaction, newest first: facts + live math.
+    """Return every transaction, newest first: facts + display math.
 
-    Each row's stored facts (date, price, qty, currency, type) come straight
-    from the DB. On top, this route attaches the display numbers the ledger
-    UI needs — price_now, value, total_gain, total_gain_pct, day_gain,
-    day_gain_pct — computed HERE, per request, from live quotes. This is the
-    facts-only rule working as designed: the numbers exist for exactly one
-    response, then vanish. Nothing stale is ever persisted.
+    Each row's stored facts (date, price, qty, currency, fx_rate, type)
+    come straight from the DB and NEVER change shape — the edit form
+    prefills from them, so a converted number here could never be allowed
+    to flow back into a PUT. On top, this route attaches the display
+    numbers the ledger UI needs — computed HERE, per request. This is the
+    facts-only rule working as designed: the numbers exist for exactly
+    one response, then vanish. Nothing stale is ever persisted.
+
+    DISPLAY CURRENCY (?currency=): "CAD" (the default) or "NATIVE" —
+    this param is what the dashboard's "Show USD in USD" toggle flips.
+    The dashboard's totals (summary, chart) are ALWAYS CAD; this is the
+    only endpoint the toggle touches. The reply's display contract:
+        display_currency  the currency the DISPLAY fields are in — "CAD"
+                          when this row was converted, the stored code
+                          otherwise (so an unconvertible row never lies)
+        price_display     the price in display_currency — for a converted
+                          USD row, price × its STORED fx_rate (a frozen
+                          past fact, never the live rate)
+        value/total_gain/day_gain (+ pcts) — the live math, in
+                          display_currency
+
+    THE TWO-RATE CONTRACT in CAD mode (why one row has two rates):
+        price_display & cost side  → the row's STORED fx_rate (what the
+                                     trade cost in CAD back then)
+        value & day_gain side      → the LIVE rate (what a sell brings
+                                     in TODAY)
+        total_gain                 = CAD value − CAD cost, so its %
+                                     includes currency movement — the
+                                     honest CAD return for a Canadian.
+    A row converts only when it CAN: a USD row needs its stored rate
+    (or, for legacy NULL rows, the live rate) AND — when quoted — a live
+    rate for the value side. Anything unconvertible displays native;
+    nothing is ever faked with a 1:1 rate.
 
     Why decorate server-side? The ledger can hold tickers the user never
     added to the watchlist, so the browser has no other way to price them —
@@ -708,6 +931,12 @@ def list_transactions():
     the architecture rule in AGENTS.md.
     """
     transactions = db.get_transactions()
+
+    # Validate the display-currency key BEFORE doing any work — the same
+    # contract as the chart's ?period= (a named 400 listing the options).
+    display = request.args.get("currency", "CAD").strip().upper()
+    if display not in ("CAD", "NATIVE"):
+        return jsonify({"error": "currency must be one of: CAD, NATIVE"}), 400
 
     # One quote per UNIQUE ticker: a ledger with 30 AAPL trades pays for
     # exactly ONE quote (the 120s cache makes repeats free, and the dict
@@ -725,34 +954,101 @@ def list_transactions():
             # None marks "couldn't quote" — its rows stay facts-only.
             quotes[symbol] = None
 
+    # ONE live USDCAD rate per response, fetched only in CAD mode AND only
+    # when a quoted USD holding needs it (native mode and CAD-only
+    # portfolios never pay for FX). If it fails, USD rows degrade to
+    # native display below — converted-by-default is a convenience, never
+    # a correctness requirement.
+    live_rate = None
+    if display == "CAD" and any(
+        quote is not None and quote["currency"] == "USD"
+        for quote in quotes.values()
+    ):
+        try:
+            live_rate = get_fx_rate("USD", "CAD")
+        except Exception:
+            app.logger.warning(
+                "live USDCAD rate unavailable — USD ledger rows degrade "
+                "to native display",
+                exc_info=True,
+            )
+
     for tx in transactions:
         quote = quotes[tx["ticker"]]
+        # The row's LIVE currency truth: the quote's, or (when the ticker
+        # couldn't be quoted) the stored fact. They agree by construction;
+        # the quote merely wins when both exist.
+        row_currency = quote["currency"] if quote else tx["currency"]
+
+        # CAN this row display in CAD?
+        #   Native mode: never (that's the whole point of the toggle).
+        #   Non-USD row: never needs to — native CAD display IS the CAD
+        #     display, and other currencies aren't supported (honesty
+        #     beats a fake 1:1 rate).
+        #   USD row, quoted: needs the live rate (the value side).
+        #   USD row, unquoted: needs only its STORED rate (the price is a
+        #     past fact — it converts without any live data).
+        if display == "CAD" and row_currency == "USD":
+            converts = (live_rate is not None) if quote is not None \
+                else (tx["fx_rate"] is not None)
+        else:
+            converts = False
+
+        if converts:
+            # The row's cost-side rate: its own stored fact, falling back
+            # to the live rate for legacy NULL rows (a quoted row implies
+            # live_rate is not None here, so the fallback always exists).
+            row_rate = (
+                tx["fx_rate"] if tx["fx_rate"] is not None else live_rate
+            )
+            tx["display_currency"] = "CAD"
+            tx["price_display"] = tx["price"] * row_rate
+        else:
+            tx["display_currency"] = tx["currency"]
+            tx["price_display"] = tx["price"]
+
         if quote is None:
             continue  # undecorated row; the frontend gap-fills with "—"
 
         live_price = quote["price"]
         bought_at = tx["price"]  # the stored fact, NOT the live price
-        tx["price_now"] = live_price
-        tx["value"] = live_price * tx["qty"]
+        tx["price_now"] = live_price  # native — a fact, never displayed
 
-        # TOTAL gain — accumulated since the transaction date. For a BUY
-        # row this is the position's unrealized gain: what it's worth now
-        # vs what was paid. (Its % is this position's return since purchase
-        # — qty matters, 100 shares "gained" more dollars than 1.)
-        tx["total_gain"] = (live_price - bought_at) * tx["qty"]
-        # bought_at > 0 is enforced at insert time, so this division is safe.
-        tx["total_gain_pct"] = (live_price - bought_at) / bought_at * 100
+        if converts:
+            # CAD display: value and day move scale by the LIVE rate;
+            # the gain compares today's CAD value against the CAD cost
+            # AT THE STORED RATE (price_display × qty — the same number
+            # the frontend's group-% math divides by).
+            cad_cost = bought_at * row_rate * tx["qty"]
+            tx["value"] = live_price * tx["qty"] * live_rate
+            tx["total_gain"] = tx["value"] - cad_cost
+            # cad_cost > 0: price, qty and rates are all validated > 0.
+            tx["total_gain_pct"] = tx["total_gain"] / cad_cost * 100
+            tx["day_gain"] = quote["change"] * tx["qty"] * live_rate
+        else:
+            # Native display: today's math, unchanged by this feature.
+            tx["value"] = live_price * tx["qty"]
 
-        # DAILY gain — TODAY's market move applied to the position. The
-        # quote already carries the move (change = live − previous close,
-        # both validated inside get_quote), so this is just that move
-        # scaled by the position size. Its % companion is the quote's own
-        # change_pct UNCHANGED: a % move is a property of the price, not
-        # the position — identical for 1 share or 1000.
+            # TOTAL gain — accumulated since the transaction date. For a BUY
+            # row this is the position's unrealized gain: what it's worth now
+            # vs what was paid. (Its % is this position's return since purchase
+            # — qty matters, 100 shares "gained" more dollars than 1.)
+            tx["total_gain"] = (live_price - bought_at) * tx["qty"]
+            # bought_at > 0 is enforced at insert time, so this division is safe.
+            tx["total_gain_pct"] = (live_price - bought_at) / bought_at * 100
+
+            # DAILY gain — TODAY's market move applied to the position. The
+            # quote already carries the move (change = live − previous close,
+            # both validated inside get_quote), so this is just that move
+            # scaled by the position size.
+            tx["day_gain"] = quote["change"] * tx["qty"]
+
+        # Day % companion — both branches: a % move is a property of the
+        # PRICE, not the position or the currency — identical for 1 share
+        # or 1000, in USD or CAD.
         #
         # Fun edge case: a transaction dated TODAY shows total ≈ day gain
         # (bought today, so its whole lifetime IS today). Correct, not a bug.
-        tx["day_gain"] = quote["change"] * tx["qty"]
         tx["day_gain_pct"] = quote["change_pct"]
 
     return jsonify(transactions)
@@ -768,12 +1064,19 @@ def edit_transaction(tx_id):
     currency are NOT editable (see the section banner above: identity and
     its yfinance-derived fact). If a client sends a "ticker" anyway it is
     ignored outright — the route never reads it.
+
+    The ONE extra thing PUT does beyond POST: re-derive fx_rate from the
+    (possibly corrected) date. The rate is a yfinance fact derived from
+    the DATE, not the ticker — correcting the date while keeping the old
+    rate would store a wrong fact.
     """
     # 404 BEFORE validation: when the id is the wrong part, "no transaction
     # with that id" is the useful answer — field-checking a nonexistent row
     # would just confuse. (Flask's <int:tx_id> converter 404s non-numeric
-    # ids before this code even runs.)
-    if db.get_transaction(tx_id) is None:
+    # ids before this code even runs.) The row itself is kept: its
+    # (non-editable) currency feeds the fx_rate re-derivation below.
+    row = db.get_transaction(tx_id)
+    if row is None:
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
 
     body = request.get_json(silent=True)
@@ -785,16 +1088,18 @@ def edit_transaction(tx_id):
     if error:
         return error
 
-    # update_transaction's SET list only names the four editable columns,
-    # so ticker/currency physically cannot change here. A False return
-    # means the row vanished between the existence check and the UPDATE
-    # (deleted in another window) — same 404 as above.
+    # update_transaction's SET list names the four editable columns PLUS
+    # the date-derived fx_rate, so ticker/currency physically cannot
+    # change here. A False return means the row vanished between the
+    # existence check and the UPDATE (deleted in another window) — same
+    # 404 as above.
     if not db.update_transaction(
         tx_id,
         transaction_date=fields["transaction_date"],
         price=fields["price"],
         qty=fields["qty"],
         transaction_type=fields["transaction_type"],
+        fx_rate=_derive_fx_rate(row["currency"], fields["transaction_date"]),
     ):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
 
@@ -985,11 +1290,11 @@ def import_preview():
     """Parse the paste and quote-check its tickers. Writes NOTHING.
 
     Returns {"rows": [...], "valid_count": n, "invalid_count": m}, where
-    valid rows are decorated with their yfinance-derived "currency". The
-    zero-writes rule is what makes the preview trustworthy: the ledger is
-    untouched, so previewing is always safe, and the user sees exactly
-    what commit will store — including the currency the ticker implies
-    (CM quotes as USD on Yahoo; CM.TO would quote as CAD).
+    valid rows are decorated with their yfinance-derived "currency" AND
+    the date-derived "fx_rate" (the USDCAD close on that row's own date)
+    — so the user sees exactly what commit will store, conversion fact
+    included. The zero-writes rule is what makes the preview trustworthy:
+    the ledger is untouched, so previewing is always safe.
     """
     text, error = _import_text_or_error()
     if error:
@@ -1008,6 +1313,10 @@ def import_preview():
             row["error"] = "unknown or unquotable ticker"
         else:
             row["currency"] = quote["currency"]
+
+    # Same decoration as the currency, one fact deeper: each valid row
+    # shows the conversion rate of ITS OWN date (memoized per date).
+    _derive_fx_rates_for_rows(rows, quotes)
 
     valid_count = sum(1 for row in rows if row["error"] is None)
     return jsonify({
@@ -1038,6 +1347,10 @@ def import_commit():
     rows = parse_import_text(text)
     quotes = _quote_unique_tickers(rows)
 
+    # Derive every valid row's conversion fact up front (memoized per
+    # currency+date) — the commit-side twin of preview's decoration.
+    _derive_fx_rates_for_rows(rows, quotes)
+
     imported_count = 0
     failed = []
     for row in rows:
@@ -1055,7 +1368,8 @@ def import_commit():
             continue
 
         # All checks passed — write the immutable facts (BUY forced by the
-        # parser, currency from the quote, same as hand-logged rows).
+        # parser; currency from the quote; fx_rate from the row's OWN
+        # date — commit trusts the re-parse, never the preview).
         row["currency"] = quote["currency"]
         row["id"] = db.add_transaction(
             ticker=row["ticker"],
@@ -1064,6 +1378,7 @@ def import_commit():
             qty=row["qty"],
             currency=quote["currency"],
             transaction_type=row["transaction_type"],
+            fx_rate=row["fx_rate"],
         )
         imported_count += 1
 

@@ -45,6 +45,19 @@
                     <div class="stock-title">
                         <h2>Your Portfolio</h2>
                         <span class="badge">Main</span>
+                        <!-- The ledger's display-currency toggle. OFF
+                             (default): the whole ledger reads in CAD.
+                             ON: USD securities flip back to their native
+                             USD (CAD rows are unaffected either way).
+                             ONLY the ledger flips — the portfolio total
+                             and the chart below are ALWAYS CAD (main.js
+                             sends ?currency= to /api/transactions and
+                             nothing else). Session-only: every page load
+                             starts in CAD again, by design. -->
+                        <label class="fx-toggle" title="Show USD holdings in their native USD instead of CAD">
+                            <input type="checkbox" id="usd-native-toggle">
+                            Show USD in USD
+                        </label>
                     </div>
                     <!-- Live portfolio numbers. These spans ship blank
                          ("…") on purpose — main.js fills them from
