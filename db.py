@@ -36,7 +36,16 @@ def _connect():
     One short-lived connection per operation is the simplest safe pattern:
     SQLite handles file locking for us, and we never share a connection
     across threads (Flask's dev server can serve requests on several).
+
+    The parent directory is created on demand (exist_ok makes this a no-op
+    once present). WHY: sqlite3.connect() creates the FILE but not the
+    folders leading to it. This machine has instance/ lying around, but a
+    fresh checkout — CI, or the Docker image's first boot on a new volume —
+    doesn't, and the import-time db.init() crashed on it ("unable to open
+    database file"). Self-healing here means the data layer works anywhere,
+    with zero setup.
     """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(DB_PATH)
 
 

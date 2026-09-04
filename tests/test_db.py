@@ -211,3 +211,23 @@ def test_check_constraint_rejects_bad_transaction_type(fresh_db):
     with pytest.raises(sqlite3.IntegrityError):
         db.add_transaction("AAPL", "2026-08-31", 100.0, 1, "USD", "HOLD",
                            1.39)
+
+
+# ── Fresh-checkout self-healing ───────────────────────────────────────
+
+def test_init_creates_missing_instance_directory(tmp_path, monkeypatch):
+    """A fresh checkout has NO instance/ directory (it's gitignored) — and
+    sqlite3.connect() creates the DB file but not the folders above it, so
+    db.init() used to crash there with "unable to open database file".
+    CI's very first run hit exactly this. _connect() now mkdirs the parent
+    on demand; this test recreates the CI situation to keep it fixed:
+    DB_PATH pointed inside a directory that doesn't exist yet."""
+    fresh_path = tmp_path / "brand_new_dir" / "portfolio.db"
+    assert not fresh_path.parent.exists()  # the fresh-checkout condition
+    monkeypatch.setattr(db, "DB_PATH", fresh_path)
+    db.init()  # used to raise sqlite3.OperationalError
+    assert fresh_path.exists()
+    # The schema is real and usable, not just a file on disk.
+    tx_id = db.add_transaction("AAPL", "2026-08-31", 229.5, 10, "USD",
+                               "BUY", 1.39)
+    assert db.get_transaction(tx_id) is not None
