@@ -1,78 +1,71 @@
-# Feature: Ledger group rows react to SELLs (backend group aggregates)
+# Feature: Chart restyle (Option A — restyle Chart.js in place)
 
 ## What & why
 
-The ledger groups transactions by ticker. The group row's Value / Total
-Gain / Day Gain are computed in `groupSortKeys` (`static/js/main.js`) by
-summing **BUY rows only** — a SELL changed nothing but the Qty column.
-Root cause of the user-visible bug: log a SELL and the ticker row's total
-value stays frozen (BUY 10 @ 100 + SELL 4 @ 110 @ price 105 shows value
-1050 — every share ever bought — while you hold 6 worth 630). It also
-silently disagrees with the portfolio summary strip, which nets sells
-correctly (`portfolio_summary`), and with the ledger sorter, which reads
-the same `groupSortKeys`.
+The user dislikes the current chart's look and hover interaction on BOTH pages
+(dashboard portfolio chart + stock detail chart — both come from the ONE shared
+factory `setupTimeframeChart` in `static/js/common.js`). The eyesores:
 
-**Agreed decisions (user):**
-- Option B: the BACKEND computes per-ticker group aggregates (same math
-  and semantics as `/api/portfolio/summary`); `main.js` renders them.
-  Keeps the architecture rule "backend = numbers, frontend = formatting"
-  and makes the math pytest-lockable.
-- Oversold positions (net qty < 0, incl. SELL-only groups) display
-  honestly negative — consistent with the summary route. No validation
-  change.
+- `pointRadius: 3` paints a dot on EVERY data point (fuzzy line on MAX)
+- `tension: 0.3` curves the line — reads as "smoothed", not real data
+- Flat rgba fill wash, dark-ish grid, default Chart.js tooltip (colored
+  square box that only snaps to dots)
 
-## Files
+Chosen direction: **Option A now, Option B (TradingView lightweight-charts)
+later if the user still dislikes it.** Plan approved by user; line flips
+red/green by direction (Google Finance's signature look).
 
-| File | Role |
+Note: the SELL-aggregates feature plan that was in this file turned out to be
+already implemented and committed (81b7399; its tests exist and pass).
+
+## Scope — frontend-only
+
+| File | Change |
 |---|---|
-| `app.py` | `list_transactions`: after per-row decoration, per UNIQUE ticker compute group aggregates and attach them to EVERY row of that ticker (response stays a JSON array; additive fields only). Fields: `group_value`, `group_cost_basis`, `group_total_gain`, `group_total_gain_pct` (null when cost ≤ 0), `group_day_gain`, `group_day_gain_pct`. Absent when the ticker's quote failed (frontend "—" path unchanged). Value side at the LIVE rate (CAD mode), cost side at each row's `price_display` (stored-rate CAD / native) — the summary's two-rate contract. Realized + unrealized blend: `total = value − cost`. |
-| `static/js/main.js` | `groupSortKeys` reads `txs[0].group_*` instead of summing BUY rows; `netQty` stays fact-computed (Qty cell works even unquoted). `buildGroupRow` / `sortGroupRows` follow automatically (they consume the same keys — sort-matches-display rule). "BUY rows only" comments rewritten to the backend-aggregate story. |
-| `tests/test_ledger_groups.py` | NEW — pytest locks the math (below). |
-| `AGENTS.md` | One contract line: group aggregates mirror summary math; fields live on every row of a ticker. |
+| `static/js/common.js` | ONLY the chart section: dataset config, direction colors, gradient fill, interaction + tooltip config, crosshair plugin, and a direction-color update in `refresh()`. Factory signature unchanged → `main.js` / `stock.js` untouched. |
+| `static/style.css` | None expected. |
+| Backend | None. |
 
-## Test plan (pytest — written FIRST, failing until implemented)
+## Concrete changes (common.js)
 
-`tests/test_ledger_groups.py` (fixtures `client`, `fake_market`,
-`seed_transaction` mirroring test_portfolio_summary.py's helper):
+1. `pointRadius: 0` (no dots), `pointHoverRadius: 4` (dot only under cursor)
+2. `tension: 0` — straight segments
+3. Scriptable `backgroundColor`: canvas linear gradient from the line color
+   (top) to transparent (chart bottom) — replaces the flat fill
+4. Direction colors mirroring the CSS palette (`--green-pos: #137333`,
+   `--red-neg: #c5221f`): `refresh()` compares first vs last value and sets
+   `borderColor` + the gradient base; empty data keeps the previous color
+5. Softer y-grid (`#f1f3f4`), borderless axes, x `maxTicksLimit: 8` +
+   `maxRotation: 0`, y `maxTicksLimit: 6`
+6. `interaction: { mode: "index", intersect: false }` — hover follows the
+   cursor anywhere, snaps to the nearest x point
+7. Tooltip restyle: `displayColors: false` (no colored square), dark rounded
+   pill, date title, price body via `formatPrice` (frontend-only formatting
+   rule holds)
+8. ~15-line chart-local crosshair plugin: vertical line at the hovered point
+   (afterDatasetsDraw, from the active tooltip element)
 
-1. `test_buy_only_group_aggregates_match_row_math` — BUY 10 @ 100, quote
-   105/prev 100 → value 1050, cost 1000, gain 50, pct 5%, day_gain 50,
-   day_pct 5. Baseline: aggregates == the old BUY-only sums.
-2. `test_partial_sell_nets_value_and_blends_realized_gain` — BUY 10 @
-   100 + SELL 4 @ 110, quote 105 → value 630, cost 560, gain 70
-   (40 realized + 30 unrealized), pct 12.5%, day_gain 30.
-3. `test_fully_sold_group_shows_realized_gain_null_pct` — BUY 10 @ 100 +
-   SELL 10 @ 110, quote 105 → value 0, cost −100, gain +100, pct null
-   (cost ≤ 0), day_gain 0.
-4. `test_sell_only_group_is_negative` — SELL 4 @ 110, quote 105 →
-   value −420, cost −440, gain +20, pct null.
-5. `test_cad_conversion_two_rate_contract` — USD BUY 10 @ 100 (stored fx
-   1.40), live fx 1.25, quote 105 → value 1312.5 (live rate), cost 1400
-   (stored rate), gain −87.5 (currency movement included); with a SELL:
-   cost nets at each row's OWN stored rate.
-6. `test_native_mode_group_fields_are_native` — same seed, `?currency=
-   NATIVE` → value 1050, cost 1000, gain 50 (no conversion).
-7. `test_unquoted_ticker_has_no_group_fields` — quote fails → rows carry
-   NO `group_*` keys (facts only, as today).
-8. `test_group_fields_are_per_ticker` — two tickers seeded, each row's
-   aggregates describe ITS ticker only.
-9. `test_group_day_pct_is_ticker_move` — day_gain_pct equals
-   quote.change_pct on every row regardless of type mix.
+## Contracts checked
 
-## Implementation steps
+- Factory input/output contract `{canvas, buttonBar, datasetLabel, endpoint,
+  defaultPeriod}` → `{chart, refresh}`: UNCHANGED (callers untouched).
+- Formatting frontend-only: tooltip price goes through `formatPrice`.
+- Timeframe buttons / `PERIOD_MAP` / endpoints: untouched.
+- Chart.js stays the `chart.js@4` CDN script in `base.html` (no dep change).
 
-1. Tests first: write the file, run it, CONFIRM it fails
-   (KeyError/assert on missing `group_*` fields).
-2. `app.py` — group-aggregate pass in `list_transactions`.
-3. `static/js/main.js` — groupSortKeys/buildGroupRow read the fields.
-4. Full `python -m pytest` green (new + all existing).
-5. AGENTS.md contract line.
+## Test plan
 
-## Verification & gates
+Frontend-only visual change — pytest cannot judge chart pixels and the
+backend is untouched, so there are NO new pytest tests (the tests-first rule
+collapses here by design). Verification:
 
-1. Full suite green.
-2. GUI gate: user logs a SELL against an existing BUY, confirms the
-   group row's Qty AND Value (plus gains) move, and agrees with the
-   summary strip; SELL-only/fully-sold groups show the documented
-   shapes ("—" pct, negative value).
-3. Commit gate: commit/push only after explicit user approval.
+1. Full `python -m pytest` stays green as the regression guard.
+2. GUI gate (the real test): user checks BOTH pages — every timeframe button
+   (1D–MAX), the hover readout + crosshair, red/green coloring, gradient fill.
+
+## Steps
+
+1. Restyle `setupTimeframeChart` in `common.js`.
+2. Full `python -m pytest` green.
+3. GUI gate → then, if the user still dislikes the chart, plan the Option B
+   swap (lightweight-charts). Commit gate: explicit yes only.

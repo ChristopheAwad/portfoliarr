@@ -223,7 +223,48 @@ document.addEventListener("click", (event) => {
 // thing the caller passes in: setupTimeframeChart({canvas, buttonBar,
 // datasetLabel, endpoint, defaultPeriod}) builds the Chart.js line, wires
 // the buttons, and hands back { chart, refresh }.
+//
+// The LOOK is the Google Finance signature: straight segments (no curve),
+// no dots except under the cursor, a gradient fading out below the line,
+// and — the part the eye reads first — the line is GREEN when the plotted
+// period gained and RED when it lost, matching the change pills' palette.
 // ---------------------------------------------------------------------------
+
+// Mirror of style.css's gain/loss colors (--green-pos / --red-neg). Canvas
+// code can't read CSS custom properties ("var(--green-pos)" is meaningless
+// outside CSS), so the two hex values are duplicated here — the comment
+// anchors them together for whoever changes one side later.
+const CHART_COLORS = {
+    up:   { line: "#137333", fill: "rgba(19, 115, 51, 0.12)" },
+    down: { line: "#c5221f", fill: "rgba(197, 34, 31, 0.12)" },
+};
+
+// The hover CROSSHAIR: a thin vertical line through whatever point the
+// tooltip is showing, drawn the full height of the plot. A Chart.js plugin
+// is just an object with an id and hook functions the chart calls during
+// its draw cycle — afterDatasetsDraw runs after the line is painted (so
+// the crosshair sits on top of it) but before the tooltip. Passed only to
+// this factory's charts, so nothing else on any page is affected.
+const crosshairPlugin = {
+    id: "crosshair",
+    afterDatasetsDraw(chart) {
+        // No tooltip showing → nothing to draw through. getActiveElements()
+        // returns the data point(s) the tooltip is currently attached to.
+        const active = chart.tooltip?.getActiveElements();
+        if (!active || active.length === 0) return;
+        const x = active[0].element.x; // the hovered point's x pixel
+        const { top, bottom } = chart.chartArea;
+        const ctx = chart.ctx;         // the canvas's 2D drawing pen
+        ctx.save();                    // snapshot pen styles, restore below
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottom);
+        ctx.strokeStyle = "#dadce0";   // Google's hairline gray
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+    },
+};
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod }
@@ -236,6 +277,12 @@ function setupTimeframeChart(
         return null;
     }
 
+    // Which way the CURRENT period moved — "up" (green) or "down" (red).
+    // refresh() recomputes it from the data and BOTH presentational
+    // readers below (borderColor, the gradient's fill color) derive from
+    // it, so one flip recolors line + fill together.
+    let direction = "up";
+
     // Chart.js paints onto the canvas's "2D context" — the object whose
     // methods actually put pixels on it.
     const chart = new Chart(canvas.getContext("2d"), {
@@ -243,9 +290,13 @@ function setupTimeframeChart(
         // look. (Other families: "bar", "doughnut".)
         type: "line",
 
+        // Chart-local plugins: passed HERE they apply to this chart only
+        // (a global registry would leak into every chart we don't own).
+        plugins: [crosshairPlugin],
+
         // Empty by design — refresh() fills these in. The dataset object is
-        // created here so its presentational config (line shade, fill,
-        // tension) lives in ONE place and survives every refresh.
+        // created here so its presentational config lives in ONE place and
+        // survives every refresh.
         data: {
             // labels = x-axis slots, one per data point, from the backend's
             // {"labels": [...], "values": [...]} reply.
@@ -256,15 +307,36 @@ function setupTimeframeChart(
                     // visible in tooltips, since the legend is off below).
                     label: datasetLabel,
                     data: [],
-                    // Google blue line + a faint translucent fill under it.
-                    borderColor: "#1a73e8",
-                    backgroundColor: "rgba(26, 115, 232, 0.1)",
+                    // Direction-driven: refresh() swaps this between the
+                    // green/red pair as soon as data lands.
+                    borderColor: CHART_COLORS.up.line,
+                    // A SCRIPTABLE option: Chart.js CALLS this function on
+                    // every redraw instead of using a fixed value. That's
+                    // how the fill stays a live gradient anchored to the
+                    // plot area — the area's pixel bounds don't exist until
+                    // the chart has laid out, hence the guard — and it
+                    // picks up the current direction color.
+                    backgroundColor: (ctx) => {
+                        const area = ctx.chart.chartArea;
+                        if (!area) return "transparent";
+                        const gradient = ctx.chart.ctx.createLinearGradient(
+                            0, area.top, 0, area.bottom
+                        );
+                        // Colored tint at the top fading to nothing at the
+                        // bottom: the classic "glow under the line".
+                        gradient.addColorStop(0, CHART_COLORS[direction].fill);
+                        gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+                        return gradient;
+                    },
                     fill: true,
-                    // tension bends the line between points: 0 = straight
-                    // segments, higher = smoother curves. ~0.3 looks like
-                    // a finance chart without distorting the data.
-                    tension: 0.3,
-                    pointRadius: 3,
+                    // tension 0 = straight segments between points — the
+                    // data as it IS, not a smoothed impression of it.
+                    tension: 0,
+                    // pointRadius 0 hides the per-point dots entirely (on
+                    // MAX there are hundreds — they turned the line fuzzy);
+                    // the hover dot appears only under the cursor.
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
                 },
             ],
         },
@@ -275,18 +347,46 @@ function setupTimeframeChart(
             // otherwise Chart.js locks in its own width:height ratio.
             responsive: true,
             maintainAspectRatio: false,
+            // The hover contract: mode "index" snaps to the nearest x slot
+            // and intersect: false means the cursor does NOT have to touch
+            // a point — the readout follows you anywhere on the chart.
+            interaction: { mode: "index", intersect: false },
             plugins: {
                 // With only one dataset, the legend swatch adds nothing.
                 legend: { display: false },
+                tooltip: {
+                    // displayColors: false drops the colored square before
+                    // the value — the line above is the color story already.
+                    displayColors: false,
+                    backgroundColor: "#202124",
+                    padding: 10,
+                    cornerRadius: 8,
+                    titleFont: { size: 11, weight: "normal" },
+                    bodyFont: { size: 13, weight: 600 },
+                    callbacks: {
+                        // Same formatting rule as everywhere else in the
+                        // app: the backend sends raw floats, the browser
+                        // formats ("7711.759" -> "7,711.76").
+                        label: (item) => formatPrice(item.parsed.y),
+                    },
+                },
             },
             scales: {
-                x: { grid: { display: false } }, // no vertical gridlines
+                x: {
+                    grid: { display: false },   // no vertical gridlines
+                    border: { display: false }, // no axis line either
+                    // Cap the label count and forbid angled text — crowded
+                    // or slanted date labels were part of the old mess.
+                    ticks: { maxTicksLimit: 8, maxRotation: 0 },
+                },
                 y: {
-                    grid: { color: "#e0e0e0" },
+                    grid: { color: "#f1f3f4" }, // softer than the old gray
+                    border: { display: false },
                     // beginAtZero: false starts the y-axis near the data's
                     // minimum instead of 0 — exactly how real stock charts
                     // make small daily moves visible.
                     beginAtZero: false,
+                    ticks: { maxTicksLimit: 6 },
                 },
             },
         },
@@ -294,7 +394,8 @@ function setupTimeframeChart(
 
     // One refresh cycle: GET endpoint?period=... then swap the arrays and
     // redraw. The presentational config was set once at creation and is
-    // untouched — Chart.js redraws itself on update().
+    // untouched — except the direction color, which is DATA-derived and
+    // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod) {
         try {
             const response = await fetch(`${endpoint}?period=${period}`);
@@ -304,6 +405,17 @@ function setupTimeframeChart(
             // drift between the two ends.
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json(); // {labels, values}
+
+            // Green for a gaining period, red for a losing one: compare
+            // the FIRST and LAST close. values.at(-1) is the LAST element;
+            // the length guard keeps an empty reply from NaN-comparing
+            // (empty data just keeps the previous color).
+            const values = data.values;
+            if (values.length > 0) {
+                direction = values.at(-1) >= values[0] ? "up" : "down";
+                chart.data.datasets[0].borderColor =
+                    CHART_COLORS[direction].line;
+            }
             chart.data.labels = data.labels;
             chart.data.datasets[0].data = data.values;
             chart.update();
