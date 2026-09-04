@@ -640,6 +640,25 @@ a.logo { text-decoration: none; }
     font-size: 10px;
 }
 
+/* Drag-to-reorder headers (main.js sets th.draggable and toggles these
+   classes around a drag). .dragging dims the column being carried so the
+   user can see it has "lifted"; .drop-before/.drop-after draw a caret-like
+   edge on the half of the target header where the drop will land — left
+   edge for "insert before", right edge for "insert after". The accent is
+   the same blue the active sort uses, so the visual vocabulary stays
+   consistent: blue means "the ledger is responding to you". */
+.ledger-table th.dragging {
+    opacity: 0.4;
+}
+
+.ledger-table th.drop-before {
+    box-shadow: inset 3px 0 0 var(--blue-accent);
+}
+
+.ledger-table th.drop-after {
+    box-shadow: inset -3px 0 0 var(--blue-accent);
+}
+
 .ledger-table td {
     padding: 8px;
     border-bottom: 1px solid #f1f3f4;

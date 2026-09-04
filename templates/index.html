@@ -186,23 +186,31 @@
                     <table class="ledger-table">
                         <thead>
                             <tr>
-                                <!-- Date/Type/Price are NOT sortable: a group
-                                     (ticker summary row) has no single date,
-                                     type, or price. The 7 columns that carry
-                                     a data-col ARE sortable — main.js finds
-                                     them by this hook and reorders the GROUP
-                                     rows only (detail rows stay newest-first).
+                                <!-- Every <th> carries a data-col: this row
+                                     is the SINGLE declaration of the
+                                     ledger's columns. main.js reads the
+                                     data-cols at boot (that order is what
+                                     both row builders append cells in),
+                                     lets you DRAG a header to reorder the
+                                     columns, and saves the order to
+                                     localStorage. Date/Type/Price are NOT
+                                     sortable: a group (ticker summary row)
+                                     has no single date, type, or price.
+                                     The 7 columns with class sortable ARE
+                                     click-to-sort — main.js finds them by
+                                     this hook and reorders the GROUP rows
+                                     only (detail rows stay newest-first).
                                      tabindex/role make them keyboard
                                      reachable; aria-sort is set by JS. -->
-                                <th>Date</th>
-                                <th>Type</th>
+                                <th data-col="date">Date</th>
+                                <th data-col="type">Type</th>
                                 <th class="sortable" data-col="ticker"
                                     tabindex="0" role="button"
                                     aria-sort="none">Ticker</th>
                                 <th class="num sortable" data-col="qty"
                                     tabindex="0" role="button"
                                     aria-sort="none">Qty</th>
-                                <th>Price</th>
+                                <th data-col="price">Price</th>
                                 <th class="num sortable" data-col="value"
                                     tabindex="0" role="button"
                                     aria-sort="none">Value</th>
@@ -221,8 +229,10 @@
                                     aria-sort="none">Day Gain %</th>
                                 <!-- Blank header over the trailing actions
                                      column (edit/delete buttons, painted by
-                                     JS on detail rows only). -->
-                                <th class="actions"></th>
+                                     JS on detail rows only). Pinned last by
+                                     the drag logic — never draggable, never
+                                     a drop target. -->
+                                <th class="actions" data-col="actions"></th>
                             </tr>
                         </thead>
                         <tbody id="ledger-body">

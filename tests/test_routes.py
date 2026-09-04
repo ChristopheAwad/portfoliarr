@@ -210,6 +210,70 @@ def test_encoded_index_symbol_url_round_trips(client):
     assert 'data-symbol="^GSPC"' in res.get_data(as_text=True)
 
 
+# ── Ledger header (column order / reorderable columns) ────────────────
+# The ledger's <th> row is the SINGLE declaration of the table's columns:
+# main.js derives the column order from each header's data-col attribute
+# (both row builders key their cells by it, and the drag-to-reorder
+# feature moves the headers themselves). That makes the server-rendered
+# HTML worth locking with tests — a template edit that drops a data-col
+# or adds a 12th column would silently break cell placement in JS.
+
+def ledger_header_tags(html):
+    """Return the <th ...> tag strings of the ledger table's thead, in
+    document order. The dashboard has exactly one .ledger-table; a plain
+    regex scrape (the chips' style) — no fixtures beyond client, no fakes,
+    no network. HTML comments are stripped first: template comments freely
+    mention tags like "<th>" in prose, and comments are not rendered
+    content, so they must not count as columns. The assert-first shape
+    fails LOUDLY if the template restructures the table, rather than
+    passing vacuously on an empty list."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    table = re.search(r'<table class="ledger-table">.*?</table>', html, re.S)
+    assert table, "dashboard has no ledger table"
+    thead = re.search(r"<thead>(.*?)</thead>", table.group(0), re.S)
+    assert thead, "ledger table has no thead"
+    return re.findall(r"<th[^>]*>", thead.group(1))
+
+
+def th_attr(tag, attr):
+    """One attribute's value from a <th ...> tag string, or None when the
+    tag doesn't carry it (e.g. a header missing its data-col hook)."""
+    match = re.search(rf'{attr}="([^"]*)"', tag)
+    return match.group(1) if match else None
+
+
+def test_ledger_header_renders_expected_columns_in_default_order(client):
+    """The ledger <thead> declares exactly 11 columns, each carrying a
+    UNIQUE data-col key, in the default order — the order every consumer
+    assumes: main.js reads it at boot, both row builders append cells in
+    it, and setLedgerMessage's colSpan=11 assumes the count. This is the
+    reordered-columns feature's foundation test: without it, a template
+    edit that added a column without its data-col (or duplicated one)
+    would misplace cells in ways only the eye could catch."""
+    tags = ledger_header_tags(client.get("/").get_data(as_text=True))
+    assert len(tags) == 11  # the colSpan=11 contract, counted for real
+    assert [th_attr(t, "data-col") for t in tags] == [
+        "date", "type", "ticker", "qty", "price", "value",
+        "total_gain", "total_gain_pct", "day_gain", "day_gain_pct",
+        "actions",
+    ]
+
+
+def test_ledger_sortable_headers_match_sort_vocabulary(client):
+    """Exactly 7 headers are sortable, and their data-col values are
+    precisely the keys SORT_COLS (main.js) knows how to sort by — the
+    HTML↔JS contract. A sortable header whose data-col isn't in SORT_COLS
+    would click with no effect; a SORT_COLS key with no header would be
+    dead code. date/type/price/actions stay non-sortable by design (a
+    group summary has no single date/type/price; actions is a button
+    column)."""
+    tags = ledger_header_tags(client.get("/").get_data(as_text=True))
+    sortable = {th_attr(t, "data-col") for t in tags
+                if "sortable" in (th_attr(t, "class") or "").split()}
+    assert sortable == {"ticker", "qty", "value", "total_gain",
+                        "total_gain_pct", "day_gain", "day_gain_pct"}
+
+
 # ── Transactions: POST (log) ──────────────────────────────────────────
 
 def test_log_transaction_201_echoes_db_vocabulary(client, fake_market):

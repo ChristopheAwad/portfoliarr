@@ -439,6 +439,62 @@ function renderSortIndicators() {
     });
 }
 
+// --- Reorderable columns: the ONE source of column order ------------------
+// The template's static <th> row declares the ledger's columns (every
+// header carries a data-col). This code reads that row ONCE here — the
+// DOM is ready because the page scripts load at the end of <body> — and
+// from then on, ledgerColOrder is the order everything consults:
+//   - the drag logic reorders this array when you drop a header,
+//   - the <th> row itself is physically re-ordered to match,
+//   - both row builders append their cells in this order.
+// Reordering a column is therefore a change to ONE array, never an edit
+// scattered across builders.
+
+// The template's default order, read live so adding a column to the HTML
+// (with its data-col) is the ONLY step needed — no JS list to keep in sync.
+const ledgerDefaultOrder =
+    [...ledgerHead.querySelectorAll("th")].map((th) => th.dataset.col);
+
+// The ACTIVE order. Starts as the template default; the boot block below
+// may replace it with a saved order from localStorage. Lives OUTSIDE the
+// DOM for the same reason as ledgerSort: the tbody rebuilds every poll
+// cycle, and both builders read this array on every rebuild.
+let ledgerColOrder = [...ledgerDefaultOrder];
+
+// Restore a saved order, if one exists AND is still valid. Validation is
+// deliberately strict: the saved value must be a PERMUTATION of the live
+// headers — same keys, same count, no duplicates — with actions last
+// (it's pinned by design). Anything else (absent, corrupt, or saved by an
+// older column set after the template gains/loses a column) silently falls
+// back to the default order rather than rendering a broken table.
+try {
+    const saved = JSON.parse(localStorage.getItem("ledgerColOrder"));
+    const isValid =
+        Array.isArray(saved) &&
+        saved.length === ledgerDefaultOrder.length &&
+        new Set(saved).size === saved.length &&
+        saved.every((col) => ledgerDefaultOrder.includes(col)) &&
+        saved[saved.length - 1] === "actions";
+    if (isValid) ledgerColOrder = saved;
+} catch {
+    // getItem returned null (first visit) → JSON.parse(null) → null.length
+    // throws → we land here and keep the default order. Exactly right.
+}
+
+// Move the actual <th> elements into ledgerColOrder's order. append() on
+// an EXISTING child moves it (DOM nodes can't be in two places at once),
+// so re-appending the headers one by one reorders the row in place. The
+// elements carry everything with them — data-col, tabindex, aria-sort —
+// and the sort listeners live on the <thead> (delegated), so click-to-sort
+// works identically no matter where a header sits.
+function paintLedgerColOrder() {
+    const headRow = ledgerHead.querySelector("tr");
+    for (const col of ledgerColOrder) {
+        headRow.append(headRow.querySelector(`th[data-col="${col}"]`));
+    }
+}
+paintLedgerColOrder(); // boot: apply the saved (or default) order
+
 // Build ONE transaction detail row — the same 10 data cells the flat table
 // always had, plus a trailing actions cell (edit/delete), extracted from
 // renderLedger so the grouped view can stamp out one per transaction under
@@ -549,9 +605,22 @@ function buildTxRow(tx) {
     deleteBtn.dataset.id = tx.id;
     actionsCell.append(editBtn, deleteBtn);
 
-    row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
-               valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell,
-               actionsCell);
+    // Append in ledgerColOrder order — the same array the <th> row is
+    // ordered by. Cells are keyed by data-col and pulled from the shared
+    // array, so reordering a column stays a one-array change; no builder
+    // edit. The ?? blank-cell fallback is defensive only: the template
+    // test locks the 11 data-col keys to exactly these map keys, so a
+    // mismatch means a template column gained/lost without its JS cell —
+    // it degrades to a blank cell instead of littering the row with the
+    // text "undefined" (what append() would make of a missing cell).
+    const cells = {
+        date: dateCell, type: typeCell, ticker: tickerCell, qty: qtyCell,
+        price: priceCell, value: valueCell, total_gain: gainCell,
+        total_gain_pct: gainPctCell, day_gain: dayGainCell,
+        day_gain_pct: dayPctCell, actions: actionsCell,
+    };
+    row.append(...ledgerColOrder.map(
+        (col) => cells[col] ?? document.createElement("td")));
     return row;
 }
 
@@ -727,9 +796,17 @@ function buildGroupRow(ticker, txs) {
     // individual transactions, visible when the group is expanded.
     const actionsCell = document.createElement("td");
 
-    row.append(dateCell, typeCell, tickerCell, qtyCell, priceCell,
-               valueCell, gainCell, gainPctCell, dayGainCell, dayPctCell,
-               actionsCell);
+    // Same keyed-append as buildTxRow above — the two builders MUST order
+    // cells identically, and sourcing the order from the same
+    // ledgerColOrder array is what guarantees they can never drift.
+    const cells = {
+        date: dateCell, type: typeCell, ticker: tickerCell, qty: qtyCell,
+        price: priceCell, value: valueCell, total_gain: gainCell,
+        total_gain_pct: gainPctCell, day_gain: dayGainCell,
+        day_gain_pct: dayPctCell, actions: actionsCell,
+    };
+    row.append(...ledgerColOrder.map(
+        (col) => cells[col] ?? document.createElement("td")));
     return row;
 }
 
@@ -940,6 +1017,111 @@ ledgerHead.addEventListener("keydown", (event) => {
         applyLedgerSort(th.dataset.col);
     }
 });
+
+// --- Drag-to-reorder columns ----------------------------------------------
+// HTML5 drag & drop on the <th>s. Two behaviors share one header and the
+// browser splits them for us: a quick click (down + up, no movement) fires
+// click → column sort above; holding and MOVING fires dragstart → reorder
+// here. dragstart can never result from a plain click, so the two never
+// collide — no threshold logic needed.
+//
+// Honest limitation: HTML5 drag events are pointer-only — keyboard users
+// keep the default (or last saved) order and full click-to-sort, which
+// stays keyboard-reachable via the tabindex headers above.
+
+// Which column is being dragged. Module-level so dragstart's record and
+// dragend's cleanup (different listeners, different elements) share it.
+let draggedCol = null;
+
+// Commit a drop: splice the dragged column to its new slot, then make
+// everything agree — the state array, the <th> row, localStorage, and the
+// visible tbody (re-rendered NOW; waiting up to 60s for the next poll
+// would feel broken).
+function moveLedgerColumn(sourceCol, targetCol, before) {
+    if (sourceCol === targetCol) return; // dropped on itself — no-op
+
+    const from = ledgerColOrder.indexOf(sourceCol);
+    const at = ledgerColOrder.indexOf(targetCol);
+    if (from === -1 || at === -1) return; // unknown keys — never reorder
+
+    // Splice semantics: remove the source first, THEN recompute the
+    // insert index from the target's shifted position. Everything right
+    // of the removed source slides left by one, so the target's index
+    // after removal is the honest insertion point; `before` selects the
+    // target's slot (0 = land on its left) vs the one after it (1).
+    ledgerColOrder.splice(from, 1);
+    const insertAt = ledgerColOrder.indexOf(targetCol) + (before ? 0 : 1);
+    ledgerColOrder.splice(insertAt, 0, sourceCol);
+
+    // actions can never end up mid-table: it's not draggable (so never a
+    // source) and never a drop target (its <th> gets no drag listeners),
+    // so nothing can be spliced around it.
+
+    // Persist. Best-effort on purpose: some privacy modes throw on
+    // localStorage writes, and a failed SAVE should never sink a
+    // successful REORDER — the order still lives in memory (and the DOM)
+    // for this session; it just won't survive a reload. Mirrors the
+    // try/catch around the boot-time read.
+    try {
+        localStorage.setItem("ledgerColOrder", JSON.stringify(ledgerColOrder));
+    } catch { /* persistence unavailable — session-only order */ }
+    paintLedgerColOrder();
+    renderLedger(lastTransactions);
+}
+
+for (const th of ledgerHead.querySelectorAll("th")) {
+    // The actions column is PINNED last: skip it entirely — no draggable
+    // attribute, no listeners — so it can neither be dragged nor dropped on.
+    if (th.dataset.col === "actions") continue;
+    th.draggable = true;
+
+    th.addEventListener("dragstart", (event) => {
+        draggedCol = th.dataset.col;
+        th.classList.add("dragging");
+        // Firefox refuses to start a drag with an empty dataTransfer —
+        // setting the payload is also a natural place to announce the
+        // dragged column to whatever the OS does with drag data.
+        event.dataTransfer.setData("text/plain", draggedCol);
+        event.dataTransfer.effectAllowed = "move";
+    });
+
+    th.addEventListener("dragover", (event) => {
+        // Guard + REQUIRED preventDefault: dragover is what licences a
+        // drop — without preventDefault here, the drop event never fires.
+        if (!draggedCol || draggedCol === th.dataset.col) return;
+        event.preventDefault();
+        // Left half of the header = "insert before it", right half =
+        // "insert after it" — clientX against the header's own box, so a
+        // child element (the ▲/▼ indicator span) can't skew the split.
+        const rect = th.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width / 2;
+        th.classList.toggle("drop-before", before);
+        th.classList.toggle("drop-after", !before);
+    });
+
+    th.addEventListener("dragleave", () => {
+        th.classList.remove("drop-before", "drop-after");
+    });
+
+    th.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const rect = th.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width / 2;
+        th.classList.remove("drop-before", "drop-after");
+        moveLedgerColumn(draggedCol, th.dataset.col, before);
+    });
+
+    // dragend fires whether the drop succeeded, was cancelled, or missed
+    // every target — the one place cleanup is guaranteed. Stray indicator
+    // classes are cleared here too, not just on dragleave/drop.
+    th.addEventListener("dragend", () => {
+        draggedCol = null;
+        th.classList.remove("dragging");
+        ledgerHead.querySelectorAll("th").forEach((t) => {
+            t.classList.remove("drop-before", "drop-after");
+        });
+    });
+}
 
 // Edit/delete clicks: a SECOND delegated listener on the tbody, kept
 // separate from the group-toggle listener so each concern reads alone.
