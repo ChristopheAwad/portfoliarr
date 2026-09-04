@@ -150,6 +150,28 @@ def test_incomplete_quote_data_raises(fake_yf):
         market_data.get_quote("AAPL")
 
 
+def test_quote_rejects_nan_price(fake_yf):
+    """NaN is not a price — and the `not price` guard can't even SEE it:
+    NaN is truthy in Python (only 0/None/"" are falsy), so it sails past
+    `if not price`. Unchecked, a NaN lastPrice rides every payload that
+    echoes a quote — and jsonify emits a bare `NaN` token, which is
+    INVALID JSON for a browser (JSON.parse throws on it). One NaN quote
+    would blank the ledger/watchlist/summary the same way a NaN close
+    blanks a chart. Same named ValueError as the None case."""
+    fake_yf.state["fast_info"]["lastPrice"] = float("nan")
+    with pytest.raises(ValueError):
+        market_data.get_quote("AAPL")
+
+
+def test_quote_rejects_nan_previous_close(fake_yf):
+    """The same NaN-truthiness hole, other input: change and change_pct
+    are DERIVED from previous_close, so a NaN there poisons the derived
+    fields even when the price itself is fine. Guarded identically."""
+    fake_yf.state["fast_info"]["previousClose"] = float("nan")
+    with pytest.raises(ValueError):
+        market_data.get_quote("AAPL")
+
+
 # ── get_name: permanent cache ─────────────────────────────────────────
 
 def test_get_name_is_cached_for_the_process_lifetime(fake_yf):
@@ -197,6 +219,51 @@ def test_history_intraday_bars_use_time_labels(fake_yf):
     result = market_data.get_history("AAPL", "1D")
     assert result == {"09:30": 150.0, "09:35": 151.0}
     assert ("AAPL", "1d", "5m") in fake_yf.calls
+
+
+# ── get_history: NaN closes ───────────────────────────────────────────
+# (Regression suite for the blank-chart outage of Sep 2026: Yahoo's
+# current-day bar can ship Close = NaN, and a NaN that reached a chart
+# payload left the whole chart blank — see the route-level tests in
+# test_stock.py / test_routes.py for the end-to-end proof.)
+
+def test_history_skips_nan_close_bars(fake_yf):
+    """A NaN Close is NOT a price — it's "no bar printed yet" (Yahoo ships
+    this for the in-progress current-day bar; observed live on META's
+    2026-09-03 daily bar). Left in, it poisons every consumer: both chart
+    routes would emit a bare `NaN` token, which browsers' JSON.parse
+    rejects, so response.json() throws and the chart never paints. Skip
+    the row — the chart's line just ends one bar earlier, exactly as if
+    the bar had never arrived."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [100.0, float("nan"), 110.0]},
+        index=pd.to_datetime(["2026-08-28", "2026-08-31", "2026-09-01"]),
+    )
+    result = market_data.get_history("AAPL", "5D")
+    assert result == {"2026-08-28": 100.0, "2026-09-01": 110.0}
+
+
+def test_history_skips_nan_intraday_bars(fake_yf):
+    """Same skip for intraday (1D, 5-minute) bars — a session in progress
+    can carry NaN closes mid-series too."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [150.0, float("nan"), 151.5]},
+        index=pd.to_datetime(
+            ["2026-08-31 09:30", "2026-08-31 09:35", "2026-08-31 09:40"]),
+    )
+    result = market_data.get_history("AAPL", "1D")
+    assert result == {"09:30": 150.0, "09:40": 151.5}
+
+
+def test_history_all_nan_bars_yield_empty_dict(fake_yf):
+    """When EVERY bar is NaN the result is {} — a normal empty history,
+    not an exception (routes already serve an empty close dict as a blank
+    chart, mirroring the empty-DataFrame behaviour)."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [float("nan"), float("nan")]},
+        index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
+    )
+    assert market_data.get_history("AAPL", "5D") == {}
 
 
 # ── get_stats: the detail page's stats grid ───────────────────────────

@@ -195,11 +195,15 @@ def portfolio_history():
     to "5D" (the chart's default view, matching the 5D button's `active`
     class in index.html). Anything else gets a 400.
 
-    Algorithm: walk every trading day in the range forward, keeping a
+Algorithm: walk every trading day in the range forward, keeping a
     running "net quantity held" per ticker (buys add, sells subtract),
-    and at each day multiply that quantity by the ticker's close. Sum
-    across tickers = portfolio value that day. Before a ticker's first
-    buy its quantity is 0, so it contributes nothing until you own it.
+    and at each day multiply that quantity by the ticker's close price
+    that day. Sum across tickers = portfolio value that day. Before a
+    ticker's first buy its quantity is 0, so it contributes nothing
+    until you own it. A day where a held ticker printed no bar (a
+    holiday on its market, Yahoo's unfinalized current-day bar) prices
+    the position at its last KNOWN close — carried forward, never at
+    zero, because a holding doesn't evaporate between closes.
     """
     # Validate the timeframe key BEFORE doing any work. get_history()
     # indexes PERIOD_MAP directly, so a bad key would KeyError mid-loop;
@@ -307,6 +311,7 @@ def portfolio_history():
     # yet. A Saturday buy therefore lands on the NEXT trading day's bar,
     # which is the honest approximation available to us.
     net_qty = {}
+    last_closes = {}  # symbol → its most recent known close (forward-fill)
     values = []
     tx_index = 0        # next un-applied daily transaction (advances through
                         # the sorted list); unused in the intraday branch
@@ -347,7 +352,26 @@ def portfolio_history():
         for symbol, held in net_qty.items():
             if held == 0:
                 continue
-            close = histories[symbol].get(label, 0)
+            # FORWARD-FILL for days the ticker printed no bar: a holiday
+            # on its market, or the unfinalized current-day bar (whose
+            # NaN close get_history already drops). A position you still
+            # hold is worth its last known close — pricing the gap at 0
+            # painted a cliff at the chart's end (and dipped every
+            # one-market holiday), implying the holding lost its whole
+            # value when the truth is "no fresh price printed yet".
+            # Labels walk forward, so last_closes always holds THIS
+            # label's most recent known close. A ticker with NO bar at
+            # all (dead/delisted — get_history raised) has nothing to
+            # carry and contributes 0 as before; one that delists
+            # mid-period freezes at its last price — the ledger stays
+            # the truth for what is held.
+            close = histories[symbol].get(label)
+            if close is not None:
+                last_closes[symbol] = close
+            else:
+                close = last_closes.get(symbol)
+                if close is None:
+                    continue   # never traded in range → contributes 0
             currency = currency_by_symbol.get(symbol)
             if currency == "USD":
                 if live_rate is None:
@@ -355,9 +379,6 @@ def portfolio_history():
                 close *= live_rate
             elif currency != "CAD":
                 continue       # unsupported currency — contributes 0
-            # .get(label, 0): a day where Yahoo has no bar for this
-            # ticker (holiday, delisted) counts as holding it at 0 —
-            # a deliberate flat line rather than a gap.
             total += held * close
         values.append(total)
 

@@ -8,6 +8,7 @@ search.
 This module knows nothing about Flask or HTTP — routes decide that.
 """
 
+import math
 import time
 
 import yfinance as yf
@@ -70,7 +71,14 @@ def get_quote(symbol):
 
     # 3. Defensive guard: turn a would-be ZeroDivisionError (or None price)
     #    into a deliberate, named error with a useful message.
-    if not price or not previous_close:
+    #    The isnan checks matter because NaN is TRUTHY in Python — `not
+    #    price` cannot see it — and a NaN that slipped through would ride
+    #    every quote-bearing payload as a bare `NaN` token, which is
+    #    INVALID JSON for browsers (their JSON.parse throws and the whole
+    #    section degrades). A NaN here means Yahoo answered nonsense, not
+    #    "price = 0" — raise, and the route layer degrades per its rules.
+    if (not price or not previous_close
+            or math.isnan(price) or math.isnan(previous_close)):
         raise ValueError(f"incomplete quote data for {symbol}")
 
     # 4. Build the payload — raw floats only; formatting is the frontend's job
@@ -203,11 +211,22 @@ def get_history(symbol, period_key):
     # string: the date part for daily bars, the time part for intraday.
     result = {}
     for ts, row in df.iterrows():
+        # NaN close = "no bar printed yet" — Yahoo ships this on the
+        # in-progress current-day bar (observed live: META's daily bar
+        # carried NaN while its live quote was healthy). A NaN is not a
+        # price: it would ride the chart payload as a bare `NaN` token,
+        # which is INVALID JSON for browsers — their response.json()
+        # throws and the chart never paints ("works for some tickers,
+        # not others"). Skipping the row is the honest degradation: the
+        # line simply ends one bar earlier, as if the bar never arrived.
+        close = float(row["Close"])
+        if math.isnan(close):
+            continue
         # Daily bars: "YYYY-MM-DD" (the first 10 chars of the ISO text).
         # Intraday bars: keep just the "HH:MM" time to keep labels short.
         label = ts.strftime("%Y-%m-%d") if timeframe["interval"] == "1d" \
             else ts.strftime("%H:%M")
-        result[label] = float(row["Close"])
+        result[label] = close
     return result
 
 

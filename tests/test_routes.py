@@ -30,6 +30,9 @@
 import pytest
 
 import db
+import market_data
+import pandas as pd
+from types import SimpleNamespace
 
 # NAME-COLLISION SUBTLETY (worth knowing!): app.py contains a Flask
 # INSTANCE also named `app`. So `from app import app` hands us the Flask
@@ -471,3 +474,85 @@ def test_history_fx_failure_makes_usd_holdings_contribute_zero(
 
     body = client.get("/api/portfolio/history?period=5D").get_json()
     assert body["values"] == [500.0]   # RY.TO only
+
+
+def test_history_nan_close_carries_forward_and_stays_strict_json(
+        client, monkeypatch):
+    """END-TO-END regression for the blank-chart outage (Sep 2026), the
+    dashboard's chart: one held ticker's current-day bar shipping
+    Close = NaN (Yahoo's in-progress bar) used to poison that day's total
+    — the bare `NaN` token made the WHOLE payload invalid JSON, the
+    browser's response.json() threw, and the portfolio chart never
+    painted even though every other ticker was healthy. The NaN bar is
+    now dropped at the data layer, and the missing-bar rule below prices
+    the still-held position at its LAST KNOWN close instead of 0 — no
+    end-of-chart cliff while Yahoo hasn't printed a fresh close yet.
+
+    Deliberately NOT fake_market: its dict-lookup fake REPLACES
+    app.get_history and would bypass the data layer where the fix lives.
+    market_data.yf is patched instead (where market_data uses it), so the
+    REAL get_history runs and the route sees exactly what production
+    would: clean closes only. Both tickers are seeded CAD, so no FX call
+    is involved."""
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, period=None, interval="1d"):
+            return {
+                "META": pd.DataFrame(
+                    {"Close": [100.0, float("nan")]},
+                    index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
+                ),
+                "FETH.TO": pd.DataFrame(
+                    {"Close": [50.0, 46.0]},
+                    index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
+                ),
+            }[self.symbol]
+
+    monkeypatch.setattr(market_data, "yf",
+                        SimpleNamespace(Ticker=FakeTicker))
+    seed_transaction(ticker="META", date="2026-08-28", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="FETH.TO", date="2026-08-28", qty=5,
+                     currency="CAD")
+
+    res = client.get("/api/portfolio/history?period=5D")
+    assert res.status_code == 200
+    assert b"NaN" not in res.data       # strict-JSON clean on the wire
+    body = res.get_json()
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    # 08-28: 10×100 (META) + 5×50 (FETH.TO) = 1250.  08-31: META printed
+    # no bar (its NaN one was dropped at the data layer) → carried at
+    # 100.0, the last known close → 10×100 + 5×46 = 1230. Forward-fill
+    # keeps the line honest: a holding doesn't evaporate just because
+    # Yahoo hasn't finalized a fresh close yet.
+    assert body["values"] == [1250.0, 1230.0]
+
+
+def test_history_missing_bar_carries_last_known_close(client, fake_market):
+    """The forward-fill rule, mid-series: a day where a held ticker
+    printed no bar (a holiday on ITS market, an unfinalized current-day
+    bar...) prices the position at its LAST KNOWN close — never at 0,
+    which painted a cliff implying the holding lost its whole value.
+    AAPL prints on every label; RY.TO skips the middle one and is carried
+    at 50.0 across the gap until its next close. (The old 0-fill would
+    have dipped 08-28 to 1×110 + 10×0 = 510. A ticker with NO bars at all
+    — nothing to carry — still contributes 0, locked by the dead-ticker
+    test above.)"""
+    seed_transaction(ticker="AAPL", date="2026-08-27", qty=1,
+                     currency="CAD")
+    seed_transaction(ticker="RY.TO", date="2026-08-27", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-27": 100.0, "2026-08-28": 110.0, "2026-08-31": 120.0,
+    }
+    fake_market.histories["RY.TO"] = {
+        "2026-08-27": 50.0, "2026-08-31": 52.0,   # 08-28 deliberately absent
+    }
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["labels"] == ["2026-08-27", "2026-08-28", "2026-08-31"]
+    # 08-27: 1×100 + 10×50 = 600.  08-28: 1×110 + 10×50 carried = 610.
+    # 08-31: 1×120 + 10×52 = 640.
+    assert body["values"] == [600.0, 610.0, 640.0]

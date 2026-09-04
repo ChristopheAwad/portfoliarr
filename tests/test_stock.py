@@ -14,7 +14,10 @@
 
 import pytest
 
+import market_data
+import pandas as pd
 from conftest import make_quote
+from types import SimpleNamespace
 
 
 # ── Page route ────────────────────────────────────────────────────────
@@ -125,3 +128,43 @@ def test_stock_history_failure_returns_404(client, fake_market):
     res = client.get("/api/stock/BAD/history?period=5D")
     assert res.status_code == 404
     assert "BAD" in res.get_json()["error"]
+
+
+def test_stock_history_nan_last_bar_is_dropped_end_to_end(client, monkeypatch):
+    """END-TO-END regression for the blank-chart outage (Sep 2026): Yahoo's
+    current-day bar can ship Close = NaN (observed live on META). The NaN
+    used to reach the JSON payload as a bare `NaN` token — invalid JSON
+    for a browser — so response.json() threw in the catch block and the
+    chart never painted, while sibling tickers with clean bars rendered
+    fine ("works for some tickers, not others").
+
+    Deliberately NOT fake_market: its dict-lookup fake REPLACES
+    app.get_history, which would bypass the data layer this fix lives in.
+    Instead market_data.yf is patched (where market_data uses it) and the
+    REAL get_history runs — app.get_history IS that same function object,
+    imported from market_data at import time.
+
+    The raw-bytes assertion matters: res.get_json() parses NaN leniently
+    and could NOT catch this bug — b"NaN" on the wire is what browsers
+    choke on."""
+    class FakeTicker:
+        def __init__(self, symbol):
+            pass
+
+        def history(self, period=None, interval="1d"):
+            return pd.DataFrame(
+                {"Close": [578.02, 592.85, float("nan")]},
+                index=pd.to_datetime(
+                    ["2026-08-28", "2026-09-02", "2026-09-03"]),
+            )
+
+    monkeypatch.setattr(market_data, "yf",
+                        SimpleNamespace(Ticker=FakeTicker))
+
+    res = client.get("/api/stock/META/history?period=5D")
+    assert res.status_code == 200
+    assert b"NaN" not in res.data          # strict-JSON clean on the wire
+    assert res.get_json() == {
+        "labels": ["2026-08-28", "2026-09-02"],   # NaN bar's label is gone
+        "values": [578.02, 592.85],
+    }

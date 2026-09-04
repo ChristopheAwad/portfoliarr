@@ -79,6 +79,20 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   60s poll. Group rows with an unavailable value ("—", e.g. a SELL-only
   group's Total Gain %, or an unquoted group's live cells) sort last in
   both directions.
+- **A NaN from Yahoo is not a number, and it must never reach a JSON
+  payload.** Flask's `jsonify` emits a bare `NaN` token, which is invalid
+  JSON for browsers — their `response.json()` throws and the whole section
+  (chart, ledger, summary...) renders as unavailable, even when every other
+  symbol was healthy. Yahoo ships NaN closes on the unfinalized current-day
+  bar (and can ship NaN in quotes; note NaN is truthy, so `not price` can't
+  catch it). The data layer defends at the source: `get_history` drops
+  NaN-close bars (a NaN close = "no bar printed yet"), and `get_quote`
+  rejects NaN prices/previous-closes. The portfolio chart then prices a
+  day with no bar for a held ticker at that ticker's LAST KNOWN close,
+  carried forward (a position doesn't evaporate between closes; a ticker
+  with no bars at all still contributes 0). The stock-page chart is not
+  forward-filled — it plots one ticker's own closes, so ending at the last
+  real bar is the honest picture there.
 
 ## Temporary Decisions (will need rework in the future)
 
