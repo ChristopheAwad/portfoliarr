@@ -144,7 +144,11 @@ a.logo { text-decoration: none; }
     padding: 0 16px;
 }
 
-/* Index Chips Header */
+/* Index Chips Header. Each chip is an <a> to the stock detail page — the
+   browser's default anchor look (blue text, underline) is stripped so the
+   card keeps its shape, then "clickable" is re-signalled on hover/focus
+   with a border accent, the same quiet affordance the sortable ledger
+   headers use. */
 .indices-bar {
     display: flex;
     gap: 12px;
@@ -161,6 +165,14 @@ a.logo { text-decoration: none; }
     gap: 8px;
     font-size: 13px;
     align-items: center;
+    color: inherit;          /* anchor blue would tint the name span */
+    text-decoration: none;   /* the card IS the link, no underline */
+}
+
+.chip:hover,
+.chip:focus-visible {
+    border-color: var(--blue-accent);
+    outline: none; /* we supply our own focus cue via the border */
 }
 
 .index-name { font-weight: 600; }

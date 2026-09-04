@@ -12,28 +12,35 @@
 
         <!-- Market Index Chips. data-symbol is the hook main.js uses to find
              each chip (by meaning, not position). Every chip here is managed:
-             main.js blanks them to "…" on load and fills with live data. -->
+             main.js blanks them to "…" on load and fills with live data.
+             Each chip is ALSO a real <a> to its detail page — a plain anchor
+             (not a JS click handler) gives native middle-click / open-in-
+             new-tab / keyboard Enter for free, same rule as the ledger's
+             ticker links. url_for percent-encodes ^ (illegal raw in a URL)
+             → /stock/%5EGSPC; Flask decodes it back on the way in. Keep
+             data-symbol and url_for's symbol in sync — same ticker, two
+             hooks: one for JS, one for the browser. -->
         <section class="indices-bar">
-            <div class="chip" data-symbol="^GSPC">
+            <a class="chip" data-symbol="^GSPC" href="{{ url_for('stock_page', symbol='^GSPC') }}">
                 <span class="index-name">S&P 500</span>
                 <span class="index-price">5,088.80</span>
                 <span class="index-change pos">+0.42%</span>
-            </div>
-            <div class="chip" data-symbol="^IXIC">
+            </a>
+            <a class="chip" data-symbol="^IXIC" href="{{ url_for('stock_page', symbol='^IXIC') }}">
                 <span class="index-name">Nasdaq</span>
                 <span class="index-price">16,000.10</span>
                 <span class="index-change pos">+0.83%</span>
-            </div>
-            <div class="chip" data-symbol="^GSPTSE">
+            </a>
+            <a class="chip" data-symbol="^GSPTSE" href="{{ url_for('stock_page', symbol='^GSPTSE') }}">
                 <span class="index-name">TSX</span>
                 <span class="index-price">38,989.84</span>
                 <span class="index-change neg">-0.15%</span>
-            </div>
-            <div class="chip" data-symbol="BTC-USD">
+            </a>
+            <a class="chip" data-symbol="BTC-USD" href="{{ url_for('stock_page', symbol='BTC-USD') }}">
                 <span class="index-name">Bitcoin</span>
                 <span class="index-price">2,016.69</span>
                 <span class="index-change pos">+0.10%</span>
-            </div>
+            </a>
         </section>
 
         <!-- Main Dashboard Content Grid -->

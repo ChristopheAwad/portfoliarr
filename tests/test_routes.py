@@ -32,7 +32,9 @@ import pytest
 import db
 import market_data
 import pandas as pd
+import re
 from types import SimpleNamespace
+from urllib.parse import quote
 
 # NAME-COLLISION SUBTLETY (worth knowing!): app.py contains a Flask
 # INSTANCE also named `app`. So `from app import app` hands us the Flask
@@ -169,6 +171,43 @@ def test_indices_all_succeed_returns_full_list(client, fake_market):
     res = client.get("/api/indices")
     assert res.status_code == 200
     assert len(res.get_json()) == len(INDEX_SYMBOLS)
+
+
+# ── Dashboard page (the indices chips) ────────────────────────────────
+
+def dashboard_chip_tags(html):
+    """Pull each chip's opening tag out of the rendered dashboard HTML,
+    keyed by its data-symbol — the same hook main.js fills live quotes
+    by. (The chips are static template HTML, so this is a pure string
+    check: no fixtures, no fakes, no network.)"""
+    tags = re.findall(r'<a class="chip"[^>]*>', html)
+    return {re.search(r'data-symbol="([^"]+)"', tag).group(1): tag
+            for tag in tags}
+
+
+def test_dashboard_chips_are_links_to_detail_pages(client):
+    """Every managed chip is a real <a> to the detail page, carrying BOTH
+    hooks: data-symbol (main.js fills the live quote by it) and href (the
+    browser navigates by it). Expected hrefs derive from the app's own
+    INDEX_SYMBOLS — one source of truth — with ^ percent-encoded exactly
+    as Flask's url_for emits it (^GSPC → /stock/%5EGSPC; the route
+    decodes it back). A future chip added without a link fails here,
+    keeping the AGENTS.md 'two edits per chip' contract honest."""
+    expected = {s: f"/stock/{quote(s, safe='')}" for s in INDEX_SYMBOLS}
+    chips = dashboard_chip_tags(client.get("/").get_data(as_text=True))
+    assert set(chips) == set(expected)   # exactly the managed chips
+    for symbol, href in expected.items():
+        assert f'href="{href}"' in chips[symbol]
+
+
+def test_encoded_index_symbol_url_round_trips(client):
+    """The chip hrefs ship ^ percent-encoded (raw ^ is illegal in a URL
+    path) — Flask must decode %5E back so the detail page's identity hook
+    stamps the raw symbol, exactly how the search dropdown's
+    encodeURIComponent links have always worked."""
+    res = client.get("/stock/%5EGSPC")
+    assert res.status_code == 200
+    assert 'data-symbol="^GSPC"' in res.get_data(as_text=True)
 
 
 # ── Transactions: POST (log) ──────────────────────────────────────────
