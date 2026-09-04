@@ -460,6 +460,75 @@ def test_delete_unknown_id_returns_404(client):
     assert client.delete("/api/transactions/999").status_code == 404
 
 
+# ── Transactions: DELETE ticker (the bulk verb) ───────────────────────
+
+def test_delete_ticker_transactions_bulk_204_keeps_other_tickers(client):
+    """DELETE /api/transactions/ticker/<symbol> wipes EVERY row of that
+    ticker (204) and leaves every OTHER ticker's rows standing."""
+    seed_transaction(ticker="AAPL", date="2026-08-01")
+    seed_transaction(ticker="AAPL", date="2026-08-02")
+    seed_transaction(ticker="MSFT", date="2026-08-03")
+
+    res = client.delete("/api/transactions/ticker/AAPL")
+
+    assert res.status_code == 204
+    assert {row["ticker"] for row in db.get_transactions()} == {"MSFT"}
+
+
+def test_delete_ticker_transactions_normalizes_case(client):
+    """Same canonical-form rule as every symbol-bearing route: the path's
+    "aapl" must land on the stored "AAPL" rows (one uppercase identity)."""
+    seed_transaction(ticker="AAPL")
+    res = client.delete("/api/transactions/ticker/aapl")
+    assert res.status_code == 204
+    assert db.get_transactions() == []
+
+
+def test_delete_ticker_transactions_unknown_ticker_404(client):
+    """No row ever existed for the ticker → 404 with a named error."""
+    res = client.delete("/api/transactions/ticker/NOPE")
+    assert res.status_code == 404
+    assert "NOPE" in res.get_json()["error"]
+
+
+def test_delete_ticker_transactions_empty_ledger_404(client):
+    """0 rows deleted is "nothing to delete", not a success: an empty
+    ledger gets the same 404 as an unknown ticker."""
+    res = client.delete("/api/transactions/ticker/AAPL")
+    assert res.status_code == 404
+
+
+def test_delete_ticker_transactions_percent_encoded_symbol(client):
+    """Symbols ride in the URL path, so URL-hostile characters (^) arrive
+    percent-encoded — the watchlist route's rule; Flask decodes them back
+    before the route sees the symbol."""
+    seed_transaction(ticker="^GSPC")
+    res = client.delete("/api/transactions/ticker/%5EGSPC")
+    assert res.status_code == 204
+    assert db.get_transactions() == []
+
+
+def test_delete_ticker_leaves_single_tx_delete_working(client):
+    """The two DELETE routes coexist: after a bulk delete, the per-row
+    DELETE /api/transactions/<id> still works on a surviving row (guards
+    against a routing collision between the two shapes)."""
+    keep_id = seed_transaction(ticker="MSFT")
+    seed_transaction(ticker="AAPL")
+    assert client.delete("/api/transactions/ticker/AAPL").status_code == 204
+    assert client.delete(f"/api/transactions/{keep_id}").status_code == 204
+    assert db.get_transactions() == []
+
+
+def test_delete_ticker_does_not_touch_watchlist(client):
+    """Ledger and watchlist are INDEPENDENT lists: deleting every AAPL
+    transaction must leave a watched AAPL on the watchlist."""
+    db.add_symbol("AAPL")
+    seed_transaction(ticker="AAPL")
+    res = client.delete("/api/transactions/ticker/AAPL")
+    assert res.status_code == 204
+    assert db.get_symbols() == ["AAPL"]
+
+
 # ── Portfolio history chart ───────────────────────────────────────────
 
 def test_history_rejects_unknown_period(client, fake_market):

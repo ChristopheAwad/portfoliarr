@@ -1143,6 +1143,49 @@ def remove_transaction(tx_id):
     return "", 204
 
 
+@app.route("/api/transactions/ticker/<symbol>", methods=["DELETE"])
+def remove_ticker_transactions(symbol):
+    """Delete EVERY transaction of one ticker — the ledger's BULK verb,
+    what the frontend's group row (one summary row per ticker) deletes.
+
+    No collision with the per-row route above: its <int:tx_id> converter
+    only matches digits, so the literal "ticker" path segment can never
+    be mistaken for an id (and this route needs TWO segments after
+    /api/transactions anyway).
+
+    The reply shape mirrors the per-row verb exactly: 204 = gone,
+    404 = nothing matched (unknown ticker, empty ledger, or another
+    window already got there first). Watchlist membership is deliberately
+    NOT touched — the watchlist is a separate list; watching a ticker and
+    holding it are independent decisions.
+
+    Deliberately no market data here: this route acts purely on stored
+    facts, so it works even for a delisted ticker Yahoo can no longer
+    quote — often exactly the ledger you WANT to wipe.
+    """
+    # Same trim + uppercase normalization as every route that takes a
+    # symbol from a URL: "aapl" in the path must hit the stored "AAPL".
+    ticker = symbol.strip().upper()
+
+    deleted = db.delete_transactions_for_ticker(ticker)
+    if deleted == 0:
+        # TIER 1 at INFO: expected client behavior (stale UI, typo, double
+        # click) — no traceback; the ticker string IS the story.
+        app.logger.info(
+            "ticker delete rejected: no transactions for %s", ticker
+        )
+        return jsonify(
+            {"error": f"no transactions for ticker {ticker}"}
+        ), 404
+
+    # TIER 1 at INFO: an audit trail for a bulk destructive action — the
+    # one line that says how many immutable facts this request erased.
+    app.logger.info(
+        "deleted %d transaction(s) for ticker %s", deleted, ticker
+    )
+    return "", 204
+
+
 # ---------------------------------------------------------------------------
 # TRANSACTION IMPORTER — bulk-load a pasted batch of transactions.
 #

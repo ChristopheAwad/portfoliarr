@@ -791,10 +791,23 @@ function buildGroupRow(ticker, txs) {
         dayPctCell.textContent = "—";
     }
 
-    // The actions column's 11th cell exists but stays EMPTY on summary
-    // rows: groups are aggregates, not records — edit/delete belong to the
-    // individual transactions, visible when the group is expanded.
+    // The actions column's 11th cell. A group is an aggregate, not a
+    // record — editing/deleting INDIVIDUAL transactions belongs to the
+    // detail rows — but the group owns exactly ONE action of its own:
+    // deleting EVERY transaction of this ticker (the bulk verb). The
+    // confirmation that guards it (type-the-ticker, in the delegated
+    // listener below) is deliberately stronger than the single row's
+    // confirm(): this destroys many immutable facts at once, no undo.
     const actionsCell = document.createElement("td");
+    const deleteTickerBtn = document.createElement("button");
+    // Classes: .tx-action-btn.delete borrows the detail rows' delete
+    // styling; .ticker-delete-btn is the JS hook that keeps the delegated
+    // listener's bulk branch from being confused with the single-row one.
+    deleteTickerBtn.className = "tx-action-btn delete ticker-delete-btn";
+    deleteTickerBtn.textContent = "×";
+    deleteTickerBtn.title = `Delete ALL ${ticker} transactions`;
+    deleteTickerBtn.dataset.ticker = ticker; // which group this button is
+    actionsCell.append(deleteTickerBtn);
 
     // Same keyed-append as buildTxRow above — the two builders MUST order
     // cells identically, and sourcing the order from the same
@@ -964,6 +977,13 @@ ledgerBody.addEventListener("click", (event) => {
     // <a>'s native navigation wins, and toggling the group on top of
     // navigating would fight the page change.
     if (event.target.closest("a")) return;
+
+    // ...or on the group's own DELETE button: the actions listener below
+    // owns that click, and toggling on top of a bulk delete would both
+    // flicker the rows and fight the confirmation dialog. Guarding on
+    // the whole .tx-action-btn family (not just delete) keeps this true
+    // for any future group-level action button too.
+    if (event.target.closest(".tx-action-btn")) return;
 
     const ticker = groupRow.dataset.ticker;
     const open = !expandedTickers.has(ticker);
@@ -1136,6 +1156,69 @@ ledgerBody.addEventListener("click", async (event) => {
         const tx = lastTransactions.find(
             (t) => t.id === Number(editBtn.dataset.id));
         if (tx) enterEditMode(tx);
+        return;
+    }
+
+    // --- Bulk delete (group rows): wipe EVERY transaction of one ticker.
+    // Checked BEFORE the single-row delete below, because this button
+    // ALSO carries the .delete class (shared styling) — the generic
+    // branch would otherwise swallow the click and no-op looking for a
+    // data-id the group button doesn't carry.
+    const deleteTickerBtn = event.target.closest(".ticker-delete-btn");
+    if (deleteTickerBtn) {
+        const ticker = deleteTickerBtn.dataset.ticker;
+        // The confirmation's wording comes from the CACHED rows: how many
+        // facts this action would erase. The backend stays the real
+        // authority (0 matched → its 404), same division of labour as
+        // every other action here.
+        const txs = lastTransactions.filter((t) => t.ticker === ticker);
+        if (txs.length === 0) return;
+
+        // THE GATE. prompt() returns null when the user cancels; any
+        // other answer must equal the ticker after the same trim+upper
+        // normalization the backend applies. A mismatch (or a bare
+        // OK/cancel reflex) aborts — typing the exact ticker is the
+        // deliberate, conscious step that single-row deletes don't need.
+        const typed = prompt(
+            `Type ${ticker} to confirm deleting ALL ${txs.length} ` +
+            `${ticker} transactions. This cannot be undone.`
+        );
+        if (typed === null) return;
+        if (typed.trim().toUpperCase() !== ticker) {
+            alert(`Cancelled — you typed "${typed.trim()}", not ${ticker}.`);
+            return;
+        }
+
+        try {
+            // Same percent-encoding rule as the watchlist path: symbols
+            // can contain URL-hostile characters ("^GSPC", "BRK.B") —
+            // encode the PATH segment, never the whole URL.
+            const response = await fetch(
+                `/api/transactions/ticker/${encodeURIComponent(ticker)}`,
+                { method: "DELETE" }
+            );
+            // 204 = all rows gone. 404 = another window beat us to it —
+            // refreshing either way shows the stored truth.
+            if (!response.ok && response.status !== 404) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            // The deleted ticker's group state is now meaningless — drop
+            // it so a future ticker reuse starts collapsed (the Set
+            // survives rebuilds, so a stale entry would linger).
+            expandedTickers.delete(ticker);
+            // If the form was editing one of THIS ticker's transactions,
+            // its target is gone — drop back to log mode rather than
+            // submitting into a 404 (same rule as the row delete).
+            const editingTx = lastTransactions.find(
+                (t) => t.id === editingTxId);
+            if (editingTx && editingTx.ticker === ticker) exitEditMode();
+            refreshLedger();
+            // The header totals depend on the ledger too — refresh both.
+            refreshPortfolioSummary();
+        } catch (err) {
+            console.error("delete ticker transactions failed:", err);
+            alert("Could not reach the server — is it running?");
+        }
         return;
     }
 

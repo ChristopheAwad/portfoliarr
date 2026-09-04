@@ -201,6 +201,40 @@ def test_delete_reports_whether_it_deleted(fresh_db):
     assert db.get_transaction(tx_id) is None
 
 
+# ── Transactions: delete by ticker (the bulk verb) ────────────────────
+
+def test_delete_transactions_for_ticker_removes_only_that_ticker(fresh_db):
+    """The bulk verb: every row of ONE ticker goes, every other ticker's
+    rows survive untouched. The return value is the number of rows
+    actually deleted (the route's success/404 signal)."""
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
+    db.add_transaction("AAPL", "2026-08-02", 101.0, 2, "USD", "SELL", 1.39)
+    db.add_transaction("MSFT", "2026-08-03", 200.0, 3, "USD", "BUY", 1.38)
+
+    assert db.delete_transactions_for_ticker("AAPL") == 2
+    assert [row["ticker"] for row in db.get_transactions()] == ["MSFT"]
+
+
+def test_delete_transactions_for_ticker_returns_zero_for_unknown(fresh_db):
+    """Nothing matched → rowcount 0 → the route serves 404 ("no such
+    group"), never a silent success."""
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
+
+    assert db.delete_transactions_for_ticker("NOPE") == 0
+    assert len(db.get_transactions()) == 1  # untouched
+
+
+def test_delete_transactions_for_ticker_is_exact_match(fresh_db):
+    """`AAPL` and `AAPL.TO` are DIFFERENT securities (NYSE vs TSX) —
+    deleting one must never touch the other. SQL `=` is an exact match,
+    not a prefix match; this pins that property."""
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
+    db.add_transaction("AAPL.TO", "2026-08-01", 50.0, 1, "CAD", "BUY", 1.0)
+
+    assert db.delete_transactions_for_ticker("AAPL") == 1
+    assert [row["ticker"] for row in db.get_transactions()] == ["AAPL.TO"]
+
+
 # ── Transactions: defence in depth ────────────────────────────────────
 
 def test_check_constraint_rejects_bad_transaction_type(fresh_db):

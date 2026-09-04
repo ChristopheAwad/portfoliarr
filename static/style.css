@@ -719,9 +719,13 @@ a.logo { text-decoration: none; }
 }
 
 /* Ledger row action buttons (edit ✎ / delete ×), painted by main.js on
-   detail rows only. Same quiet hover-reveal trick as the watchlist's
+   detail rows — plus the group rows' one action of their own, the bulk
+   delete-ALL button. Same quiet hover-reveal trick as the watchlist's
    remove button: visibility:hidden keeps each button's box (no layout
-   shift) while making them invisible until the mouse rests on their row. */
+   shift) while making them invisible until the mouse rests on their row.
+   BOTH row types need a reveal rule: detail rows are .ledger-row, group
+   rows are .ledger-group — a selector covering only one would leave the
+   other's buttons permanently invisible (this bit us once). */
 .tx-action-btn {
     background: none;
     border: none;
@@ -734,7 +738,8 @@ a.logo { text-decoration: none; }
     visibility: hidden;
 }
 
-.ledger-row:hover .tx-action-btn { visibility: visible; }
+.ledger-row:hover .tx-action-btn,
+.ledger-group:hover .tx-action-btn { visibility: visible; }
 
 .tx-action-btn.edit:hover { color: var(--blue-accent); }
 .tx-action-btn.delete:hover { color: var(--red-neg); }

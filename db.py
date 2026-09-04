@@ -321,3 +321,22 @@ def delete_transaction(tx_id):
             "DELETE FROM transactions WHERE id = ?", (tx_id,)
         )
         return cursor.rowcount > 0
+
+
+def delete_transactions_for_ticker(ticker):
+    """Delete EVERY transaction of one ticker — the ledger's one BULK
+    verb, sitting next to delete_transaction's single-row verb. Returns
+    the number of rows actually deleted: 0 means no row carried this
+    ticker (the route turns that into a 404 — "no such group", which is
+    also what an empty ledger looks like).
+
+    The WHERE clause is an exact match on the canonical UPPERCASE ticker,
+    on purpose: "AAPL" (NYSE, USD) and "AAPL.TO" (TSX, CAD) are different
+    securities that must never wipe each other. Parameterized like every
+    query here — the ticker travels as data, never as SQL text.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM transactions WHERE ticker = ?", (ticker,)
+        )
+        return cursor.rowcount
