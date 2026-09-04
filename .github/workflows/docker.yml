@@ -1,0 +1,73 @@
+# GitHub Actions: test main, then build & publish the Docker image to GHCR.
+#
+# The contract: ghcr.io/christopheawad/portfoliarr:latest always reflects
+# the latest state of main — but ONLY states of main that passed the full
+# pytest suite. The server decides when to adopt an update
+# (`docker compose pull && docker compose up -d`); CI never touches it.
+#
+# Auth: no registry secrets are configured anywhere. The built-in
+# GITHUB_TOKEN, granted `packages: write` below, is enough to push to
+# ghcr.io for this repo's own package.
+
+name: docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual runs, for rebuilding on demand
+
+permissions:
+  contents: read
+  packages: write # push the image to GHCR
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the full test suite
+        run: python -m pytest
+
+  build-and-push:
+    name: Build & push image
+    needs: test # a red main never produces an image — this job is skipped
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # :latest  — the moving pointer the server pulls
+          # :<sha>   — immutable record of exactly what was running
+          tags: |
+            ghcr.io/christopheawad/portfoliarr:latest
+            ghcr.io/christopheawad/portfoliarr:${{ github.sha }}
+          # GitHub Actions layer cache: as long as requirements.txt is
+          # unchanged, rebuilds reuse the cached pip-install layer.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

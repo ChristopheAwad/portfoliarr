@@ -1,0 +1,37 @@
+# .dockerignore — keeps junk out of the build context (`COPY . .` copies
+# only what survives this list). Smaller context = faster builds, and more
+# importantly: the SQLite ledger must NEVER reach an image layer.
+
+# Git history and metadata
+.git
+.gitignore
+
+# Python dev baggage (wrong-platform packages, bytecode, caches)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Tests + pytest glue — CI runs the suite from the checkout;
+# the image never needs it
+tests/
+conftest.py
+
+# SQLite data — the transaction ledger stays on the machine it belongs to
+instance/
+*.db
+
+# Secrets / local env
+.env
+
+# Repo docs & CI config — build inputs, not runtime files
+.github/
+AGENTS.md
+project-brief.md
+feature.md
+
+# Docker files themselves (not needed inside the image)
+Dockerfile
+docker-compose.yml
+.dockerignore

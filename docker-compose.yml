@@ -1,0 +1,40 @@
+# docker-compose.yml — the home-server stack
+# ===========================================
+# This file is FOR THE SERVER, not the dev machine. It runs the published
+# image from GHCR; it never compiles code locally — that would bypass the
+# CI test gate entirely.
+#
+#   first run:    docker compose pull && docker compose up -d
+#   adopt update: docker compose pull && docker compose up -d
+#   (CI publishes a new image on every green push to main; the above two
+#    commands are the deliberate act of bringing it here.)
+#
+# App URL on the server: http://localhost:9967
+
+services:
+  portfoliarr:
+    image: ghcr.io/christopheawad/portfoliarr:latest
+    container_name: portfoliarr
+    ports:
+      # host 9967 -> container 5000 (the port gunicorn binds inside)
+      - "9967:5000"
+    volumes:
+      # THE persistence contract: the SQLite ledger lives at
+      # /app/instance/portfolio.db inside the container — but a container's
+      # filesystem is thrown away every time its image is replaced. The
+      # named volume below survives every update, so transactions do too.
+      # First start: the DB doesn't exist yet; db.init() creates the schema
+      # (and the empty ledger) automatically.
+      - portfoliarr-data:/app/instance
+    environment:
+      # The app uses date.today() (e.g. labelling today's chart bar). A
+      # container defaults to UTC, which flips "today" hours early — pin
+      # the server's timezone so every date matches the user.
+      TZ: America/Toronto
+    restart: unless-stopped
+
+# Named volume declaration — without this block Docker wouldn't create it.
+# Inspect the ledger any time with:
+#   docker volume inspect portfoliarr-data
+volumes:
+  portfoliarr-data:
