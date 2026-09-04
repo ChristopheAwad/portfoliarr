@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # docker-entrypoint.sh), then gosu execs the app as `appuser`. Kept in its
 # own layer BEFORE the code copy, so code changes never re-run apt.
 RUN apt-get update \
-    && apt-get install -y --no-cache-dir gosu \
+    && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Now the app code itself. .dockerignore is the bouncer here: it keeps
