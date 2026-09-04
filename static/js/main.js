@@ -317,9 +317,10 @@ watchlistEl.addEventListener("click", (event) => {
 // colours.
 //
 // Presentation: transactions GROUP BY TICKER — one collapsed summary row
-// per ticker (holding-level math, BUY rows only), expandable to the
-// individual transactions underneath. Which groups are open lives in the
-// expandedTickers Set below, because the DOM itself is rebuilt every cycle.
+// per ticker (backend-computed holdings math — sells net out), expandable
+// to the individual transactions underneath. Which groups are open lives
+// in the expandedTickers Set below, because the DOM itself is rebuilt
+// every cycle.
 // ---------------------------------------------------------------------------
 
 // Grab the pieces this section manages, once, at load time.
@@ -626,70 +627,62 @@ function buildTxRow(tx) {
 
 // Build ONE group summary row — the collapsed face of one ticker. It
 // reuses the same 10 columns, but the numbers are GROUP-level:
-//   Qty = NET position: buys add, sells subtract (facts only, so always
-//         computable — even when the group's quote failed this cycle).
-//   Value / Total Gain / Day Gain = sums over BUY rows ONLY. A SELL row's
-//         "value" is what the sold shares would be worth today — summing
-//         that into a group total would inflate it. BUY-only sums mirror
-//         the holdings math Step 3 will formalize; SELL details stay
-//         visible when the group is expanded.
-//   Total Gain % = Σ total_gain ÷ Σ(price × qty of BUYs). Percentages
-//         don't average — the group needs its cost basis back out of the
-//         sums. Guarded: a SELL-only group has no cost basis → "—"
-//         instead of dividing by zero.
+//   Qty = NET position: buys add, sells subtract (computed HERE from
+//         facts, so the Qty cell stays honest even when the group's
+//         quote failed this cycle).
+//   Value / Total Gain / Day Gain (+ pcts) = the backend's group
+//         aggregates (groupSortKeys reads them off the group's first
+//         row): holdings math with SELLS NETTED OUT — value is the net
+//         position × live price, and the cost basis is buys paid minus
+//         sells recouped. (The old "sum BUY rows only" rule is retired:
+//         it froze Value/Total/Day when a SELL was logged and made the
+//         ledger disagree with the portfolio header.) SELL details stay
+//         visible when the group is expanded — each row keeps its own
+//         live math.
+//   Total Gain % = null when the cost basis is ≤ 0 (SELL-only or
+//         fully-sold-at-profit group) → "—" instead of a meaningless %.
 //   Day Gain % = the ticker's daily move itself (price-level, identical
-//         for every row — see the decoration comments in app.py), read
-//         from any decorated row rather than aggregated.
+//         for every row — see the decoration comments in app.py).
 // Decoration happens per UNIQUE ticker server-side, so within a group
 // either every row has live math or none — no partial-group ambiguity.
 //
-// --- Shared group math (built before buildGroupRow) ---------------------
-// Compute every aggregated number a GROUP needs, from its raw transaction
-// rows. This is the SINGLE source of truth: buildGroupRow renders these
-// numbers, and the ledger sorter keys off the very same values — so what
-// you see above a column header is exactly what sorting by that header
-// uses. Returns a plain object; fields:
-//   netQty        Σ BUY.qty − Σ SELL.qty (facts only — always computable)
-//   value         Σ BUY.value (live)
-//   totalGain     Σ BUY.total_gain (live)
-//   dayGain       Σ BUY.day_gain (live)
-//   totalGainPct  Σ total_gain ÷ Σ(price_display×qty) over BUYs;
-//                 null when a group has no cost basis (SELL-only) — the
-//                 row then shows "—" and sorts LAST
-//   dayGainPct    the ticker's daily move, read from any decorated row
-//                 (identical for every row of the group) — null when the
-//                 group's quote failed this cycle
+// --- Group aggregates (read from the backend, not re-derived) -----------
+// Every live number a GROUP displays comes from list_transactions: the
+// backend decorates each row with its TICKER's group fields (group_value,
+// group_cost_basis, group_total_gain, group_day_gain + their pcts),
+// computed with the same holdings math as /api/portfolio/summary. One
+// formula, one implementation — the ledger and the header can't drift.
+// This function is the frontend's SINGLE reading point: buildGroupRow
+// renders these numbers, and the ledger sorter keys off the very same
+// values — so what you see above a column header is exactly what sorting
+// by that header uses. Returns a plain object; fields:
+//   netQty        Σ BUY.qty − Σ SELL.qty (the one fact-computed field)
+//   value         the backend's group_value (live)
+//   totalGain     the backend's group_total_gain (live)
+//   dayGain       the backend's group_day_gain (live)
+//   totalGainPct  null when the backend sent none (cost basis ≤ 0) —
+//                 the row shows "—" and sorts LAST
+//   dayGainPct    the ticker's daily move — null when the group's quote
+//                 failed this cycle
 function groupSortKeys(txs) {
+    // Qty stays fact-computed: it needs no price, so it survives an
+    // unquoted cycle while every live cell degrades to "—".
     let netQty = 0;
-    let cost = 0;      // Σ price × qty over BUY rows — the % denominator
-    let value = 0;
-    let totalGain = 0;
-    let dayGain = 0;
     for (const tx of txs) {
-        if (tx.transaction_type === "BUY") {
-            netQty += tx.qty;
-            // price_display is the row's CAD cost per share (stored fx
-            // rate) in CAD mode — so cost lands in the SAME currency as
-            // value/totalGain and the % stays a true ratio. In native mode
-            // it equals the native price.
-            cost += (tx.price_display ?? tx.price) * tx.qty;
-            value += tx.value;
-            totalGain += tx.total_gain;
-            dayGain += tx.day_gain;
-        } else {
-            netQty -= tx.qty;
-        }
+        netQty += tx.transaction_type === "BUY" ? tx.qty : -tx.qty;
     }
-    const priceNow = txs[0] && txs[0].price_now;
+    // The group fields ride on EVERY row of the ticker (all rows share
+    // the same quote), so the first row speaks for the whole group.
+    // ?? null keeps the sorter's "unavailable sorts last" contract when
+    // the backend sent no group fields at all (unquoted ticker).
+    const first = txs[0] || {};
     return {
         netQty,
-        value,
-        totalGain,
-        dayGain,
-        // null = "no cost basis to divide by" (SELL-only group) → "—".
-        totalGainPct: cost > 0 ? (totalGain / cost) * 100 : null,
-        // null = the group's quote failed this cycle → live cells show "—".
-        dayGainPct: priceNow !== undefined ? txs[0].day_gain_pct : null,
+        value: first.group_value,
+        totalGain: first.group_total_gain,
+        totalGainPct: first.group_total_gain_pct ?? null,
+        dayGain: first.group_day_gain,
+        dayGainPct: first.group_day_gain_pct ?? null,
     };
 }
 
@@ -756,7 +749,7 @@ function buildGroupRow(ticker, txs) {
         // native mode the group's own trading currency.
         const currency = txs[0].display_currency || txs[0].currency;
 
-        // The same aggregates groupSortKeys computes for sorting — render
+        // The same aggregates groupSortKeys reads for sorting — render
         // them here so the table and the sort order can never disagree.
         const { value, totalGain, totalGainPct, dayGain, dayGainPct } =
             groupSortKeys(txs);

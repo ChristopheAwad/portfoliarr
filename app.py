@@ -1072,6 +1072,91 @@ def list_transactions():
         # (bought today, so its whole lifetime IS today). Correct, not a bug.
         tx["day_gain_pct"] = quote["change_pct"]
 
+    # --- GROUP AGGREGATES — the numbers the ledger's collapsed summary
+    # rows (and its sorter) display. Each row also carries its TICKER's
+    # group-level fields, so the frontend renders aggregates instead of
+    # re-deriving them: one holdings formula, one implementation.
+    #
+    # THE MATH MIRRORS /api/portfolio/summary exactly (app.py, Pass 1/2
+    # there) — same netting, same two-rate contract, same guards:
+    #   group_value          = net_qty × live price × value-rate
+    #   group_cost_basis     = Σ ±(price_display × qty) — buys PAID minus
+    #                          sells RECOUPED, each at its own display rate
+    #   group_total_gain     = value − cost (realized + unrealized in ONE
+    #                          formula, like the summary)
+    #   group_total_gain_pct = gain ÷ cost, NULL when cost ≤ 0 (a ≤ 0
+    #                          basis is no honest denominator)
+    #   group_day_gain       = net_qty × quote.change × value-rate
+    #   group_day_gain_pct   = the ticker's daily move (price-level)
+    # A SELL therefore moves everything EXCEPT nothing: value, day move
+    # and cost basis all shrink by the shares sold — which is what makes
+    # the ledger's ticker rows agree with the portfolio header.
+    #
+    # Oversold positions (net qty < 0, e.g. a SELL-only group) display
+    # honestly negative — the summary route does the same; no clamping.
+    #
+    # WHY EVERY ROW CARRIES THEM: the reply is a JSON array of
+    # transactions (the frontend's render contract — see the tests in
+    # tests/test_ledger_groups.py). All rows of one ticker share the same
+    # quote and the same rate situation (quotes are fetched per UNIQUE
+    # ticker above), so the group's fields are identical across its rows
+    # and the frontend reads them off the group's first row.
+    groups = {}
+    for tx in transactions:
+        groups.setdefault(tx["ticker"], []).append(tx)
+
+    for ticker, rows in groups.items():
+        quote = quotes[ticker]
+        if quote is None:
+            # Unquoted ticker: attach NOTHING. The rows stay facts-only,
+            # and the frontend's existing hasLive / "—" gap-fill (which
+            # keys on the fields' absence) renders the group degraded.
+            continue
+
+        # The group's conversion decision — the SAME expression the
+        # per-row loop uses for quoted rows (display CAD + USD quote +
+        # live rate available). All rows of a ticker share it because
+        # they share the quote, so the group's numbers are internally
+        # consistent: one currency, one value-side rate.
+        converts = (
+            display == "CAD"
+            and quote["currency"] == "USD"
+            and live_rate is not None
+        )
+        value_rate = live_rate if converts else 1.0
+
+        # Pass A — facts: net shares and the net cost basis. price_display
+        # is already in display currency (stored-rate CAD or native), so
+        # the cost side needs no further conversion — buys paid, sells
+        # recouped, each at ITS day's rate.
+        net_qty = 0
+        cost = 0.0
+        for tx in rows:
+            sign = 1 if tx["transaction_type"] == "BUY" else -1
+            net_qty += sign * tx["qty"]
+            cost += sign * tx["price_display"] * tx["qty"]
+
+        # Pass B — live math: value and day move apply to the NET
+        # position (sold shares no longer move with the market).
+        value = net_qty * quote["price"] * value_rate
+        day_gain = net_qty * quote["change"] * value_rate
+        total_gain = value - cost
+        # Same denominator guard as the summary: only a POSITIVE cost
+        # basis backs a percentage. Fully-sold-at-profit and SELL-only
+        # groups land here — their pct is None, which the frontend
+        # renders as "—" (and sorts last).
+        total_gain_pct = total_gain / cost * 100 if cost > 0 else None
+
+        for tx in rows:
+            tx["group_value"] = value
+            tx["group_cost_basis"] = cost
+            tx["group_total_gain"] = total_gain
+            tx["group_total_gain_pct"] = total_gain_pct
+            tx["group_day_gain"] = day_gain
+            # The % is the price's move — position- and currency-
+            # independent, identical to the per-row day_gain_pct.
+            tx["group_day_gain_pct"] = quote["change_pct"]
+
     return jsonify(transactions)
 
 
