@@ -26,24 +26,40 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# gosu: the entrypoint's "drop privileges" tool. The container BOOTS as
+# root for one job (repair the data volume's ownership — see
+# docker-entrypoint.sh), then gosu execs the app as `appuser`. Kept in its
+# own layer BEFORE the code copy, so code changes never re-run apt.
+RUN apt-get update \
+    && apt-get install -y --no-cache-dir gosu \
+    && rm -rf /var/lib/apt/lists/*
+
 # Now the app code itself. .dockerignore is the bouncer here: it keeps
 # instance/ (the SQLite ledger!), .venv/, .git/, tests/ and friends out of
 # the build context, so `COPY . .` is safe — and future new modules are
 # picked up automatically without editing this file.
 COPY . .
 
-# Run as a non-root user (a root process in a container makes any escape
-# more damaging). Two setup jobs need root, done before switching:
-#   1. useradd --create-home: a real HOME for the yfinance cache/cookies.
-#   2. mkdir /app/instance + chown: docker-compose mounts a NAMED VOLUME
-#      over this directory; on first use Docker seeds the volume's
-#      ownership from the image's directory — but only if the directory
-#      exists. Pre-creating it owned by appuser makes that inheritance
-#      deterministic, so SQLite can write its ledger file on day one.
+# The app runs as `appuser`, NOT root (a root server process makes any
+# container escape far more damaging). useradd --create-home gives a real
+# HOME for the yfinance cache/cookies; mkdir pre-creates the SQLite data
+# dir inside the image.
+#
+# WHY THE CONTAINER STILL BOOTS AS ROOT: docker-compose mounts a NAMED
+# VOLUME over /app/instance, and the volume's ownership is NOT reliably
+# inherited from the image's directory — rootless Docker, the containerd
+# image store, and NAS docker UIs are known to hand back a ROOT-owned
+# mount, which crash-looped the very first deployment (SQLite couldn't
+# create its file). The ENTRYPOINT below boots as root just long enough
+# to chown the volume, then execs the CMD as appuser. Root never serves a
+# request. (Same pattern as the official postgres/redis images.)
 RUN useradd --create-home appuser \
     && mkdir -p /app/instance \
     && chown -R appuser:appuser /app /home/appuser
-USER appuser
+
+# The boot sequence: entrypoint (repair + drop privileges) -> CMD.
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Document the listening port (compose maps host 9967 -> this).
 EXPOSE 5000

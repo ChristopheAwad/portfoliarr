@@ -89,29 +89,55 @@ def test_dockerfile_runs_gunicorn_not_dev_server():
     assert "debug=True" not in dockerfile, (
         "debug=True must never appear in the image — RCE via debugger"
     )
-
-
-def test_dockerfile_runs_as_non_root():
-    """The app must run as a non-root user.
-
-    Containers running as root make container escapes more damaging and
-    can't write to root-owned volumes safely. The USER directive must come
-    AFTER the install/copy/chown steps (anything after it runs as that
-    user, so the setup work needs root first).
-    """
-    dockerfile = _read("Dockerfile")
-    user_lines = [
-        line for line in dockerfile.splitlines()
-        if line.startswith("USER")
-    ]
-    assert user_lines, "Dockerfile never switches to a non-root USER"
-    last_user = user_lines[-1].split()
-    assert len(last_user) >= 2 and last_user[1] not in ("root", "0"), (
-        "final USER must be a non-root user"
-    )
-    # The last USER wins at runtime — make sure nothing resets it to root.
+    # CMD must be the LAST instruction: with an ENTRYPOINT in front, the
+    # exec-form CMD is what the entrypoint receives as "$@" (and a trailing
+    # stray instruction after CMD would be a silent no-op).
     assert dockerfile.rstrip().splitlines()[-1].startswith("CMD"), (
-        "CMD must be the last instruction so the final USER stays in effect"
+        "CMD must be the last instruction so the entrypoint execs it"
+    )
+
+
+def test_dockerfile_installs_gosu_and_wires_entrypoint():
+    """The image boots as root ONLY so a tiny entrypoint script can repair
+    the data volume's ownership — then it must hand off via gosu. Both
+    halves of that contract live in the Dockerfile: gosu installed, and
+    ENTRYPOINT pointing at the script."""
+    dockerfile = _read("Dockerfile")
+    assert "gosu" in dockerfile, "gosu must be installed for the drop"
+    assert "ENTRYPOINT" in dockerfile and "docker-entrypoint.sh" in dockerfile, (
+        "ENTRYPOINT must wire in docker-entrypoint.sh"
+    )
+    # The old USER-based scheme is gone — a fixed USER would defeat the
+    # entrypoint (it needs root to chown the volume).
+    assert not [line for line in dockerfile.splitlines()
+                if line.startswith("USER")], (
+        "no USER directive — privilege dropping happens in the entrypoint"
+    )
+
+
+def test_entrypoint_repairs_volume_then_drops_privileges():
+    """The entrypoint contract, piece by piece:
+    - `set -e`: fail loudly rather than half-repairing and serving anyway
+    - chown /app/instance: named volumes can arrive ROOT-owned (rootless
+      docker, containerd image store, NAS quirks) — THE fix for the
+      first-deployment crash-loop
+    - HOME=/home/appuser: gosu inherits root's env; yfinance caches in $HOME
+    - `exec gosu appuser`: REPLACES the root shell with the CMD running as
+      appuser — root exists for milliseconds and never serves a request."""
+    script = _read("docker-entrypoint.sh")
+    assert script.startswith("#!/bin/sh")
+    assert "set -e" in script
+    assert "chown" in script and "appuser" in script, (
+        "entrypoint must repair ownership for appuser"
+    )
+    assert "/app/instance" in script, (
+        "the chown must target the mounted data dir /app/instance"
+    )
+    assert "HOME=/home/appuser" in script, (
+        "HOME must be fixed before the drop or yfinance caches to /root"
+    )
+    assert "exec gosu appuser" in script, (
+        "the entrypoint must end by exec'ing the CMD as appuser"
     )
 
 
