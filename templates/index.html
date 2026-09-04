@@ -179,16 +179,39 @@
                     <table class="ledger-table">
                         <thead>
                             <tr>
+                                <!-- Date/Type/Price are NOT sortable: a group
+                                     (ticker summary row) has no single date,
+                                     type, or price. The 7 columns that carry
+                                     a data-col ARE sortable — main.js finds
+                                     them by this hook and reorders the GROUP
+                                     rows only (detail rows stay newest-first).
+                                     tabindex/role make them keyboard
+                                     reachable; aria-sort is set by JS. -->
                                 <th>Date</th>
                                 <th>Type</th>
-                                <th>Ticker</th>
-                                <th class="num">Qty</th>
-                                <th class="num">Price</th>
-                                <th class="num">Value</th>
-                                <th class="num">Total Gain</th>
-                                <th class="num">Total Gain %</th>
-                                <th class="num">Day Gain</th>
-                                <th class="num">Day Gain %</th>
+                                <th class="sortable" data-col="ticker"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Ticker</th>
+                                <th class="num sortable" data-col="qty"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Qty</th>
+                                <th>Price</th>
+                                <th class="num sortable" data-col="value"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Value</th>
+                                <th class="num sortable" data-col="total_gain"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Total Gain</th>
+                                <th class="num sortable"
+                                    data-col="total_gain_pct"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Total Gain %</th>
+                                <th class="num sortable" data-col="day_gain"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Day Gain</th>
+                                <th class="num sortable" data-col="day_gain_pct"
+                                    tabindex="0" role="button"
+                                    aria-sort="none">Day Gain %</th>
                                 <!-- Blank header over the trailing actions
                                      column (edit/delete buttons, painted by
                                      JS on detail rows only). -->

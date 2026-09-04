@@ -330,6 +330,7 @@ const txEditingTextEl = txEditingEl.querySelector(".tx-editing-text");
 const txCancelBtn = txEditingEl.querySelector(".tx-cancel");
 const txSubmitBtn = txForm.querySelector("button[type=submit]");
 const ledgerBody = document.querySelector("#ledger-body");
+const ledgerHead = document.querySelector(".ledger-table thead");
 const txDateInput = txForm.elements.date;
 
 // The ledger's display currency, read fresh from the toggle on EVERY
@@ -393,6 +394,50 @@ function setLedgerMessage(text) {
 // that has never been clicked simply isn't in it, which is what "collapsed
 // by default" means in practice.
 const expandedTickers = new Set();
+
+// Ledger sort state — lives OUTSIDE the DOM for the same reason as
+// expandedTickers: the tbody rebuilds every poll cycle, so the chosen sort
+// must survive it. null = the backend's natural order (most recently
+// transacted ticker first). Otherwise {col, dir} where col is one of the
+// data-col values the sortable <th>s carry and dir is "asc"|"desc".
+let ledgerSort = null;
+
+// Which data-col values identity keys off. The sortable columns (matching
+// the data-col attrs in index.html) map to the matching key of the object
+// groupSortKeys returns — so sorting by a column reads the VERY value the
+// table already shows, never a re-derivation that could drift.
+const SORT_COLS = {
+    ticker: "ticker",
+    qty: "netQty",
+    value: "value",
+    total_gain: "totalGain",
+    total_gain_pct: "totalGainPct",
+    day_gain: "dayGain",
+    day_gain_pct: "dayGainPct",
+};
+
+// Paint (or clear) the ▲/▼ indicator + aria-sort on the sortable <th>s.
+// ▲ = ascending, ▼ = descending — a plain, honest statement of the current
+// sort direction, for both text (ticker) and numeric columns alike. All
+// sortable headers except ticker are numeric.
+function renderSortIndicators() {
+    document.querySelectorAll("thead .sortable").forEach((th) => {
+        const col = th.dataset.col;
+        th.classList.toggle("active", !!ledgerSort && ledgerSort.col === col);
+        th.setAttribute("aria-sort",
+            !ledgerSort || ledgerSort.col !== col
+                ? "none"
+                : ledgerSort.dir === "asc" ? "ascending" : "descending");
+        const indicator = th.querySelector(".sort-indicator");
+        if (indicator) indicator.remove();
+        if (ledgerSort && ledgerSort.col === col) {
+            const span = document.createElement("span");
+            span.className = "sort-indicator";
+            span.textContent = ledgerSort.dir === "asc" ? "▲" : "▼";
+            th.append(span);
+        }
+    });
+}
 
 // Build ONE transaction detail row — the same 10 data cells the flat table
 // always had, plus a trailing actions cell (edit/delete), extracted from
@@ -528,6 +573,57 @@ function buildTxRow(tx) {
 //         from any decorated row rather than aggregated.
 // Decoration happens per UNIQUE ticker server-side, so within a group
 // either every row has live math or none — no partial-group ambiguity.
+//
+// --- Shared group math (built before buildGroupRow) ---------------------
+// Compute every aggregated number a GROUP needs, from its raw transaction
+// rows. This is the SINGLE source of truth: buildGroupRow renders these
+// numbers, and the ledger sorter keys off the very same values — so what
+// you see above a column header is exactly what sorting by that header
+// uses. Returns a plain object; fields:
+//   netQty        Σ BUY.qty − Σ SELL.qty (facts only — always computable)
+//   value         Σ BUY.value (live)
+//   totalGain     Σ BUY.total_gain (live)
+//   dayGain       Σ BUY.day_gain (live)
+//   totalGainPct  Σ total_gain ÷ Σ(price_display×qty) over BUYs;
+//                 null when a group has no cost basis (SELL-only) — the
+//                 row then shows "—" and sorts LAST
+//   dayGainPct    the ticker's daily move, read from any decorated row
+//                 (identical for every row of the group) — null when the
+//                 group's quote failed this cycle
+function groupSortKeys(txs) {
+    let netQty = 0;
+    let cost = 0;      // Σ price × qty over BUY rows — the % denominator
+    let value = 0;
+    let totalGain = 0;
+    let dayGain = 0;
+    for (const tx of txs) {
+        if (tx.transaction_type === "BUY") {
+            netQty += tx.qty;
+            // price_display is the row's CAD cost per share (stored fx
+            // rate) in CAD mode — so cost lands in the SAME currency as
+            // value/totalGain and the % stays a true ratio. In native mode
+            // it equals the native price.
+            cost += (tx.price_display ?? tx.price) * tx.qty;
+            value += tx.value;
+            totalGain += tx.total_gain;
+            dayGain += tx.day_gain;
+        } else {
+            netQty -= tx.qty;
+        }
+    }
+    const priceNow = txs[0] && txs[0].price_now;
+    return {
+        netQty,
+        value,
+        totalGain,
+        dayGain,
+        // null = "no cost basis to divide by" (SELL-only group) → "—".
+        totalGainPct: cost > 0 ? (totalGain / cost) * 100 : null,
+        // null = the group's quote failed this cycle → live cells show "—".
+        dayGainPct: priceNow !== undefined ? txs[0].day_gain_pct : null,
+    };
+}
+
 function buildGroupRow(ticker, txs) {
     const row = document.createElement("tr");
     row.className = "ledger-group";
@@ -559,10 +655,7 @@ function buildGroupRow(ticker, txs) {
     tickerEl.append(tickerLink);
     tickerCell.append(tickerEl);
 
-    let netQty = 0;
-    for (const tx of txs) {
-        netQty += tx.transaction_type === "BUY" ? tx.qty : -tx.qty;
-    }
+    const { netQty } = groupSortKeys(txs);
     const qtyCell = document.createElement("td");
     qtyCell.className = "num";
     qtyCell.textContent = formatNumber(netQty, 4);
@@ -594,24 +687,10 @@ function buildGroupRow(ticker, txs) {
         // native mode the group's own trading currency.
         const currency = txs[0].display_currency || txs[0].currency;
 
-        let cost = 0;      // Σ price × qty over BUY rows — the % denominator
-        let value = 0;
-        let totalGain = 0;
-        let dayGain = 0;
-        for (const tx of txs) {
-            if (tx.transaction_type !== "BUY") continue;
-            // price_display is the row's CAD cost per share (stored fx
-            // rate) in CAD mode — so cost lands in the SAME currency as
-            // value/totalGain and the % below stays a true ratio. In
-            // native mode it equals the native price.
-            cost += (tx.price_display ?? tx.price) * tx.qty;
-            value += tx.value;
-            totalGain += tx.total_gain;
-            dayGain += tx.day_gain;
-        }
-
-        // null = "no cost basis to divide by" (SELL-only group) → "—".
-        const totalGainPct = cost > 0 ? (totalGain / cost) * 100 : null;
+        // The same aggregates groupSortKeys computes for sorting — render
+        // them here so the table and the sort order can never disagree.
+        const { value, totalGain, totalGainPct, dayGain, dayGainPct } =
+            groupSortKeys(txs);
 
         valueCell.textContent = `${formatNumber(value)} ${currency}`;
         gainCell.textContent = formatSigned(totalGain, currency);
@@ -620,7 +699,7 @@ function buildGroupRow(ticker, txs) {
             : `${totalGainPct >= 0 ? "+" : ""}${totalGainPct.toFixed(2)}%`;
         dayGainCell.textContent = formatSigned(dayGain, currency);
         dayPctCell.textContent =
-            `${txs[0].day_gain_pct >= 0 ? "+" : ""}${txs[0].day_gain_pct.toFixed(2)}%`;
+            `${dayGainPct >= 0 ? "+" : ""}${dayGainPct.toFixed(2)}%`;
 
         // Colour the sums with the same pos/neg rule as the detail rows —
         // with one guard: a null pct gets no colour, because "—" is
@@ -629,7 +708,7 @@ function buildGroupRow(ticker, txs) {
             [gainCell, totalGain],
             [gainPctCell, totalGainPct],
             [dayGainCell, dayGain],
-            [dayPctCell, txs[0].day_gain_pct],
+            [dayPctCell, dayGainPct],
         ]) {
             if (cellValue === null) continue;
             cell.classList.toggle("pos", cellValue >= 0);
@@ -699,14 +778,20 @@ function exitEditMode() {
 }
 
 // Rebuild the tbody: one collapsed summary row per ticker, followed by that
-// ticker's individual transactions as hidden detail rows. Grouping keeps
-// first-appearance order — the backend list is newest-first, so the most
-// recently transacted ticker lands on top.
+// ticker's individual transactions as hidden detail rows. The GROUPS
+// (ticker summary rows) are what the header-click sort controls — the
+// individual detail rows are never re-sorted, always newest-first within
+// their group (the backend's order). With no sort clicked the groups keep
+// first-appearance order = backend order = most recently transacted ticker
+// on top.
 function renderLedger(transactions) {
     if (transactions.length === 0) {
         setLedgerMessage("No transactions yet — log your first above.");
         return;
     }
+
+    // Keep the ▲/▼ header indicators in step with the sort state.
+    renderSortIndicators();
 
     // Wipe last cycle's rows, then build fresh ones. createElement +
     // textContent only: assembled strings (innerHTML) would let any
@@ -722,7 +807,12 @@ function renderLedger(transactions) {
         groups.get(tx.ticker).push(tx);
     }
 
-    for (const [ticker, txs] of groups) {
+    // Sorting an array is stable in modern JS: equal keys keep their
+    // current (insertion) order, so a tie between two groups falls back to
+    // the backend's newest-first order. Baked into sortGroupRows below.
+    const groupRows = sortGroupRows(groups);
+
+    for (const { ticker, txs } of groupRows) {
         ledgerBody.append(buildGroupRow(ticker, txs));
 
         // Expanded state is consulted from the Set, not the DOM — a group
@@ -736,6 +826,53 @@ function renderLedger(transactions) {
             ledgerBody.append(detailRow);
         }
     }
+}
+
+// Turn a ticker→rows Map into a sorted array of {ticker, txs} entries.
+// When ledgerSort is null (no header clicked) the original insertion order
+// is preserved. When a sort IS active, each group's sort value comes from
+// the SAME groupSortKeys numbers buildGroupRow renders. Unavailable values
+// (null — SELL-only Total Gain %, or an unquoted group's live cells) sort
+// LAST in both directions, so "—" never floats to the top of a gain sort.
+function sortGroupRows(groups) {
+    const entries = [...groups.entries()].map(([ticker, txs]) => ({
+        ticker,
+        txs,
+        key: groupSortKeys(txs),
+    }));
+
+    if (!ledgerSort) return entries;
+
+    const sortKey = SORT_COLS[ledgerSort.col];
+    const dir = ledgerSort.dir === "asc" ? 1 : -1;
+
+    entries.sort((a, b) => {
+        let av = sortKey === "ticker"
+            ? a.ticker.toLowerCase()
+            : a.key[sortKey];
+        let bv = sortKey === "ticker"
+            ? b.ticker.toLowerCase()
+            : b.key[sortKey];
+
+        // Ticker is text; all the other sortable keys are numbers.
+        if (sortKey === "ticker") {
+            if (av === bv) return 0;
+            return av < bv ? -dir : dir;
+        }
+
+        // Numeric path: null/undefined (unavailable) or NaN (an unquoted
+        // group's live sums never materialized) always sorts last, whatever
+        // the direction. Strip the sign for the magnitude comparison below.
+        if (typeof av === "number" && Number.isNaN(av)) av = null;
+        if (typeof bv === "number" && Number.isNaN(bv)) bv = null;
+        const aNull = av === null || av === undefined;
+        const bNull = bv === null || bv === undefined;
+        if (aNull && bNull) return 0;
+        if (aNull) return 1;  // a last
+        if (bNull) return -1; // b last
+        return (av - bv) * dir;
+    });
+    return entries;
 }
 
 // Expand/collapse on click: ONE delegated listener on the tbody, same
@@ -765,6 +902,43 @@ ledgerBody.addEventListener("click", (event) => {
     ledgerBody.querySelectorAll(
         `.tx-detail[data-ticker="${CSS.escape(ticker)}"]`
     ).forEach((detailRow) => { detailRow.hidden = !open; });
+});
+
+// Header-click sorting: ONE delegated listener on the <thead>, the same
+// delegation rationale as everything else — the headers are static (never
+// rebuilt), but consolidating here keeps all sort handling in one place
+// and avoids duplicating the enter/exit logic on each <th>. Clicking a
+// sortable header sorts, and clicking the SAME column again flips the
+// direction (asc ⇄ desc); clicking a new column starts it on that
+// column's default direction — ticker begins A→Z (asc), numeric columns
+// begin biggest-first (desc, the finance convention).
+function applyLedgerSort(col) {
+    if (!SORT_COLS[col]) return; // non-sortable header — nothing to do
+
+    if (ledgerSort && ledgerSort.col === col) {
+        // Same column again → flip direction: asc ⇄ desc.
+        ledgerSort = { col, dir: ledgerSort.dir === "asc" ? "desc" : "asc" };
+    } else {
+        // New column → minimal re-sort from the cached rows, no refetch.
+        const defaultDir = col === "ticker" ? "asc" : "desc";
+        ledgerSort = { col, dir: defaultDir };
+    }
+    renderLedger(lastTransactions);
+}
+ledgerHead.addEventListener("click", (event) => {
+    const th = event.target.closest("th.sortable");
+    if (th) applyLedgerSort(th.dataset.col);
+});
+// Keyboard parity for the tabindex="0" headers: Enter or Space triggers
+// the same sort as a click (native buttons would do this sight-unseen, but
+// the <th> is a plain element — accessibility is our job here).
+ledgerHead.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const th = event.target.closest("th.sortable");
+    if (th) {
+        event.preventDefault(); // don't scroll the page on Space
+        applyLedgerSort(th.dataset.col);
+    }
 });
 
 // Edit/delete clicks: a SECOND delegated listener on the tbody, kept

@@ -602,6 +602,32 @@ a.logo { text-decoration: none; }
     border-bottom: 1px solid var(--border-color);
 }
 
+/* Sortable ledger headers (.sortable is added in index.html on the <th>s
+   that carry a data-col). cursor:pointer invites the click; a faint accent
+   on the ACTIVE column + the ▲/▼ indicator show which sort is live. The
+   hover/focus affordance mirrors links: sortable headers are controls, so
+   they should look tappable but not shout. */
+.ledger-table th.sortable {
+    cursor: pointer;
+    user-select: none; /* clicking shouldn't select the header text */
+    white-space: nowrap;
+}
+
+.ledger-table th.sortable:hover,
+.ledger-table th.sortable:focus-visible {
+    color: var(--text-primary);
+    outline: none; /* we supply our own focus cue via the underline */
+}
+
+.ledger-table th.sortable.active {
+    color: var(--blue-accent);
+}
+
+.ledger-table .sort-indicator {
+    margin-left: 4px;
+    font-size: 10px;
+}
+
 .ledger-table td {
     padding: 8px;
     border-bottom: 1px solid #f1f3f4;

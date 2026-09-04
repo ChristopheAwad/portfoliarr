@@ -67,6 +67,18 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   includes currency movement; that is the honest CAD picture. When a
   rate is unavailable, affected rows/holdings degrade (native display,
   unpriced, zero contribution) — never a fake 1:1 rate.
+- **The ledger's sort is frontend-only and controls the GROUP rows, never
+  the individual detail rows.** Clicking a sortable column header
+  (`data-col` on the `<th>` in `index.html`) reorders the per-ticker
+  summary rows only; the detail rows inside each group keep the backend's
+  newest-first order (which is also the default group order until the user
+  clicks). Sorting keys come from the same `groupSortKeys` values the
+  group rows display, so the sort always matches the visible numbers.
+  Columns with no single group value (Date, Type, Price) are not sortable.
+  Group sort state lives in a JS variable (not the DOM) so it survives the
+  60s poll. Group rows with an unavailable value ("—", e.g. a SELL-only
+  group's Total Gain %, or an unquoted group's live cells) sort last in
+  both directions.
 
 ## Temporary Decisions (will need rework in the future)
 

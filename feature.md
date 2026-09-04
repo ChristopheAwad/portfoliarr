@@ -1,98 +1,99 @@
-# Feature: CAD Display Conversion + "Show USD in USD" Ledger Toggle
+# Feature: Sortable Ledger Group Rows
 
 ## What (user story)
 
-Everything is either CAD or USD. The dashboard's portfolio views (summary
-strip, value chart, transaction ledger) display in **CAD by default**: USD
-holdings convert at Yahoo's `USDCAD=X` FX rate. A dashboard toggle
-("Show USD in USD") flips **only the ledger** back to native-USD display —
-the total value and chart are ALWAYS CAD regardless. Watchlist, index
-chips, stock detail page, and importer report stay native currency always.
+Click a column header on the ledger to reorder the **parent (group) ticker
+rows** by that column. Individual transaction (detail) rows stay static —
+newest transaction on top, oldest at bottom per group (the backend's
+existing order). Default group order on load = current backend order (most
+recently transacted ticker first). Sorting is **frontend-only** — no
+API/DB changes, no Python test work.
 
-## Decisions already made (planning session — don't re-litigate)
+## Decisions (from planning + user answers)
 
-- **Scope of CAD conversion**: summary strip + chart + ledger ONLY.
-  Watchlist, chips, stock page: native forever.
-- **Toggle**: flips only the ledger; session-only (no localStorage);
-  always starts CAD; label "Show USD in USD". Never touches the summary
-  or chart ("not affecting the total portfolio value" — user requirement).
-- **Historical FX is a FACT** (user requirement): every transaction stores
-  `fx_rate` = the USDCAD=X daily close **on the transaction's date** (last
-  close on-or-before it), derived automatically from Yahoo at
-  log/import/edit time. Never changes afterwards. Used for the Price
-  column and cost basis (past facts). **Current values (price_now, value,
-  day gain) use the LIVE rate** — "I need today's CAD value of a potential
-  sell". Consequence: CAD gain % includes currency movement (honest).
-- **Legacy rows** (pre-feature USD rows, fx_rate NULL) → display falls
-  back to the live rate per request; editing a row backfills the real
-  date-based fact. CAD rows backfill to 1.0 in the migration.
-- **Chart FX = flat live rate** (user choice, not per-point history).
-  FX failure → USD tickers contribute 0 (per-ticker resilience rule).
-- **PUT contract unchanged**: body stays `{date, price, qty, type}`;
-  `fx_rate` is re-derived server-side from the new date (Yahoo-derived
-  fact that follows the DATE, unlike currency which follows the
-  non-editable ticker).
-- **API surface**: ledger + watchlist stay raw-facts-plus-display-math;
-  ledger rows gain `price_display` + `display_currency` (always present,
-  equal to the native facts in native mode). Stored `price`/`currency`
-  stay native so edit-mode prefill and group-% math can't corrupt facts.
-- **Conversion is math → backend-only** (routes); frontend stays a pure
-  renderer. `?currency=` values: `CAD` (server default) | `native`;
-  anything else → 400 listing options (same pattern as `?period=`).
-- **Summary/chart/ledger in CAD mode treat non-USD-non-CAD currencies**
-  as convertible-failure (unpriced / native-degrade / contribute-0) —
-  only USD↔CAD is supported (user: everything will be CAD or USD).
+- Sort ONLY the groups (parent ticker rows). Detail rows inside a group are
+  never sorted by the user; they keep the backend's newest-first order.
+- Frontend-only sort on the already-fetched `lastTransactions` — instant,
+  no refetch, survives the 60s poll because the sort state is a JS var.
+- Sortable columns (exactly): Ticker, Qty, Value, Total Gain, Total Gain %,
+  Day Gain, Day Gain %. All other headers (Date, Type, Price, blank actions)
+  are non-clickable — a group has no single date/type/price.
+- First click on a header sorts ascending; second click flips to descending;
+  clicking the active header again toggles direction.
+- Default (no sort clicked) = backend order = most recently transacted
+  ticker on top.
+- Groups whose sort key is unavailable ("—", e.g. SELL-only Total Gain %,
+  or unquoted live cells) always sort LAST regardless of direction.
 
 ## Subtasks (in order — check off as done)
 
-- [x] **1. Tests first** (all red before implementation):
-      - `tests/test_market_data.py`: `get_fx_rate` (same-currency → 1.0
-        with no network; live rate via `USDCAD=X` quote, cached; raises).
-        `get_fx_rate_on(date)` (close on-or-before date; weekend → prior
-        Friday; empty window → ValueError).
-      - `tests/test_db.py`: migration adds `fx_rate` to a legacy table;
-        CAD rows backfill 1.0, USD stay NULL; add/get roundtrip carries
-        fx_rate; update_transaction writes it.
-      - fx-at-log-date derivation: POST /api/transactions stores the tx
-        date's rate; PUT re-derives on date change; import preview shows
-        it, commit stores it (new tests/test_currency_display.py).
-      - Summary: rewrite `test_mixed_currencies_sum_as_is` (the locking
-        test FLIPS to lock conversion); cost basis uses per-tx stored fx;
-        live-FX failure → unpriced; legacy NULL fx → live-rate fallback;
-        reply carries `"currency": "CAD"`; CAD-only portfolio makes no FX
-        call.
-      - Ledger `?currency=`: CAD default conversions (price_display at
-        stored fx, value/gains at live rate, pct includes FX); `native`
-        pins today's shape; invalid param 400; unquoted rows; live-FX
-        failure → full native degrade; watchlist-stays-native regression.
-      - History: USD contributions × flat live rate; FX failure → 0;
-        CAD-only makes no FX call; existing history tests reseeded CAD.
-- [x] **2. `db.py`** — migration (ALTER TABLE + CAD backfill), column in
-      SELECT lists, add/update params.
-- [x] **3. `market_data.py`** — `get_fx_rate`, `get_fx_rate_on`.
-- [x] **4. `app.py` fx derivation** — shared `_fx_rate_for_date` (history
-      → fallback live rate + warning); POST/PUT/import.
-- [x] **5. `app.py` summary conversion** — cost × stored fx, value/day ×
-      live rate; FX failure → unpriced; `"currency": "CAD"`.
-- [x] **6. `app.py` ledger `?currency=`** + price_display/display_currency.
-- [x] **7. `app.py` history conversion** — flat live rate.
-- [x] **8. Frontend** — toggle in portfolio card header; ledger fetches
-      carry the param; buildTxRow/buildGroupRow use price_display/
-      display_currency; summary value paints "CAD" suffix; chart dataset
-      label "(CAD)". GUI-verified by the user (no JS test infra).
-- [x] **9. Docs** — project-brief.md: resolve the mixed-currency temporary
-      decision (keep as history), add a permanent display-currency design
-      rule, update Data Source + MVP scope lines. AGENTS.md: update the
-      native-currency scope line.
-- [x] **10. Verify** — `python -m pytest` fully green; live curl pass
-      (summary/ledger CAD + native, history, fx degradation); GUI gate
-      with the user; commit gate.
+- [x] **1. `feature.md` plan written + user approved** (this file).
+- [x] **2. `templates/index.html`** — add `data-col` attribute
+      (`ticker`, `qty`, `value`, `total_gain`, `total_gain_pct`,
+      `day_gain`, `day_gain_pct`) to the 7 sortable `<th>`s in the thead
+      (lines ~182–195). Also make them focusable (`tabindex="0"`,
+      `role="button"`, `aria-sort` for accessibility). NO new columns → the
+      11-column contract is untouched.
+- [x] **3. `static/js/main.js`**:
+      - Extract the group aggregate math from `buildGroupRow` into a shared
+        pure helper `groupSortKeys(txs)` returning `{netQty, value,
+        totalGain, totalGainPct, dayGain, dayGainPct}`. `buildGroupRow`
+        calls it too — one source of truth for the numbers that matter in
+        both rendering and sorting.
+      - Sort state: `ledgerSort` (null = default backend order). Ticker
+        first-click ascends A→Z; numeric columns first-click descend
+        (biggest first); same-column clicks flip direction.
+      - In `renderLedger`, materialize groups into an array and sort by the
+        active key (stable). Null/undefined/NaN (unavailable) keys sort
+        last.
+      - Delegated click + keydown listeners on the `<thead>` (finding the th
+        by `data-col`) → update state and re-render from `lastTransactions`.
+      - `renderSortIndicators()`: ▲/▼ on the active header, clear the
+        others, set/clear `aria-sort` and the `.active` class.
+- [x] **4. `static/style.css`** — sortable `<th>` hover/focus affordance
+      (cursor:pointer, subtle accent), `.active` accent, `.sort-indicator`
+      (▲/▼) styling.
+- [x] **5. Verify** — `python -m pytest` fully green (146 passed, backend
+      unchanged). Manual browser checklist pending the GUI gate.
+- [x] **6. Docs** — added a permanent Design Rule to `project-brief.md`
+      ("ledger sort is frontend-only; controls group rows; detail rows
+      newest-first").
+- [x] **7. GUI gate** — user checked in the browser (Sep 2026, alongside
+      the NaN-chart bugfix verification).
+- [x] **8. Commit gate** — user approved; committed and pushed.
+
+## Group sort keys (how each column orders the parent rows)
+
+- Ticker → `ticker.toLowerCase()` (A→Z / Z→A).
+- Qty → net position `Σ BUY.qty − Σ SELL.qty`.
+- Value → `Σ BUY.value`.
+- Total Gain → `Σ BUY.total_gain`.
+- Total Gain % → `Σ total_gain ÷ Σ(price_display×qty)` over BUYs; null
+  (SELL-only) → sort last.
+- Day Gain → `Σ BUY.day_gain`.
+- Day Gain % → ticker's daily move `txs[0].day_gain_pct` (same for every
+  row in the group).
+
+## Test plan (manual browser checklist)
+
+- Click each of the 7 sortable headers → groups reorder correctly (asc on
+  first click, desc on second, back to asc on third).
+- Ticker sorts alphabetically both directions.
+- Qty/value/total-gain/day-gain sorts respect sign (losses sort below gains
+  on descending correctly).
+- Groups with "—" (SELL-only Total Gain %, or unquoted) always sort last in
+  BOTH directions.
+- Expand/collapse (and the ticker link) still work after sorting.
+- Sort state survives a 60s poll (hold state in `ledgerSort`, not the DOM).
+- Non-sortable headers (Date, Type, Price, blank) do nothing on click.
+- Active header shows ▲/▼; others don't.
+- No new columns → ledger visual width unchanged.
 
 ## Contracts that must NOT break (AGENTS.md)
 
-- Ledger table HTML column count stays 11 (no new visible columns).
-- PUT body = exactly the 4 editable fields; ticker/currency never user-
-  writable; fx_rate is server-derived, never accepted from clients.
+- Ledger table column count stays 11 — no visible-column changes.
 - Backend sends raw floats; formatting stays frontend-only.
-- Patch-where-used mocking; logging only in app.py; pure layers raise.
-- Quote dicts are SHARED with the cache — copy before decorating.
+- Grouping + expand/collapse (`expandedTickers`) behavior fully preserved.
+- Detail rows keep newest-first order.
+- No changes to `db.py`, `app.py`, or the API — so no Python tests, and the
+  existing suite must stay green unchanged.
