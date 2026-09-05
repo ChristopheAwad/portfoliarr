@@ -239,11 +239,45 @@ function openModal({ title, message, wantsInput, placeholder = "",
             resolve(result);
         }
 
-        // Escape cancels. The listener sits on DOCUMENT while the modal is
-        // open — keydowns land wherever focus is (often inside the input),
-        // and only document-level listeners see them regardless.
+        // Escape cancels, and Tab is TRAPPED inside the dialog. The
+        // listener sits on DOCUMENT while the modal is open — keydowns
+        // land wherever focus is (often inside the input), and only
+        // document-level listeners see them regardless.
+        //
+        // The Tab half is the focus trap: aria-modal announces this as a
+        // modal to screen readers, but the page behind the overlay is NOT
+        // focus-inert, so a plain Tab would happily walk focus out of the
+        // dialog and into invisible background controls. When focus would
+        // step past the dialog's last (or, with Shift+Tab, before its
+        // first) control, it wraps to the other end instead; if focus
+        // somehow ended up outside the dialog entirely, it's pulled back
+        // to the first control. The focusable set is exactly what this
+        // builder created, in DOM order: the optional input, then the two
+        // action buttons.
+        const focusables = inputEl ? [inputEl, cancelBtn, confirmBtn]
+                                   : [cancelBtn, confirmBtn];
+
         function onKeyDown(event) {
-            if (event.key === "Escape") finish(cancelResult);
+            if (event.key === "Escape") {
+                finish(cancelResult);
+                return;
+            }
+            if (event.key === "Tab") {
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+                if (!dialog.contains(document.activeElement)) {
+                    event.preventDefault();
+                    first.focus();
+                } else if (event.shiftKey
+                           && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey
+                           && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
+                }
+            }
         }
         document.addEventListener("keydown", onKeyDown);
 
@@ -319,7 +353,13 @@ function showToast(message, type = "error") {
         document.body.append(toastContainer);
     }
     const toast = document.createElement("div");
-    // The type picks the palette: "error" (the default) or "success".
+    // The type picks the palette: "error" (the default) or "success" — and
+    // the matching ARIA role makes screen readers announce the notice,
+    // which the old alert() did for free. role="alert" is assertive
+    // (failures are time-sensitive and the toast only lives ~4s);
+    // role="status" is polite for success receipts. Both fire on the
+    // element's insertion into the live page, no extra wiring needed.
+    toast.setAttribute("role", type === "success" ? "status" : "alert");
     toast.className = type === "success"
         ? "toast toast-success"
         : "toast toast-error";

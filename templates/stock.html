@@ -49,7 +49,22 @@
                  (ONE form, one submit handler, same reuse rule the ledger's
                  edit mode follows). -->
             <div class="stock-actions">
-                <button class="btn-action" id="add-to-watchlist-btn" type="button">+ Add to Watchlist</button>
+                <!-- The plus glyph is inline SVG (not a text "+") so it
+                     inherits the button's color and scales with it — same
+                     pattern as the dashboard's Import button. aria-hidden
+                     because the words already say what the button does.
+                     stock.js only ever REPLACES this button's content when
+                     it flips to the done-state (built via icon("check")),
+                     so the SVG survives every other code path. -->
+                <button class="btn-action" id="add-to-watchlist-btn" type="button">
+                    <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
+                         fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" aria-hidden="true">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    Add to Watchlist
+                </button>
                 <button class="btn-action" id="log-tx-btn" type="button">Log Transaction</button>
                 <!-- Inline error for the Add button (unknown ticker, server
                      unreachable...) — the tx-error pattern, relocated. -->
