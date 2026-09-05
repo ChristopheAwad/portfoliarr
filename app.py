@@ -198,12 +198,16 @@ def portfolio_history():
 Algorithm: walk every trading day in the range forward, keeping a
     running "net quantity held" per ticker (buys add, sells subtract),
     and at each day multiply that quantity by the ticker's close price
-    that day. Sum across tickers = portfolio value that day. Before a
-    ticker's first buy its quantity is 0, so it contributes nothing
-    until you own it. A day where a held ticker printed no bar (a
-    holiday on its market, Yahoo's unfinalized current-day bar) prices
-    the position at its last KNOWN close — carried forward, never at
-    zero, because a holding doesn't evaporate between closes.
+    that day. Sum across tickers = portfolio value that day. The daily
+    axis STARTS at the earliest logged transaction: Yahoo's "max" period
+    reaches back to each ticker's IPO (an index to 1973...), and the flat
+    zero before your first buy is pre-history — not your portfolio — so
+    those labels are dropped. Before a ticker's first buy its quantity
+    is 0, so it contributes nothing until you own it. A day where a held
+    ticker printed no bar (a holiday on its market, Yahoo's unfinalized
+    current-day bar) prices the position at its last KNOWN close —
+    carried forward, never at zero, because a holding doesn't evaporate
+    between closes.
     """
     # Validate the timeframe key BEFORE doing any work. get_history()
     # indexes PERIOD_MAP directly, so a bad key would KeyError mid-loop;
@@ -288,15 +292,42 @@ Algorithm: walk every trading day in the range forward, keeping a
     # Intraday (1D) labels are times ("09:30"), not dates ("2026-08-31") —
     # see get_history. So "which label applies which transaction" differs:
     #   Daily bars: a transaction dated that DAY applies at that day's bar.
-    #   Intraday bars: every transaction dated TODAY applies at today's
-    #     FIRST bar (they all happened during today's session, and we can't
-    #     know the exact minute from a date-only ledger — applying at the
-    #     open is the honest, simple choice).
+    #   Intraday bars: the WHOLE current position — holdings carried in
+    #     from past days plus today's trades — applies at today's FIRST
+    #     bar. A date-only ledger can't know the exact minute of any
+    #     trade, so pricing the walked-in position at the open is the
+    #     honest, simple choice. (A portfolio bought last week is still
+    #     held today — pricing only TODAY's transactions painted a flat
+    #     zero line all day, which was a bug, not a statement.)
     # Detect the case by the interval (same dict that drove the fetch), and
     # grab today's date once (same local-day rule the frontend's date input
     # uses, so a "today" trade prices into today's intraday chart).
     is_intraday = PERIOD_MAP[period]["interval"] != "1d"
     label_date_today = date.today().isoformat()
+
+    # START THE DAILY AXIS AT THE FIRST LOGGED INVESTMENT — not at the far
+    # edge of the fetch. Yahoo's "max" period reaches back to each
+    # ticker's IPO (an index bar to 1973...), and before the first buy
+    # the portfolio is genuinely worth 0 — plotting that pre-history
+    # stretched the MAX chart into decades of flat nothing before the
+    # real story begins. Daily labels are ISO "YYYY-MM-DD" strings, so
+    # lexicographic comparison IS date comparison, and the transaction
+    # list is sorted ascending — its first element carries the earliest
+    # date. Intraday labels are clock times and the 1D window is a single
+    # day: nothing to trim, but a first buy dated in the FUTURE still
+    # means there is nothing to price today (same "empty chart, 200"
+    # shape as the empty ledger above).
+    first_tx_date = transactions[0]["transaction_date"]
+    if is_intraday:
+        if first_tx_date > label_date_today:
+            return jsonify({"labels": [], "values": []})
+    else:
+        labels = [label for label in labels if label >= first_tx_date]
+        if not labels:
+            # Every fetched bar predates the first logged investment —
+            # the live case being a future-dated transaction vs. the
+            # period's fixed window. Nothing plottable, not an error.
+            return jsonify({"labels": [], "values": []})
 
     # Walk each label forward, maintaining quantity per ticker. This is
     # the heart of the chart: buying shares must push the line up from
@@ -320,12 +351,14 @@ Algorithm: walk every trading day in the range forward, keeping a
         # Choose which transactions this label should absorb, then apply
         # them BEFORE pricing (a buy today prices at today's close).
         if is_intraday:
-            # Intraday facts: see the comment above — today's txs apply at
-            # the first bar of today's session, once.
+            # Intraday facts: see the comment above — every transaction
+            # dated on-or-before today applies at the first bar of
+            # today's session, once: the position carried in from past
+            # days AND today's trades alike.
             if not today_applied:
                 today_applied = True
                 for tx in transactions:
-                    if tx["transaction_date"] == label_date_today:
+                    if tx["transaction_date"] <= label_date_today:
                         net_qty[tx["ticker"]] = (
                             net_qty.get(tx["ticker"], 0)
                             + (tx["qty"]
