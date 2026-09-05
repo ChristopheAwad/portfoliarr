@@ -327,6 +327,82 @@ def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
     }
 
 
+# ── 3M: daily bars, date labels ───────────────────────────────────────
+
+def test_3m_uses_daily_bars_with_date_labels(fake_yf):
+    """The 3M button serves DAILY bars (~63 closes) — the interval that
+    keeps the whole ladder monotonically dense (1M 22 → 3M 63 → 6M 126 →
+    1Y 252) instead of the old hourly 3M (~440) out-densifying every
+    later timeframe. Unpacking assertion locks '3M' → period='3mo',
+    interval='1d'."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [100.0, 105.0, 110.0, 112.0]},
+        index=pd.to_datetime([
+            "2026-09-01", "2026-09-02",
+            "2026-09-03", "2026-09-04",
+        ]),
+    )
+
+    result = market_data.get_history("AAPL", "3M")
+
+    # Date-only labels — one bar per day, so each date is its own key.
+    assert result == {
+        "2026-09-01": 100.0,
+        "2026-09-02": 105.0,
+        "2026-09-03": 110.0,
+        "2026-09-04": 112.0,
+    }
+    assert ("AAPL", "3mo", "1d") in fake_yf.calls
+
+
+def test_3m_portfolio_chart_is_daily_shaped(client, fake_yf):
+    """End-to-end: the 3M chart is an ordinary daily-shaped series — the
+    axis trims at the first logged investment (the pre-buy 08-31 bar is
+    dropped) and a transaction applies at its date's bar. A NaN close on
+    today's in-progress bar is still dropped by get_history. The 09-03
+    buy must NOT leak into the 09-02 bar."""
+    seed_transaction(ticker="AAPL", date="2026-09-01", qty=1,
+                     currency="CAD")
+    seed_transaction(ticker="AAPL", date="2026-09-03", qty=2,
+                     currency="CAD")
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [90.0, 100.0, 105.0, 110.0, 112.0,
+                   float("nan")]},
+        index=pd.to_datetime([
+            "2026-08-31",   # pre-first-buy bar → trimmed
+            "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
+            "2026-09-05",   # NaN close = day in progress → dropped
+        ]),
+    )
+
+    body = client.get("/api/portfolio/history?period=3M").get_json()
+    # 1 share from the 09-01 buy; 3 shares once the 09-03 buy lands at
+    # its date's bar (3 × 110 = 330). The NaN 09-05 bar ends the line at
+    # 09-04.
+    assert body == {
+        "labels": ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"],
+        "values": [100.0, 105.0, 330.0, 336.0],
+    }
+
+
+def test_intraday_and_live_flags_stay_exclusive():
+    """REGRESSION LOCK (passes before AND after the 3M revert): across
+    the WHOLE PERIOD_MAP, `intraday` is True ONLY for the single-day 1D
+    view (clock-time labels + the route's first-bar ledger branch) and
+    `live` is True ONLY for 1D and 5D (the 120s TTL — today's bar still
+    moves). Every multi-day series — 5D's 30-minute bars and 3M's daily
+    bars alike — must keep the daily-shaped ledger math and the settled
+    600s TTL. A flip that accidentally set either flag on 3M would move
+    it into the wrong ledger branch and cache tier; this test names that
+    exact failure."""
+    intraday_periods = [key for key, tf in market_data.PERIOD_MAP.items()
+                        if tf["intraday"]]
+    live_periods = [key for key, tf in market_data.PERIOD_MAP.items()
+                    if tf["live"]]
+    assert intraday_periods == ["1D"]
+    assert live_periods == ["1D", "5D"]
+
+
 # ── The portfolio route with the new intervals ────────────────────────
 
 def test_5y_portfolio_chart_stays_daily_shaped(client, fake_yf):

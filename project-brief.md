@@ -102,16 +102,22 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   the same next-trading-day approximation the weekend-buy rule already
   uses, just coarser. 5D went the OTHER way (finer, not coarser): 30-
   minute bars (`30m`), because plain daily bars left it a 5-point zigzag.
-  Contract: PERIOD_MAP entries carry explicit flags — `intraday` (True
+  Everything above 5D stays daily (1M/3M/6M/YTD/1Y) so the ladder stays
+  monotonically dense — ~22 → ~63 → ~126 → ~252 points — with no
+  timeframe out-densifying a longer one (3M's brief stint on hourly bars
+  made it denser than 6M and 1Y, which felt wrong and was reverted).
+  Contract:
+  PERIOD_MAP entries carry explicit flags — `intraday` (True
   ONLY for 1D: clock-time labels + the route's first-bar ledger branch)
   and `live` (True for 1D AND 5D: the 120s cache TTL, since today's bar
   keeps moving; settled date-spaced bars use 600s). Label formats are a
-  PERIOD_MAP `label` field too: 1D "HH:MM", 5D "YYYY-MM-DD HH:MM" (the
-  date keeps its five days from colliding in the {label: price} dict),
+  PERIOD_MAP `label` field too: 1D "HH:MM", "YYYY-MM-DD HH:MM" whenever
+  one day carries several bars (5D's 30-minute — the date keeps same-day
+  bars from colliding in the {label: price} dict),
   everything else "YYYY-MM-DD". No code sniffs interval strings. 5D's
-  datetime labels still sort lexicographically against "YYYY-MM-DD"
-  transaction dates, so its ledger math stays daily-shaped (a buy applies
-  at its day's FIRST 30-minute bar).
+  datetime labels still sort lexicographically against
+  "YYYY-MM-DD" transaction dates, so their ledger math stays
+  daily-shaped (a buy applies at its day's FIRST bar).
 
 ## Temporary Decisions (will need rework in the future)
 

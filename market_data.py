@@ -74,7 +74,10 @@ def clear_history_cache():
 #              "5m"  for 1D (intraday every 5 minutes),
 #              "30m" for 5D (intraday across ~5 sessions — Google
 #              Finance's choice; daily bars left 5D a 5-point zigzag),
-#              "1d"  for the short ranges (one close per trading day),
+#              "1d"  for the short ranges 1M/3M/6M/YTD/1Y (one close per
+#              trading day — keeps the whole ladder monotonically dense:
+#              ~22 → ~63 → ~126 → ~252 points, so no timeframe
+#              out-densifies a longer one),
 #              "1wk"/"1mo" for 5Y/MAX (speed: weekly/monthly bars cut a
 #              long-range payload ~5–25×, so MAX stops fetching ^GSPC's
 #              ~25,000 daily bars since 1927 and 5Y drops from ~1,260
@@ -94,9 +97,11 @@ def clear_history_cache():
 #              live TTL. Everything else is settled history (600s).
 #   label    — the strftime format for the x-axis labels get_history
 #              returns: "HH:MM" within 1D's single day, full
-#              "YYYY-MM-DD HH:MM" for 5D (bare times would collide
-#              across its five days in the {label: price} dict), plain
-#              "YYYY-MM-DD" for date-spaced bars.
+#              "YYYY-MM-DD HH:MM" whenever one day carries SEVERAL bars
+#              (5D's 30-minute bars — bare dates would collide in the
+#              {label: price} dict and silently drop all but the day's
+#              last bar), plain "YYYY-MM-DD" for one-bar-per-day
+#              ranges.
 PERIOD_MAP = {
     "1D":  {"period": "1d",  "interval": "5m",  "intraday": True,
             "live": True,  "label": "%H:%M"},
@@ -289,11 +294,11 @@ def get_history(symbol, period_key):
     price (the standard "price at end of that bar"). The label SHAPE per
     timeframe comes straight from PERIOD_MAP's "label" format:
       - 1D (single intraday day):  "HH:MM" ("09:30").
-      - 5D (intraday, multi-day):  "YYYY-MM-DD HH:MM" ("2026-08-31 09:30")
-        — the date part is what keeps Monday's "09:30" from colliding
-        with Tuesday's in this dict.
-      - Date-spaced ranges (1M..MAX — daily, weekly or monthly bars):
-        "YYYY-MM-DD" ("2026-08-31").
+      - 5D (30-minute bars, multi-day): "YYYY-MM-DD HH:MM"
+        ("2026-08-31 09:30") — the date part is what keeps Monday's
+        "09:30" from colliding with Tuesday's in this dict.
+      - Date-spaced ranges (1M, 3M, 6M, YTD, 1Y, 5Y, MAX — daily, weekly
+        or monthly bars): "YYYY-MM-DD" ("2026-08-31").
 
     These plain strings are exactly what the frontend wants for
     Chart.js x-axis labels — no timezone math leaked to the browser.
