@@ -33,6 +33,7 @@ import db
 import market_data
 import pandas as pd
 import re
+from datetime import date, timedelta
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -574,9 +575,9 @@ def test_history_empty_ledger_is_not_an_error(client, fake_market):
 
 
 def test_history_buy_applies_from_its_date_onward(client, fake_market):
-    """The chart's heart: before the buy the line is 0; from the buy's
-    date on, the line is qty × that day's close.
-        08-27: nothing held            → 0
+    """The chart's heart: the axis STARTS at the first logged investment —
+    the pre-buy bar (08-27) is trimmed away — and from the buy's date on,
+    the line is qty × that day's close.
         08-28: buy 10 AAPL @ close 110 → 1100
         08-31: still 10 @ close 120    → 1200
     (Seeded CAD — the chart's display currency IS CAD, so a CAD holding
@@ -589,8 +590,8 @@ def test_history_buy_applies_from_its_date_onward(client, fake_market):
     }
 
     body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["labels"] == ["2026-08-27", "2026-08-28", "2026-08-31"]
-    assert body["values"] == [0.0, 1100.0, 1200.0]
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    assert body["values"] == [1100.0, 1200.0]
     assert fake_market.fx_rates == {} and fake_market.fx_on == {}
 
 
@@ -598,7 +599,8 @@ def test_history_usd_holdings_convert_at_the_live_rate(client, fake_market):
     """The chart is ALWAYS CAD (the ledger toggle never touches it — it
     plots the portfolio total). A USD holding's whole line scales by the
     flat LIVE rate: history is context, not a sell price, so a per-point
-    historical rate was deliberately skipped.
+    historical rate was deliberately skipped. The pre-buy bar (08-27) is
+    trimmed by the axis rule, so:
         08-28: 10 × 110 × 1.5 = 1650
         08-31: 10 × 120 × 1.5 = 1800
     """
@@ -610,7 +612,63 @@ def test_history_usd_holdings_convert_at_the_live_rate(client, fake_market):
     fake_market.fx_rates["USDCAD"] = 1.5
 
     body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["values"] == [0.0, 1650.0, 1800.0]
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    assert body["values"] == [1650.0, 1800.0]
+
+
+def test_history_max_starts_at_first_logged_investment(client, fake_market):
+    """The MAX regression: Yahoo's period="max" reaches back to each
+    ticker's IPO (an index to 1973...), and before the first buy the
+    portfolio is genuinely worth 0 — plotting that pre-history stretched
+    the chart back to 1973. The daily axis now STARTS at the earliest
+    logged transaction: labels strictly older than the first buy are
+    dropped, so MAX means "your whole investing life", not the market's."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=1,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "1973-01-02": 1.0,        # the ticker's deep past — not the user's
+        "2026-08-28": 110.0,
+        "2026-08-31": 120.0,
+    }
+
+    body = client.get("/api/portfolio/history?period=MAX").get_json()
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    assert body["values"] == [110.0, 120.0]
+
+
+def test_history_first_buy_after_window_yields_empty_chart(
+        client, fake_market):
+    """Edge of the trim: a first buy dated AFTER every fetched bar (the
+    live case is a future-dated transaction vs. Yahoo's fixed window)
+    leaves nothing plottable — the same "empty chart, 200" shape as the
+    empty ledger, never an error."""
+    seed_transaction(ticker="AAPL", date="2026-12-25", qty=1,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 110.0, "2026-08-31": 120.0,
+    }
+
+    res = client.get("/api/portfolio/history?period=5D")
+    assert res.status_code == 200
+    assert res.get_json() == {"labels": [], "values": []}
+
+
+def test_history_intraday_prices_carry_in_past_holdings(client, fake_market):
+    """The 1D fix: the intraday chart prices the WHOLE current position at
+    today's bars — holdings bought on PAST days walk into today's window.
+    (Previously only transactions dated exactly today were applied, so a
+    portfolio bought last week plotted a flat zero line all day.)
+        10 bought yesterday + 2 today → today's first bar: 12 × 150.
+    """
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    seed_transaction(ticker="AAPL", date=yesterday, qty=10, currency="CAD")
+    seed_transaction(ticker="AAPL", date=today, qty=2, currency="CAD")
+    fake_market.histories["AAPL"] = {"09:30": 150.0, "09:35": 151.0}
+
+    body = client.get("/api/portfolio/history?period=1D").get_json()
+    assert body["labels"] == ["09:30", "09:35"]
+    assert body["values"] == [12 * 150.0, 12 * 151.0]
 
 
 def test_history_mixed_currencies_sum_in_cad(client, fake_market):
