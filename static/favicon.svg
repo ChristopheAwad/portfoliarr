@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <!-- Portfoliarr favicon: a rounded blue tile carrying the same upward
+         spark line as the navbar wordmark. Hand-written vector — one small
+         file stays crisp from a 16px browser tab to a 180px home-screen
+         icon, which is why this is .svg rather than a .ico bitmap. -->
+    <defs>
+        <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#3b82f6"/>
+            <stop offset="1" stop-color="#2563eb"/>
+        </linearGradient>
+    </defs>
+    <!-- rx ≈ 22% of the tile: rounds the square just enough to survive
+         being shrunk, matching the --radius-lg card corner language. -->
+    <rect width="32" height="32" rx="7" fill="url(#tile)"/>
+    <!-- The spark: up, dip, up — a trend line, not a straight arrow. -->
+    <polyline points="7 20 13 14 17 18 25 10"
+              fill="none" stroke="#ffffff" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

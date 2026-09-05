@@ -231,7 +231,12 @@ addToWatchlistBtn.addEventListener("click", async () => {
         });
         if (response.status === 201 || response.status === 409) {
             addToWatchlistBtn.disabled = true;
-            addToWatchlistBtn.textContent = "✓ On Watchlist";
+            // The done-state carries a check icon now, so it must be
+            // BUILT rather than assigned: a textContent assignment would
+            // wipe the SVG element. Icon first, then a real text node.
+            addToWatchlistBtn.textContent = "";
+            addToWatchlistBtn.append(
+                icon("check"), document.createTextNode(" On Watchlist"));
             return;
         }
         // The backend's named error (unknown symbol...) is more useful

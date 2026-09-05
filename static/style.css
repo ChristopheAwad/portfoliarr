@@ -1,22 +1,60 @@
-/* Color Palette & Clean Reset */
+/* ═══ Design tokens ═══════════════════════════════════════════════════
+   Every color, radius, shadow, and the font stack the whole app draws
+   from. Change a value HERE and the change propagates everywhere (and
+   common.js mirrors a few of these exact hexes for the Chart.js canvas —
+   keep that CHART_COLORS anchor in sync if you touch the core palette). */
 :root {
-    --bg-color: #f8f9fa;
+    /* Core palette (shared contract with common.js's chart colors). */
+    --bg-color: #f6f7f9;
     --card-bg: #ffffff;
-    --text-primary: #202124;
-    --text-secondary: #5f6368;
-    --border-color: #dadce0;
-    --green-pos: #137333;
-    --green-bg: #e6f4ea;
-    --red-neg: #c5221f;
-    --red-bg: #fce8e6;
-    --blue-accent: #1a73e8;
+    --text-primary: #1a1f36;
+    --text-secondary: #5b6472;
+    --border-color: #e4e7ec;
+    --green-pos: #059669;
+    --green-bg: #e7f6ef;
+    --red-neg: #dc2626;
+    --red-bg: #fdecec;
+    --blue-accent: #2563eb;
+    --blue-bg: #eaf1fe;
+    --blue-accent-hover: #1d4ed8;  /* primary buttons' hover step */
+
+    /* Derived neutrals: the old hardcoded #f1f3f4 hairlines/hover tints
+       became tokens so the whole grey family moves together. */
+    --bg-hover: #eef1f5;        /* rows, chips, quiet buttons on hover  */
+    --bg-inset: #eef1f5;        /* recessed input backgrounds           */
+    --border-subtle: #eef1f5;   /* hairlines *inside* cards (row rules) */
+    --border-strong: #cdd3db;   /* scrollbar thumbs, pressed hairlines  */
+
+    /* Elevation scale — soft, layered, blue-grey shadows (rgba of the
+       text-primary family, not pure black, so they never look dirty).
+       sm = resting cards; md = things that lift (dropdowns, toasts,
+       hovered chips); lg = true overlays (modals, the search dropdown). */
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow-md: 0 2px 4px rgba(16, 24, 40, 0.05), 0 4px 12px rgba(16, 24, 40, 0.08);
+    --shadow-lg: 0 8px 16px rgba(16, 24, 40, 0.12), 0 16px 40px rgba(16, 24, 40, 0.16);
+
+    /* Corner radii: sm for inputs/badges, md for chips/inputs-of-note,
+       lg for cards and modals — one consistent curvature language. */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+
+    /* Type: Inter (loaded in base.html via Google Fonts) first, then the
+       old system stack as fallback — the same families the app always
+       had, so a failed font download changes nothing but the face. */
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+            Helvetica, Arial, sans-serif;
+
+    /* Focus ring: a soft blue halo, applied via box-shadow (not outline)
+       so it follows rounded corners. Used by every input + button. */
+    --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.18);
 }
 
 * {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: var(--font);
 }
 
 /* The hidden attribute's built-in display:none lives in the BROWSER's
@@ -31,6 +69,10 @@
 body {
     background-color: var(--bg-color);
     color: var(--text-primary);
+    line-height: 1.5;
+    /* Inter is a screen-first face; this smooths its strokes on retina
+       displays (the standard text-rendering nudge for webfonts). */
+    -webkit-font-smoothing: antialiased;
 }
 
 /* Header & Search Bar */
@@ -39,22 +81,39 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 12px 24px;
-    background: var(--card-bg);
+    /* Translucent white + backdrop blur: content scrolling underneath
+       shows through softly blurred instead of stopping at a hard edge —
+       the modern finance-app bar. The blur is progressive enhancement:
+       browsers without backdrop-filter just show the 85% white. */
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border-color);
     position: sticky;
     top: 0;
     z-index: 100;
 }
 
+/* The Portfoliarr wordmark: spark mark + name, treated as ONE unit.
+   inline-flex + gap aligns the SVG and the text on a shared centerline;
+   font-weight 700 gives Inter's letterforms the punch a wordmark needs. */
 .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-size: 20px;
-    font-weight: 500;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
-.blue { color: #4285F4; }
-.red { color: #EA4335; }
-.yellow { color: #FBBC05; }
-.green { color: #34A853; }
-.gray { color: var(--text-secondary); font-weight: 400; }
+
+/* The mark + the accented tail share the gain-green, tying the brand to
+   the "pos" (up) color the app already uses everywhere. */
+.logo-mark { color: var(--green-pos); flex: 0 0 auto; }
+.logo-accent { color: var(--green-pos); }
+
+/* The logo is a link (it doubles as "home", see base.html) — strip the
+   browser's default anchor styling so it reads as the brand, not a link. */
+a.logo { text-decoration: none; }
 
 .search-container {
     position: absolute;
@@ -65,25 +124,47 @@ body {
     margin: 0;
 }
 
+/* The magnifier's positioning context. .search-container is absolute on
+   desktop but goes STATIC inside ≤920px — a static element is no
+   containing block, so without this wrapper the absolutely-positioned
+   icon would re-anchor to the sticky navbar. The wrapper is always
+   exactly as wide as the input, on every breakpoint. */
+.search-input-wrap {
+    position: relative;
+    width: 100%;
+}
+
+/* Decorative magnifier inside the input's left edge. pointer-events:
+   none lets clicks fall through to the input; the JS hooks (id,
+   placeholder, autocomplete) live on the input and are untouched. */
+.search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+    pointer-events: none;
+}
+
 .search-container input {
     width: 100%;
-    padding: 10px 16px;
-    border-radius: 8px;
+    /* Left padding clears the 16px icon (12px offset + 16px glyph +
+       breathing room); the right keeps the original generous padding. */
+    padding: 10px 16px 10px 36px;
+    border-radius: var(--radius-md);
     border: 1px solid transparent;
-    background-color: #f1f3f4;
+    background-color: var(--bg-inset);
     font-size: 14px;
     outline: none;
+    transition: background-color 150ms ease, border-color 150ms ease,
+                box-shadow 150ms ease;
 }
 
 .search-container input:focus {
     background-color: #fff;
-    border-color: var(--border-color);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-color: var(--blue-accent);
+    box-shadow: var(--focus-ring);
 }
-
-/* The logo became a link when the second page arrived (base.html) — strip
-   the browser's default anchor styling so it looks like the old span. */
-a.logo { text-decoration: none; }
 
 /* Search suggestion dropdown (base.html, filled by common.js). Positioned
    right under the input: .search-container is the positioned ancestor
@@ -97,8 +178,8 @@ a.logo { text-decoration: none; }
     right: 0;
     background: var(--card-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
     max-height: 320px;
     overflow-y: auto;
     z-index: 200; /* above the sticky navbar's own stacking context */
@@ -114,7 +195,7 @@ a.logo { text-decoration: none; }
     cursor: pointer;
 }
 
-.search-row:hover { background-color: #f1f3f4; }
+.search-row:hover { background-color: var(--bg-hover); }
 
 /* Long company names get one line + ellipsis instead of blowing out the
    row; the right-side meta text never wraps either. */
@@ -147,8 +228,9 @@ a.logo { text-decoration: none; }
 /* Index Chips Header. Each chip is an <a> to the stock detail page — the
    browser's default anchor look (blue text, underline) is stripped so the
    card keeps its shape, then "clickable" is re-signalled on hover/focus
-   with a border accent, the same quiet affordance the sortable ledger
-   headers use. */
+   with a border accent + a 1px lift, the same quiet affordance the
+   sortable ledger headers use. Chips are the one "interactive card" on
+   the dashboard, so they're the one card that gets hover elevation. */
 .indices-bar {
     display: flex;
     gap: 12px;
@@ -160,23 +242,35 @@ a.logo { text-decoration: none; }
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     padding: 10px 14px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     display: flex;
     gap: 8px;
     font-size: 13px;
     align-items: center;
     color: inherit;          /* anchor blue would tint the name span */
     text-decoration: none;   /* the card IS the link, no underline */
+    box-shadow: var(--shadow-sm);
+    transition: border-color 150ms ease, box-shadow 150ms ease,
+                transform 150ms ease;
 }
 
 .chip:hover,
 .chip:focus-visible {
     border-color: var(--blue-accent);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
     outline: none; /* we supply our own focus cue via the border */
 }
 
 .index-name { font-weight: 600; }
-.index-price { color: var(--text-secondary); }
+
+/* tabular-nums: every digit occupies the same width, so live-updating
+   numbers don't jiggle sideways as digits change. Applied to every cell
+   that shows a quote. */
+.index-price {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
 .index-change { font-size: 12px; white-space: nowrap; }
 
 /* Main Grid Structure */
@@ -190,9 +284,10 @@ a.logo { text-decoration: none; }
 .card {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 20px;
     margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
 }
 
 .stock-title {
@@ -202,7 +297,7 @@ a.logo { text-decoration: none; }
 }
 
 .badge {
-    background: #e8f0fe;
+    background: var(--blue-bg);
     color: var(--blue-accent);
     font-size: 11px;
     padding: 2px 6px;
@@ -240,6 +335,7 @@ a.logo { text-decoration: none; }
     font-size: 32px;
     font-weight: 500;
     margin-right: 12px;
+    font-variant-numeric: tabular-nums;
 }
 
 /* The two live change pills (Today's move, then the total return) sit IN
@@ -258,7 +354,7 @@ a.logo { text-decoration: none; }
     display: inline-block;
     margin-right: 8px;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 14px;
     white-space: nowrap;
 }
@@ -266,12 +362,11 @@ a.logo { text-decoration: none; }
 .price-change.pos { background-color: var(--green-bg); }
 .price-change.neg { background-color: var(--red-bg); }
 
-/* Chart Canvas Area. The dashed border / centering / grey tint from the
-   placeholder mockup are gone — the chart IS the content now. What remains:
-   a fixed height (so the card layout is stable) and position: relative,
-   which gives Chart.js a positioned ancestor to measure itself against —
-   with responsive:true + maintainAspectRatio:false the canvas stretches to
-   exactly fill this box. */
+/* Chart Canvas Area. A fixed height (so the card layout is stable) and
+   position: relative, which gives Chart.js a positioned ancestor to
+   measure itself against — with responsive:true +
+   maintainAspectRatio:false the canvas stretches to exactly fill this
+   box. */
 .chart-box {
     height: 300px;
     position: relative;
@@ -289,20 +384,24 @@ a.logo { text-decoration: none; }
     border: none;
     background: none;
     padding: 6px 12px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
     cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
 }
 
 .time-btn.active, .time-btn:hover {
-    background-color: #e8f0fe;
+    background-color: var(--blue-bg);
     color: var(--blue-accent);
 }
 
 /* Detail page: the Add-to-Watchlist / Log Transaction row. Same solid-blue
-   treatment as the tx-form submit — these are the card's primary actions. */
+   treatment as the tx-form submit — these are the card's primary actions,
+   and all primary buttons share one recipe: blue fill, white text, a
+   darker hover step, and a 150ms ease so the state change reads as motion
+   rather than a flash. */
 .stock-actions {
     display: flex;
     align-items: center;
@@ -311,17 +410,26 @@ a.logo { text-decoration: none; }
 }
 
 .btn-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: 8px 14px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--blue-accent);
     color: #fff;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
+    transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 
-.btn-action:hover { background: #1557b0; }
+.btn-action:hover { background: var(--blue-accent-hover); }
+
+.btn-action:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
 
 /* Done-state (added, or already on the watchlist): disabled + the green
    "success" palette, so the button reads as state, not an action. */
@@ -340,7 +448,8 @@ a.logo { text-decoration: none; }
 
 /* Detail page: stats grid. A <dl> (description list) is the honest element
    for label:value pairs; CSS turns the pairs into a 4-column grid. Labels
-   small and muted above, value below — a finance-app stats look. */
+   small, muted, UPPERCASE with a touch of letter-spacing — the classic
+   finance-app stat caption; value below in tabular figures. */
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -349,14 +458,17 @@ a.logo { text-decoration: none; }
 }
 
 .stat dt {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
 }
 
 .stat dd {
     font-size: 15px;
     margin-top: 2px;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Detail page navigation affordances (the detail page is reachable from
@@ -368,7 +480,7 @@ a.logo { text-decoration: none; }
     cursor: pointer;
 }
 
-.watchlist-item:hover { background-color: #f1f3f4; }
+.watchlist-item:hover { background-color: var(--bg-hover); }
 
 /* Ledger group tickers are links too — inherit the row's colour so the
    collapsed table reads as before, and only hint blue on hover. */
@@ -395,13 +507,24 @@ a.logo { text-decoration: none; }
     margin-bottom: 12px;
 }
 
+/* The quiet text button (Import, + Add). inline-flex + gap lets a
+   decorative SVG glyph ride along and stay optically centered with the
+   text (see the Import button in index.html). */
 .btn-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
     background: none;
     border: none;
     color: var(--blue-accent);
     font-weight: 600;
     cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
 }
+
+.btn-text:hover { background-color: var(--blue-bg); }
 
 .watchlist {
     list-style: none;
@@ -411,7 +534,7 @@ a.logo { text-decoration: none; }
     display: flex;
     justify-content: space-between;
     padding: 10px 0;
-    border-bottom: 1px solid #f1f3f4;
+    border-bottom: 1px solid var(--border-subtle);
     font-size: 14px;
 }
 
@@ -425,7 +548,7 @@ a.logo { text-decoration: none; }
 .change-tag {
     font-size: 12px;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     display: inline-block;
     margin-top: 2px;
 }
@@ -435,17 +558,22 @@ a.logo { text-decoration: none; }
 
 /* Watchlist row remove button. visibility:hidden keeps the button's box
    (so the row layout doesn't shift when it appears) while making it
-   invisible until the mouse rests on its row — a common "quiet UI" trick. */
+   invisible until the mouse rests on its row — a common "quiet UI" trick.
+   inline-flex centers the JS-injected SVG glyph inside the hit area. */
 .remove-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
     color: var(--text-secondary);
     font-size: 16px;
     line-height: 1;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     visibility: hidden;
+    transition: color 150ms ease;
 }
 
 .watchlist-item:hover .remove-btn { visibility: visible; }
@@ -473,32 +601,47 @@ a.logo { text-decoration: none; }
 .tx-form select {
     padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     font-size: 13px;
-    background: #fff;
+    background: var(--card-bg);
     outline: none;
     flex: 1 1 90px;
     min-width: 0;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+/* Focus ring (not just a border recolor): the halo makes the active
+   field pop from a form of siblings at a glance. */
 .tx-form input:focus,
 .tx-form select:focus {
     border-color: var(--blue-accent);
+    box-shadow: var(--focus-ring);
 }
 
+/* The Log button — one of the three primary buttons (with .btn-action
+   and the import panel's buttons); they share this exact recipe. */
 .tx-form button {
-    padding: 8px 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 14px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--blue-accent);
     color: #fff;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
+    transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 
 .tx-form button:hover {
-    background: #1557b0;
+    background: var(--blue-accent-hover);
+}
+
+.tx-form button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
 .tx-error {
@@ -513,10 +656,10 @@ a.logo { text-decoration: none; }
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px;
+    padding: 12px;
     margin-bottom: 12px;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
 }
 
 /* Monospace: the paste is column-aligned tab-separated data, and only a
@@ -526,15 +669,17 @@ a.logo { text-decoration: none; }
     box-sizing: border-box;
     padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     font-family: monospace;
     font-size: 13px;
     resize: vertical;
     outline: none;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .import-panel textarea:focus {
     border-color: var(--blue-accent);
+    box-shadow: var(--focus-ring);
 }
 
 .import-actions {
@@ -542,23 +687,36 @@ a.logo { text-decoration: none; }
     gap: 8px;
 }
 
+/* Preview/Import — the same primary recipe as the Log button. */
 .import-actions button {
-    padding: 8px 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 14px;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--blue-accent);
     color: #fff;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
+    transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 
 .import-actions button:hover {
-    background: #1557b0;
+    background: var(--blue-accent-hover);
 }
 
-/* The Close button is navigation, not an action on data — muted variant
-   so the blue buttons (Preview/Import) stay the obvious next step. */
+.import-actions button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* The Close button is navigation, not an action on data — the quiet
+   variant, so the blue buttons (Preview/Import) stay the obvious next
+   step. (Same idea as the shared .btn-quiet below; this keeps the
+   override local because the panel's base rule paints EVERY button blue
+   first.) */
 .import-actions button.btn-quiet {
     background: none;
     color: var(--text-secondary);
@@ -566,7 +724,7 @@ a.logo { text-decoration: none; }
 }
 
 .import-actions button.btn-quiet:hover {
-    background: none;
+    background: var(--bg-hover);
     color: var(--text-primary);
 }
 
@@ -638,6 +796,7 @@ a.logo { text-decoration: none; }
     cursor: pointer;
     user-select: none; /* clicking shouldn't select the header text */
     white-space: nowrap;
+    transition: color 150ms ease;
 }
 
 .ledger-table th.sortable:hover,
@@ -676,7 +835,8 @@ a.logo { text-decoration: none; }
 
 .ledger-table td {
     padding: 8px;
-    border-bottom: 1px solid #f1f3f4;
+    border-bottom: 1px solid var(--border-subtle);
+    font-variant-numeric: tabular-nums;
 }
 
 /* .num right-aligns numeric columns — digits of different lengths line up
@@ -686,11 +846,18 @@ a.logo { text-decoration: none; }
     white-space: nowrap;
 }
 
+/* Row hover tint for the tbody's detail rows (the group rows have their
+   own tint rules below — they're controls, so they keep their stronger
+   affordance). */
+.ledger-table tbody tr.ledger-row:hover {
+    background-color: var(--bg-hover);
+}
+
 .tx-badge {
     font-size: 11px;
     font-weight: 600;
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 .tx-badge.buy {
@@ -712,7 +879,7 @@ a.logo { text-decoration: none; }
 }
 
 .ledger-group:hover {
-    background-color: #f1f3f4;
+    background-color: var(--bg-hover);
 }
 
 .ledger-group .caret {
@@ -740,17 +907,22 @@ a.logo { text-decoration: none; }
    shift) while making them invisible until the mouse rests on their row.
    BOTH row types need a reveal rule: detail rows are .ledger-row, group
    rows are .ledger-group — a selector covering only one would leave the
-   other's buttons permanently invisible (this bit us once). */
+   other's buttons permanently invisible (this bit us once). inline-flex
+   centers the JS-emitted .icon SVGs inside the hit area. */
 .tx-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
     color: var(--text-secondary);
     font-size: 14px;
     line-height: 1;
     padding: 2px 5px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     visibility: hidden;
+    transition: color 150ms ease;
 }
 
 .ledger-row:hover .tx-action-btn,
@@ -762,11 +934,11 @@ a.logo { text-decoration: none; }
 /* Edit-mode notice: the form is temporarily editing an existing row.
    Blue tint = "state, not error" (errors stay red in .tx-error below). */
 .tx-editing {
-    background-color: #e8f0fe;
+    background-color: var(--blue-bg);
     color: var(--blue-accent);
     font-size: 13px;
     padding: 8px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     margin-bottom: 10px;
 }
 
@@ -778,6 +950,267 @@ a.logo { text-decoration: none; }
     font-weight: 600;
     text-decoration: underline;
     cursor: pointer;
+}
+
+/* ── Shared UI kit (built by common.js, styled here) ───────────────────
+   The JS emits DOM with EXACTLY these classes: confirm/prompt modals,
+   toasts, and SVG icons. The classes are a contract — restyle freely,
+   rename never. */
+
+/* Icons: common.js's icon() factory emits inline SVGs with this class.
+   1em sizing makes an icon scale with its button's font; the small
+   negative vertical-align optically centers it against text. */
+.icon {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.15em;
+    flex: 0 0 auto;
+}
+
+/* Button family. .btn is the SHAPE (padding, radius, motion); the
+   semantic classes are the COLOR. Modals assemble
+   .modal-actions > .btn.btn-quiet / .btn.btn-primary / .btn.btn-danger. */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease,
+                box-shadow 150ms ease;
+}
+
+.btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.btn-primary {
+    background: var(--blue-accent);
+    color: #fff;
+}
+
+.btn-primary:hover { background: var(--blue-accent-hover); }
+
+.btn-danger {
+    background: var(--red-neg);
+    color: #fff;
+}
+
+.btn-danger:hover { background: #b91c1c; }
+
+/* The quiet step (Cancel buttons): transparent until hovered, then the
+   same grey tint every hoverable row gets. */
+.btn-quiet {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-quiet:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Modal. common.js builds .modal-overlay > .modal on demand and removes
+   it on close; the overlay is a full-viewport dimmer (rgba of the
+   shadow-grey family, so it darkens without muddying hue) and the modal
+   itself slides up 10px as it fades in — a 150ms arrival, quick enough
+   to feel instant, slow enough to be seen. z-index 300 sits above the
+   navbar (100) and the search dropdown (200). */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 24, 40, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+    padding: 16px;
+    animation: modal-fade-in 150ms ease;
+}
+
+.modal {
+    background: var(--card-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    max-width: 420px;
+    width: 100%;
+    padding: 20px;
+    animation: modal-slide-up 150ms ease;
+}
+
+.modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.modal-message {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 8px 0 16px;
+}
+
+.modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    outline: none;
+    margin-bottom: 16px;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.modal-input:focus {
+    border-color: var(--blue-accent);
+    box-shadow: var(--focus-ring);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+@keyframes modal-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes modal-slide-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Toasts: transient status notes ("Could not reach the server…", success
+   receipts) stacked bottom-right. pointer-events: none on the container
+   (so it never blocks clicks on the page) but auto on each toast (so a
+   toast can be read/hovered); the left border is the type signal, the
+   tinted background reinforces it. z-index 400 — above even a modal,
+   because a toast may report a failure that dismissed that modal. */
+#toast-container {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    padding: 10px 14px;
+    font-size: 13px;
+    pointer-events: auto;
+    min-width: 220px;
+    max-width: 340px;
+    animation: toast-slide-in 180ms ease;
+}
+
+.toast-error {
+    border-left: 3px solid var(--red-neg);
+    background: var(--red-bg);
+}
+
+.toast-success {
+    border-left: 3px solid var(--green-pos);
+    background: var(--green-bg);
+}
+
+@keyframes toast-slide-in {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Custom thin scrollbars for the three scroll-heavy boxes (the ledger's
+   swipe area, the import report, the search dropdown). Firefox gets the
+   two-property shorthand; WebKit/Blink get the ::-webkit-scrollbar set.
+   The thumb is a mid-grey that's visible but never louder than content. */
+.table-wrap,
+#import-report,
+.search-results {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+}
+
+.table-wrap::-webkit-scrollbar,
+#import-report::-webkit-scrollbar,
+.search-results::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+
+.table-wrap::-webkit-scrollbar-track,
+#import-report::-webkit-scrollbar-track,
+.search-results::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.table-wrap::-webkit-scrollbar-thumb,
+#import-report::-webkit-scrollbar-thumb,
+.search-results::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+}
+
+.table-wrap::-webkit-scrollbar-thumb:hover,
+#import-report::-webkit-scrollbar-thumb:hover,
+.search-results::-webkit-scrollbar-thumb:hover {
+    background: #b7bfca;
+}
+
+/* ── Skeleton shimmer (loading placeholders) ───────────────────────────
+   The price/stats spans ship EMPTY from the templates; while they're
+   empty, a ::before box shimmers in place of the number. The moment JS
+   paints real text (or a degraded "—"), :empty goes false and the box
+   disappears — the loading state literally cannot outlive the data. */
+@keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.current-price:empty::before,
+.chip .index-price:empty::before,
+.watchlist .watch-price:empty::before,
+.stats-grid .stat dd:empty::before {
+    content: "";
+    display: inline-block;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, #eef1f5 25%, #f8fafc 50%, #eef1f5 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* The big portfolio/stock price gets a proportionally big box; the chip
+   and watchlist prices get small ones; stat values get a short bar. */
+.current-price:empty::before {
+    width: 200px;
+    height: 34px;
+    vertical-align: middle;
+}
+
+.chip .index-price:empty::before,
+.watchlist .watch-price:empty::before {
+    width: 70px;
+    height: 16px;
+}
+
+.stats-grid .stat dd:empty::before {
+    width: min(100%, 120px);
+    height: 18px;
 }
 
 /* Responsive */
@@ -1015,5 +1448,44 @@ a.logo { text-decoration: none; }
     .ledger-table td.empty-state {
         padding: 8px 0;
         color: var(--text-secondary);
+    }
+}
+
+/* Reduced motion: users who ask the OS for less movement get none of our
+   flourishes — the shimmer freezes into a plain grey placeholder box,
+   modals/toasts appear without the slide/fade, and the hover transitions
+   stop animating (state still changes, just instantly). Layout, colors,
+   and every piece of information survive; only the motion is surrendered,
+   which is exactly what the media query promises. */
+@media (prefers-reduced-motion: reduce) {
+    .current-price:empty::before,
+    .chip .index-price:empty::before,
+    .watchlist .watch-price:empty::before,
+    .stats-grid .stat dd:empty::before {
+        animation: none;
+    }
+
+    .modal-overlay,
+    .modal,
+    .toast {
+        animation: none;
+        transition: none;
+    }
+
+    .chip,
+    .time-btn,
+    .btn,
+    .btn-action,
+    .btn-text,
+    .tx-form button,
+    .import-actions button,
+    .search-container input,
+    .tx-form input,
+    .tx-form select,
+    .import-panel textarea,
+    .modal-input,
+    .ledger-table th.sortable,
+    .ledger-group .caret {
+        transition: none;
     }
 }

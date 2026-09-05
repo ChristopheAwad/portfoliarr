@@ -5,9 +5,10 @@
 // Knows nothing about yfinance, Flask, or Python.
 //
 // Shared helpers — REFRESH_MS, the formatters (formatPrice/formatNumber/
-// formatSigned), paintChange, and the whole navbar search dropdown — live
-// in common.js, which base.html loads BEFORE this file. They are plain
-// globals here; defining them again would just shadow the shared ones.
+// formatSigned), paintChange, the UI kit (icon / showPrompt / showConfirm /
+// showToast), and the whole navbar search dropdown — live in common.js,
+// which base.html loads BEFORE this file. They are plain globals here;
+// defining them again would just shadow the shared ones.
 
 // Chips managed by JS = those carrying a data-symbol attribute.
 // Chips without one (the static placeholders) are invisible to this code.
@@ -16,7 +17,8 @@ function managedChips() {
 }
 
 // Set every managed chip to a placeholder:
-// "…" while waiting for data, "—" when the backend is unreachable.
+// EMPTY while waiting for data (the CSS :empty skeleton shimmer shows),
+// "—" when the backend is unreachable.
 function setChipState(text) {
     managedChips().forEach((chip) => {
         chip.querySelector(".index-price").textContent = text;
@@ -134,17 +136,20 @@ function renderWatchlistRows(symbols) {
         right.className = "text-right";
         const priceEl = document.createElement("div");
         priceEl.className = "watch-price";
-        priceEl.textContent = "…";
+        // Empty, not "…": an empty .watch-price is what the CSS :empty
+        // skeleton shimmer keys on while the quote is in flight.
+        priceEl.textContent = "";
         const changeEl = document.createElement("span");
         changeEl.className = "change-tag";
         right.append(priceEl, changeEl);
 
-        // The × button. It gets rebuilt with the rows every cycle, so we
-        // never attach a click listener to it directly — one delegated
-        // listener on the parent <ul> handles clicks for all rows forever.
+        // The remove button (an × SVG icon). It gets rebuilt with the rows
+        // every cycle, so we never attach a click listener to it directly —
+        // one delegated listener on the parent <ul> handles clicks for all
+        // rows forever.
         const removeBtn = document.createElement("button");
         removeBtn.className = "remove-btn";
-        removeBtn.textContent = "×";
+        removeBtn.append(icon("x"));
         removeBtn.title = `Remove ${symbol}`;
         removeBtn.dataset.symbol = symbol;
 
@@ -234,10 +239,14 @@ async function refreshWatchlist() {
 // The backend validates the ticker is real (404) and rejects duplicates
 // (409) — the frontend just relays its error messages.
 addTickerBtn.addEventListener("click", async () => {
-    // prompt() returns null when the user cancels — abort quietly.
-    const input = prompt(
-        "Ticker symbol to watch (e.g. AAPL, SHOP.TO, BTC-USD):"
-    );
+    // showPrompt resolves null when the user cancels — abort quietly. (The
+    // same contract the old browser prompt had, minus freezing the page.)
+    const input = await showPrompt({
+        title: "Add to watchlist",
+        message: "Ticker symbol to watch (e.g. AAPL, SHOP.TO, BTC-USD):",
+        placeholder: "AAPL, SHOP.TO, BTC-USD…",
+        confirmLabel: "Add",
+    });
     if (input === null) return;
     const symbol = input.trim().toUpperCase();
     if (!symbol) return;
@@ -254,7 +263,10 @@ addTickerBtn.addEventListener("click", async () => {
             // message — relay it. .catch(() => null) guards against a
             // response that isn't parseable JSON.
             const data = await response.json().catch(() => null);
-            alert(data?.error || `Could not add ${symbol} (HTTP ${response.status})`);
+            showToast(
+                data?.error || `Could not add ${symbol} (HTTP ${response.status})`,
+                "error"
+            );
             return;
         }
         // 201 Created: a refresh pulls the stored list (and the new row's
@@ -262,15 +274,15 @@ addTickerBtn.addEventListener("click", async () => {
         refreshWatchlist();
     } catch (err) {
         console.error("add ticker failed:", err);
-        alert("Could not reach the server — is it running?");
+        showToast("Could not reach the server — is it running?", "error");
     }
 });
 
 // Remove: ONE delegated listener on the parent <ul>. Click events bubble up
-// from whatever was actually clicked (here, a × button that gets rebuilt
-// every cycle), and closest() walks back up the tree to find the button we
-// care about. Attaching listeners to the buttons themselves would die with
-// every rebuild — delegation survives it.
+// from whatever was actually clicked (here, a remove button that gets
+// rebuilt every cycle), and closest() walks back up the tree to find the
+// button we care about. Attaching listeners to the buttons themselves would
+// die with every rebuild — delegation survives it.
 watchlistEl.addEventListener("click", async (event) => {
     const removeBtn = event.target.closest(".remove-btn");
     if (!removeBtn) return; // click landed somewhere else in the list
@@ -290,14 +302,14 @@ watchlistEl.addEventListener("click", async (event) => {
         refreshWatchlist();
     } catch (err) {
         console.error("remove ticker failed:", err);
-        alert("Could not reach the server — is it running?");
+        showToast("Could not reach the server — is it running?", "error");
     }
 });
 
 // Navigate: a watchlist ROW is a link to the detail page now (the search
 // dropdown shouldn't be the only way there). A second delegated listener
 // on the same <ul> — delegation again, since rows are rebuilt every cycle.
-// The × button lives INSIDE its row, so this listener must stand down
+// The remove button lives INSIDE its row, so this listener must stand down
 // when a click started on it: the remove listener above handles that
 // click, and navigating on top of deleting would be a nasty surprise.
 watchlistEl.addEventListener("click", (event) => {
@@ -622,12 +634,12 @@ function buildTxRow(tx) {
     const actionsCell = document.createElement("td");
     const editBtn = document.createElement("button");
     editBtn.className = "tx-action-btn edit";
-    editBtn.textContent = "✎";
+    editBtn.append(icon("pencil"));
     editBtn.title = "Edit this transaction";
     editBtn.dataset.id = tx.id;
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "tx-action-btn delete";
-    deleteBtn.textContent = "×";
+    deleteBtn.append(icon("trash"));
     deleteBtn.title = "Delete this transaction";
     deleteBtn.dataset.id = tx.id;
     actionsCell.append(editBtn, deleteBtn);
@@ -718,9 +730,12 @@ function buildGroupRow(ticker, txs) {
 
     // --- Facts ---
     const dateCell = document.createElement("td");
+    // The expand/collapse chevron: the .caret wrapper span stays EXACTLY
+    // as it was (CSS rotates .caret for the open state) — only what's
+    // INSIDE it changed, from a text glyph to the SVG chevron.
     const caret = document.createElement("span");
     caret.className = "caret";
-    caret.textContent = "▸";
+    caret.append(icon("caret"));
     dateCell.append(caret, document.createTextNode(
         txs.length === 1 ? " 1 txn" : ` ${txs.length} txns`));
 
@@ -815,14 +830,14 @@ function buildGroupRow(ticker, txs) {
     // deleting EVERY transaction of this ticker (the bulk verb). The
     // confirmation that guards it (type-the-ticker, in the delegated
     // listener below) is deliberately stronger than the single row's
-    // confirm(): this destroys many immutable facts at once, no undo.
+    // confirm dialog: this destroys many immutable facts at once, no undo.
     const actionsCell = document.createElement("td");
     const deleteTickerBtn = document.createElement("button");
     // Classes: .tx-action-btn.delete borrows the detail rows' delete
     // styling; .ticker-delete-btn is the JS hook that keeps the delegated
     // listener's bulk branch from being confused with the single-row one.
     deleteTickerBtn.className = "tx-action-btn delete ticker-delete-btn";
-    deleteTickerBtn.textContent = "×";
+    deleteTickerBtn.append(icon("trash"));
     deleteTickerBtn.title = `Delete ALL ${ticker} transactions`;
     deleteTickerBtn.dataset.ticker = ticker; // which group this button is
     actionsCell.append(deleteTickerBtn);
@@ -1191,18 +1206,25 @@ ledgerBody.addEventListener("click", async (event) => {
         const txs = lastTransactions.filter((t) => t.ticker === ticker);
         if (txs.length === 0) return;
 
-        // THE GATE. prompt() returns null when the user cancels; any
+        // THE GATE. showPrompt resolves null when the user cancels; any
         // other answer must equal the ticker after the same trim+upper
         // normalization the backend applies. A mismatch (or a bare
         // OK/cancel reflex) aborts — typing the exact ticker is the
         // deliberate, conscious step that single-row deletes don't need.
-        const typed = prompt(
-            `Type ${ticker} to confirm deleting ALL ${txs.length} ` +
-            `${ticker} transactions. This cannot be undone.`
-        );
+        const typed = await showPrompt({
+            title: `Delete ALL ${ticker} transactions?`,
+            message: `Type ${ticker} to confirm deleting ALL ${txs.length} ` +
+                     `${ticker} transactions. This cannot be undone.`,
+            placeholder: ticker,
+            confirmLabel: "Delete all",
+            danger: true,
+        });
         if (typed === null) return;
         if (typed.trim().toUpperCase() !== ticker) {
-            alert(`Cancelled — you typed "${typed.trim()}", not ${ticker}.`);
+            showToast(
+                `Cancelled — you typed "${typed.trim()}", not ${ticker}.`,
+                "error"
+            );
             return;
         }
 
@@ -1234,7 +1256,7 @@ ledgerBody.addEventListener("click", async (event) => {
             refreshPortfolioSummary();
         } catch (err) {
             console.error("delete ticker transactions failed:", err);
-            alert("Could not reach the server — is it running?");
+            showToast("Could not reach the server — is it running?", "error");
         }
         return;
     }
@@ -1247,10 +1269,16 @@ ledgerBody.addEventListener("click", async (event) => {
     if (!tx) return;
 
     // Deletion is immediate and unrecoverable — the backend keeps no trash
-    // bin. confirm() pauses the script until the user answers.
-    if (!confirm(`Delete ${tx.transaction_type} of ${formatNumber(tx.qty, 4)} ` +
+    // bin. showConfirm (awaited — this listener is async) resolves once the
+    // user picks a side; false means they backed out.
+    if (!(await showConfirm({
+        title: "Delete transaction?",
+        message: `Delete ${tx.transaction_type} of ${formatNumber(tx.qty, 4)} ` +
                  `${tx.ticker} @ ${formatNumber(tx.price)} on ` +
-                 `${tx.transaction_date}?`)) {
+                 `${tx.transaction_date}?`,
+        confirmLabel: "Delete",
+        danger: true,
+    }))) {
         return;
     }
 
@@ -1271,7 +1299,7 @@ ledgerBody.addEventListener("click", async (event) => {
         refreshPortfolioSummary();
     } catch (err) {
         console.error("delete transaction failed:", err);
-        alert("Could not reach the server — is it running?");
+        showToast("Could not reach the server — is it running?", "error");
     }
 });
 
@@ -1720,9 +1748,11 @@ function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
 // ---------------------------------------------------------------------------
 
 // 1. Blank both managed sections so the outdated mockup numbers can never
-//    masquerade as live data. The indices chips get "…"; the watchlist
-//    starts truly empty and refreshWatchlist paints it within the second.
-setChipState("…");
+//    masquerade as live data. The indices chips ship EMPTY — the CSS
+//    :empty skeleton shimmer stands in until real data lands — and the
+//    watchlist starts truly empty, painted by refreshWatchlist within the
+//    second.
+setChipState("");
 
 // 2. Fetch all four quote-driven sections immediately — no waiting for the
 //    first interval.
