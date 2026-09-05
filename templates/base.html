@@ -16,12 +16,14 @@
          can't show the tags literally.) -->
     <title>{% block title %}Portfoliarr{% endblock %}</title>
 
-    <!-- The favicon is a hand-written SVG (static/favicon.svg): a rounded
-         blue tile with an upward spark line — the same mark the navbar
-         wordmark uses. SVG (not .ico) because browsers of every vintage
-         we care about support it, and one vector file stays crisp from a
-         16px tab to a 180px iOS home-screen icon. -->
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <!-- The favicon is static/favicon.png, downscaled from the full-size
+         portfoliarr-icon.png in assets/logo/ (64x64, white corners made
+         transparent so it sits clean on dark and light tab bars alike).
+         PNG (not the earlier hand-written SVG) because Firefox and Safari
+         silently ignore SVG favicons — a PNG tab icon works in every
+         browser. The original 1254x1254 PNG stays in assets/ as the
+         master copy. -->
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
@@ -58,8 +60,9 @@
          extend this file, so the navbar exists in exactly ONE place. -->
     <header class="navbar">
         <div class="nav-left">
-            <!-- The Portfoliarr wordmark. A small inline SVG spark (the
-                 trend-line motif the favicon carries too) + the brand name,
+            <!-- The Portfoliarr wordmark. A small inline SVG spark
+                 (matching the trend-line motif of the favicon's upward
+                 arrow) + the brand name,
                  with the tail accented so it reads as a mark rather than
                  plain text. The SVG uses stroke="currentColor" and takes
                  its color from CSS (.logo-mark) — the markup stays

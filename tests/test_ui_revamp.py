@@ -41,18 +41,20 @@ def strip_comments(html):
 
 def test_base_links_favicon_and_file_exists(client):
     """base.html (shared by both pages) must link the favicon, the file
-    must exist on disk, and Flask's static route must serve it as SVG —
-    a link to a 404 icon is the bug this triple-check catches."""
+    must exist on disk, and Flask's static route must serve it as PNG —
+    a link to a 404 icon is the bug this triple-check catches. (PNG, not
+    the earlier SVG: Firefox and Safari ignore SVG favicons entirely, so
+    the tab showed nothing in those browsers.)"""
     html = client.get("/").get_data(as_text=True)
     assert 'rel="icon"' in html
-    assert "favicon.svg" in html
+    assert "favicon.png" in html
 
-    favicon = Path(PROJECT_ROOT, "static", "favicon.svg")
-    assert favicon.is_file(), "static/favicon.svg is missing"
+    favicon = Path(PROJECT_ROOT, "static", "favicon.png")
+    assert favicon.is_file(), "static/favicon.png is missing"
 
-    served = client.get("/static/favicon.svg")
+    served = client.get("/static/favicon.png")
     assert served.status_code == 200
-    assert served.content_type.startswith("image/svg")
+    assert served.content_type.startswith("image/png")
 
 
 def test_stock_page_links_favicon_too(client):
@@ -61,7 +63,7 @@ def test_stock_page_links_favicon_too(client):
     edit copies the <head> into stock.html instead of extending base,
     the link could drift away on this page."""
     html = client.get("/stock/AAPL").get_data(as_text=True)
-    assert "favicon.svg" in html
+    assert "favicon.png" in html
 
 
 # ── 2. Branding ───────────────────────────────────────────────────────
