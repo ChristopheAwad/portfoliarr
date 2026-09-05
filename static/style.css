@@ -331,8 +331,12 @@ a.logo { text-decoration: none; }
 }
 
 /* Hover darkens the label text; the switch track gets its own nudge
-   (below). ::has() is a progressive enhancement — browsers too old to
-   know it just skip the hover state on the track, not the whole toggle. */
+   (below). Two rules below use :has() to map the hidden input's checked/
+   focus state onto the VISIBLE pieces (track colour, focus halo) — a
+   progressive enhancement: browsers too old for :has() lose those
+   cosmetics but keep a working toggle, because the knob still slides
+   (its selector is plain `input:checked + .fx-knob`) and the native
+   input still carries the state. */
 .fx-toggle:hover {
     color: var(--text-primary);
 }
@@ -383,12 +387,15 @@ a.logo { text-decoration: none; }
     transition: transform 0.2s ease;
 }
 
-/* ON state: blue track + knob travels right by (track 34px − knob 16px
-   − 2px of flanking inset − 2px of the transparent border) = 14px. The
-   translateY keeps the two transforms separable around the centered
-   Y-offset. */
+/* ON state: blue track + knob travels right so its inset mirrors the
+   off state's. The knob is absolutely positioned, so `left` measures
+   from the track's PADDING box (34px − 1px border each side = 32px),
+   not the border box — that's why the travel is 32 − 16 (knob) − 2
+   (left inset) − 2 (right inset) = 12px, not 14px: a 14px slide would
+   land the disc flush against the track's right edge. The translateY
+   keeps the two transforms separable around the centered Y-offset. */
 .fx-switch input:checked + .fx-knob {
-    transform: translateX(14px) translateY(-50%);
+    transform: translateX(12px) translateY(-50%);
 }
 
 /* The track itself turns blue when its inner input checks. */
@@ -1611,7 +1618,10 @@ a.logo { text-decoration: none; }
     .import-panel textarea,
     .modal-input,
     .ledger-table th.sortable,
-    .ledger-group .caret {
+    .ledger-group .caret,
+    .fx-toggle,
+    .fx-switch,
+    .fx-knob {
         transition: none;
     }
 }
