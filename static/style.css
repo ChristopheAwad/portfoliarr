@@ -308,24 +308,105 @@ a.logo { text-decoration: none; }
 
 /* The ledger's display-currency toggle ("Show USD in USD"). Sits at the
    right edge of the portfolio card's title row — margin-left: auto pushes
-   it away from the title + badge cluster to the card's far side. A plain
-   checkbox (not a styled fake switch) keeps the native control: keyboard
-   and screen-reader behavior for free, and no CSS state to keep in sync. */
+   it away from the title + badge cluster to the card's far side.
+
+   It's a custom sliding-knob switch, NOT a bare checkbox, but the native
+   <input> is still the heart of it: the real checkbox sits visually
+   hidden (opacity 0, stretched over the whole track) so the browser's
+   built-in keyboard + screen-reader behavior and the :checked state
+   (main.js reads .checked to pick ?currency=) all come for free. The
+   track/knob are just CSS painted from that one state — no JS, no extra
+   state to keep in sync. */
 .fx-toggle {
     margin-left: auto;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
+    gap: 8px;
+    font-size: 13px;
     color: var(--text-secondary);
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
+    transition: color 0.15s ease;
 }
 
-.fx-toggle input {
-    accent-color: var(--blue-accent);
+/* Hover darkens the label text; the switch track gets its own nudge
+   (below). ::has() is a progressive enhancement — browsers too old to
+   know it just skip the hover state on the track, not the whole toggle. */
+.fx-toggle:hover {
+    color: var(--text-primary);
+}
+
+/* The pill track. grey when OFF, blue-accent when ON; both knocked out
+   --border-strong lets the card's white show through as a hairline.
+   Swap a 1px solid transparent border in when :checked so the switch
+   size never changes as the track color shifts (a border appears/
+   disappears = a 2px layout jump otherwise). */
+.fx-switch {
+    position: relative;
+    width: 34px;
+    height: 20px;
+    flex-shrink: 0;
+    border-radius: 999px;
+    background: var(--border-strong);
+    border: 1px solid transparent;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* The real checkbox — keep it focusable but invisible, stretched over
+   the full track so the whole switch is its click target. Never
+   display:none: that would silently drop the input from the tab order. */
+.fx-switch input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
     cursor: pointer;
+    z-index: 1;
+}
+
+/* The knob: a white disc riding 2px in from the track's left edge.
+   transform does the sliding — cheaper and smoother than animating
+   left/right (compositor-only vs. layout). */
+.fx-knob {
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-50%);
+    transition: transform 0.2s ease;
+}
+
+/* ON state: blue track + knob travels right by (track 34px − knob 16px
+   − 2px of flanking inset − 2px of the transparent border) = 14px. The
+   translateY keeps the two transforms separable around the centered
+   Y-offset. */
+.fx-switch input:checked + .fx-knob {
+    transform: translateX(14px) translateY(-50%);
+}
+
+/* The track itself turns blue when its inner input checks. */
+.fx-switch:has(input:checked) {
+    background: var(--blue-accent);
+    border-color: var(--blue-accent);
+}
+
+/* Hover lift on the switch itself. */
+.fx-toggle:hover .fx-switch {
+    box-shadow: var(--shadow-sm);
+}
+
+/* Keyboard focus gets the app's standard soft-blue halo, drawn around
+   the track. :has() maps the hidden input's focus-visible state back
+   onto the visible pill (the input itself is invisible). */
+.fx-toggle:has(input:focus-visible) .fx-switch {
+    box-shadow: var(--focus-ring);
 }
 
 .stock-price-container {
