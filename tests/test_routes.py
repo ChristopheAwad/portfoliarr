@@ -773,7 +773,7 @@ def test_history_nan_close_carries_forward_and_stays_strict_json(
     seed_transaction(ticker="FETH.TO", date="2026-08-28", qty=5,
                      currency="CAD")
 
-    res = client.get("/api/portfolio/history?period=5D")
+    res = client.get("/api/portfolio/history?period=1M")
     assert res.status_code == 200
     assert b"NaN" not in res.data       # strict-JSON clean on the wire
     body = res.get_json()

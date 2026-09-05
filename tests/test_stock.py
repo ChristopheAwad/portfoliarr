@@ -192,7 +192,7 @@ def test_stock_history_nan_last_bar_is_dropped_end_to_end(client, monkeypatch):
     monkeypatch.setattr(market_data, "yf",
                         SimpleNamespace(Ticker=FakeTicker))
 
-    res = client.get("/api/stock/META/history?period=5D")
+    res = client.get("/api/stock/META/history?period=1M")
     assert res.status_code == 200
     assert b"NaN" not in res.data          # strict-JSON clean on the wire
     assert res.get_json() == {

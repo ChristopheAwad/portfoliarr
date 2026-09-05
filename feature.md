@@ -1,83 +1,85 @@
-# Feature: Faster chart loading (dashboard 5Y/MAX)
+# Feature: 5D → 30-minute bars
 
-User report: the dashboard portfolio chart is slow on 5Y and MAX. Root causes
-found while reading the code:
-
-1. `get_history` hits Yahoo on EVERY click — no cache (quotes have one; history doesn't).
-2. `/api/portfolio/history` fetches tickers SERIALLY — time = sum of all Yahoo calls.
-3. MAX fetches every daily bar since IPO (^GSPC → ~25k points); 5Y ~1,260 daily bars.
-
-User decisions: dashboard is the pain point (fix helps both pages anyway);
-5Y → weekly bars, MAX → monthly bars (daily kept for 1D–1Y).
+Follow-up to "Faster chart loading": after 5Y went weekly and MAX went
+monthly, 5D (daily, 5 points) became the odd one out — a 5-point zigzag.
+User decision: 5D serves 30-minute bars (~65 points, Google Finance's
+choice). 1D stays 5m; 1M–MAX unchanged.
 
 ## Plan
 
-1. **PERIOD_MAP** (market_data.py): `5Y: interval "1wk"`, `MAX: interval "1mo"`.
-2. **Label fix**: `get_history` gives date labels only when interval == "1d";
-   flip to "date labels for everything except intraday". The only intraday
-   interval is "5m", so the check becomes `interval == "5m"` for time labels.
-   Same flip for the route's `is_intraday` check (app.py) — it must treat
-   1wk/1mo as daily-shaped (transactions applied per date, axis trimmed at
-   first_tx_date).
-3. **History cache** in market_data.py: `{(symbol, period_key): {"data": dict,
-   "fetched_at": epoch}}`. TTL: 600s for daily/weekly/monthly (history is
-   settled), 120s for 1D (today's bar keeps moving). Cache successes only —
-   a failed fetch is never cached. `clear_history_cache()` helper for tests.
-4. **Parallel fetch** in `/api/portfolio/history`: ThreadPoolExecutor over the
-   unique tickers, keeping the exact contract — per-ticker try/except, warn
-   log with exc_info, `{}` on failure, successes stored in `histories`.
+1. **PERIOD_MAP** (market_data.py): `5D` interval → `"30m"`. Add two
+   per-entry flags so code stops keying on magic interval strings:
+   - `intraday: True` on 1D ONLY — drives the label shape and the route's
+     ledger-math branch (1D = whole position at today's first bar).
+   - `live: True` on 1D AND 5D — today's bar is still moving, so TTL 120s;
+   everything else `live: False` → settled TTL 600s.
+   Flags replace the `interval == "5m"` checks (the same check that
+   already bit us once as `!= "1d"` when 5Y/MAX moved off daily bars).
+2. **Labels** (get_history): three shapes, keyed off `intraday` + label
+   uniqueness needs —
+   - 1D (one day): `"HH:MM"` as today.
+   - 5D (multi-day intraday): `"YYYY-MM-DD HH:MM"` — plain `"HH:MM"` would
+     collide 5× in the `{label: price}` dict and silently drop days.
+   - all date-spaced bars: `"YYYY-MM-DD"` as today.
+3. **TTL**: `live` flag picks 120s (1D, 5D); 600s for settled bars.
+4. **app.py** `is_intraday`: read `PERIOD_MAP[period]["intraday"]` instead
+   of `interval == "5m"`. The daily branch needs NO other change — its
+   ledger math is lexicographic string comparison (`label >=
+   first_tx_date`, `tx_date <= label`), and `"YYYY-MM-DD HH:MM"` labels
+   sort correctly against `"YYYY-MM-DD"` transaction dates. A 5D
+   transaction applies at that day's first 30m bar — same honest
+   date-driven model, finer bars.
+5. **Docs**: contract rewrite in project-brief.md Design Rules ("5m is the
+   only intraday" → flag-based contract), AGENTS.md:35, code comments.
 
 ## Known accepted behavior
 
-Weekly/monthly bars are coarser: a mid-period buy enters the line at the
-NEXT bar (a mid-August buy appears at September's bar on MAX). Same
-"next trading day" approximation already used for weekend buys, just coarser.
-Long-horizon cosmetic shift, accepted by user.
+- 5D now shows intraday wiggle — that's the point.
+- A 5D transaction applies at its day's FIRST 30m bar (date-only ledger
+  can't know the minute) — same approximation 1D uses, applied per-day.
+- Cross-ticker label unions: tickers from different markets (TSX vs NYSE)
+  have different 30m timestamps → the union axis may be denser than any
+  single ticker's bars; forward-fill handles gaps (existing mechanism).
 
 ## Test plan (written FIRST, must fail until implemented)
 
-New file `tests/test_chart_speed.py`:
+Extend `tests/test_chart_speed.py` + `tests/test_market_data.py`:
 
-- autouse fixture calls `clear_history_cache()` before each test (no leakage).
-- **cache**: with a counting fake `yf.Ticker`, two identical `get_history`
-  calls → exactly ONE network fetch, same result both times.
-- **TTL**: second call after monkeypatched `time.time() + 601` → refetches.
-- **1D TTL**: 1D entries go stale after 121s (shorter TTL), not after 601s.
-- **no cache on failure**: fake raises → first call raises, cache stays
-  empty; a second (working) fake → real fetch happens.
-- **cache key includes period**: same symbol, "5D" then "1M" → two fetches.
-- **weekly labels are dates**: fake yf returns 1wk bars → labels match
-  "YYYY-MM-DD", not "HH:MM".
-- **monthly labels are dates**: same for "1mo".
-- **portfolio route treats 5Y as daily-shaped**: end-to-end — a transaction
-  dated before some weekly bars trims the axis at first_tx_date (labels are
-  dates, pre-first-buy bars dropped).
-- **parallel fetch**: fake `app.get_history` that blocks on a
-  `threading.Barrier(2)` for two tickers — serial execution would deadlock
-  (pytest-timeout / the test fails), parallel passes.
-- **parallel failure isolation**: one ticker's fake raises, other succeeds →
-  route still 200, failed ticker contributes 0 (contract unchanged).
-
-Existing suite must stay green (fake_market patches app.get_history, so the
-cache is invisible there).
+- **5D unpacking**: fake yf records `("AAPL", "5d", "30m")` in calls.
+- **5D labels are datetime-shaped**: `"YYYY-MM-DD HH:MM"`, unique across
+  several days (multi-day fake index → no dict-key collisions).
+- **1D labels stay HH:MM** (regression), **1M/5Y/MAX labels stay dates**
+  (regression).
+- **TTL live**: 5D entry goes stale at 121s (refetch), like 1D; **TTL
+  settled**: 1M entry survives past 601s? — NO, stale at 601s; existing
+  601s test moves from 5D → 1M.
+- **Route 5D daily-shaped**: transactions on separate days apply at that
+  day's first 30m bar; axis trims at first_tx_date; labels pre-first-buy
+  dropped. End-to-end via `/api/portfolio/history?period=5D`.
+- **Route 1D regression**: existing first-bar intraday branch tests stay
+  green untouched.
 
 ## Status
 
-- [x] Plan approved by user
-- [x] Tests written & failing (7 failed, 3 regression locks passed — as designed)
+- [x] Plan approved by user (30m chosen from options)
+- [x] Tests written & failing (4 new-contract tests failed; 3 old tests
+      encoding "5D = daily/settled" moved to 1M)
 - [x] Implemented
-- [x] Full suite green: 223 passed
-- [x] GUI check by user (dashboard + stock page, 2026-09-05)
-- [x] Commit decision (review nits addressed, squash-merging into main)
+- [x] Full suite green: 226 passed
+- [x] GUI check by user (2026-09-05, "ok good")
+- [ ] Commit decision
 
-## Notes from implementation (things the tests caught)
+## Notes from implementation
 
-- Test-side arithmetic slips fixed: monthly bars carry their own date as
-  the label (no first-of-month normalization); the parallel test's first
-  bar only includes that bar's transactions (1320 = 12 × 110), the 08-31
-  buys land on the 08-31 bar (2400 = 20 × 120).
-- REAL leak found by the full suite: any test running the real
-  get_history (test_routes' NaN regression caches ("META","5D")) could
-  poison a later file's identical lookup (test_stock's META test). Fix:
-  suite-wide autouse `fresh_history_cache` fixture in conftest.py — the
-  one place that covers every file, present and future.
+- The moved tests surfaced a FOURTH 5D-contract test the plan missed:
+  `test_routes.py::test_history_nan_close_carries_forward_and_stays_strict_json`
+  (real get_history through the route with date-only 5D bars) — moved to
+  1M like its siblings in test_market_data.py / test_stock.py.
+- PERIOD_MAP gained a third per-entry key beyond the planned two: a
+  `label` strftime format. Deriving the shape from `intraday`/`live`
+  would have re-created a mini string-sniff (5D needs the datetime shape
+  while NOT being intraday-flagged); an explicit format per row keeps
+  "adding a timeframe = edit the map once" true.
+- `get_history`'s local `is_intraday` disappeared entirely — label
+  format and TTL each read their own key; `app.py`'s route-level
+  `is_intraday` now reads the `intraday` flag.

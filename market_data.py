@@ -36,18 +36,20 @@ _name_cache = {}
 # {(symbol, period_key): {"data": {label: close}, "fetched_at": epoch}}
 # Same shape as the quote cache, different TTLs — because the two data
 # kinds age differently:
-#   daily/weekly/monthly bars are SETTLED history — a past close never
-#   changes — but a fresh fetch must still pick up NEW bars at the right
-#   edge (today's close lands after this session's close), so 600s (ten
-#   minutes) keeps repeat clicks instant without serving a whole evening
-#   of stale data.
-#   the 1D intraday series includes TODAY's bar, which keeps moving all
-#   session — 600s would freeze the line mid-day, so intraday entries
-#   live only 120s, the same cadence as the quote cache.
+#   settled bars (the date-spaced 1M–MAX series) are SETTLED history — a
+#   past close never changes — but a fresh fetch must still pick up NEW
+#   bars at the right edge (today's close lands after this session's
+#   close), so 600s (ten minutes) keeps repeat clicks instant without
+#   serving a whole evening of stale data.
+#   "live" series include TODAY's bar, which keeps moving all session —
+#   600s would freeze the line mid-day — so they live only 120s, the
+#   same cadence as the quote cache. That's 1D (today's 5-minute bars)
+#   AND 5D (whose 30-minute bars span up to five sessions, today's
+#   among them).
 # Dies on restart like every module-level dict here — acceptable (the
 # quote cache made the same call; restarting re-warms it once).
-_HISTORY_TTL_SETTLED = 600    # seconds: daily / weekly / monthly bars
-_HISTORY_TTL_INTRADAY = 120   # seconds: the 1D 5-minute series
+_HISTORY_TTL_SETTLED = 600    # seconds: settled date-spaced bars
+_HISTORY_TTL_LIVE = 120       # seconds: series including today's live bar
 _history_cache = {}
 
 
@@ -62,11 +64,16 @@ def clear_history_cache():
 # The page's timeframe buttons map to a Yahoo "period" + "interval" pair.
 # This dict is the single source of truth for that mapping, shared by
 # get_history (the HOW of fetching) and the portfolio-history route (also
-# uses its keys to validate a client-supplied timeframe string).
+# uses its keys to validate a client-supplied timeframe string). The two
+# flags ride along so NO code has to sniff interval strings (the old
+# `interval == "5m"` check already broke once when 5Y/MAX moved off daily
+# bars — explicit flags can't be out-guessed):
 #
 #   period   — how far back Yahoo goes ("1d", "5d", "3mo", "max"...)
 #   interval — the spacing of data points within that range:
 #              "5m"  for 1D (intraday every 5 minutes),
+#              "30m" for 5D (intraday across ~5 sessions — Google
+#              Finance's choice; daily bars left 5D a 5-point zigzag),
 #              "1d"  for the short ranges (one close per trading day),
 #              "1wk"/"1mo" for 5Y/MAX (speed: weekly/monthly bars cut a
 #              long-range payload ~5–25×, so MAX stops fetching ^GSPC's
@@ -75,20 +82,40 @@ def clear_history_cache():
 #              a chart that pops and one that grinds. Same trade Google
 #              Finance makes: the long-horizon view is about SHAPE, and
 #              a weekly line looks identical at this zoom).
-#
-# "5m" is the ONLY intraday interval here — get_history keys its label
-# format and its cache TTL off exactly that string, and the portfolio
-# route keys its intraday branch off it too.
+#   intraday — True ONLY for the single-day 1D view: the chart's
+#              x-labels are clock times ("09:30") and the portfolio
+#              route prices the WHOLE carried-in position at the
+#              session's first bar (a date-only ledger can't know the
+#              minute). 5D's 30m bars span MULTIPLE days, so they keep
+#              the daily-shaped ledger math — their labels carry the
+#              date, which sorts correctly against transaction dates.
+#   live     — True when the series includes TODAY's still-moving bar
+#              (1D and 5D): those cache entries expire at the short
+#              live TTL. Everything else is settled history (600s).
+#   label    — the strftime format for the x-axis labels get_history
+#              returns: "HH:MM" within 1D's single day, full
+#              "YYYY-MM-DD HH:MM" for 5D (bare times would collide
+#              across its five days in the {label: price} dict), plain
+#              "YYYY-MM-DD" for date-spaced bars.
 PERIOD_MAP = {
-    "1D":  {"period": "1d",  "interval": "5m"},
-    "5D":  {"period": "5d",  "interval": "1d"},
-    "1M":  {"period": "1mo", "interval": "1d"},
-    "3M":  {"period": "3mo", "interval": "1d"},
-    "6M":  {"period": "6mo", "interval": "1d"},
-    "YTD": {"period": "ytd", "interval": "1d"},
-    "1Y":  {"period": "1y",  "interval": "1d"},
-    "5Y":  {"period": "5y",  "interval": "1wk"},
-    "MAX": {"period": "max", "interval": "1mo"},
+    "1D":  {"period": "1d",  "interval": "5m",  "intraday": True,
+            "live": True,  "label": "%H:%M"},
+    "5D":  {"period": "5d",  "interval": "30m", "intraday": False,
+            "live": True,  "label": "%Y-%m-%d %H:%M"},
+    "1M":  {"period": "1mo", "interval": "1d",  "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "3M":  {"period": "3mo", "interval": "1d",  "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "6M":  {"period": "6mo", "interval": "1d",  "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "YTD": {"period": "ytd", "interval": "1d",  "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "1Y":  {"period": "1y",  "interval": "1d",  "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "5Y":  {"period": "5y",  "interval": "1wk", "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
+    "MAX": {"period": "max", "interval": "1mo", "intraday": False,
+            "live": False, "label": "%Y-%m-%d"},
 }
 
 
@@ -259,10 +286,14 @@ def get_history(symbol, period_key):
     the same dict.
 
     The returned dict maps a plain-string label to that point's CLOSE
-    price (the standard "price at end of that bar"):
-      - Date-spaced ranges ("5D"..."MAX" — daily, weekly or monthly
-        bars): label is "YYYY-MM-DD" ("2026-08-31").
-      - Intraday (1D):         label is "HH:MM" ("09:30").
+    price (the standard "price at end of that bar"). The label SHAPE per
+    timeframe comes straight from PERIOD_MAP's "label" format:
+      - 1D (single intraday day):  "HH:MM" ("09:30").
+      - 5D (intraday, multi-day):  "YYYY-MM-DD HH:MM" ("2026-08-31 09:30")
+        — the date part is what keeps Monday's "09:30" from colliding
+        with Tuesday's in this dict.
+      - Date-spaced ranges (1M..MAX — daily, weekly or monthly bars):
+        "YYYY-MM-DD" ("2026-08-31").
 
     These plain strings are exactly what the frontend wants for
     Chart.js x-axis labels — no timezone math leaked to the browser.
@@ -279,21 +310,18 @@ def get_history(symbol, period_key):
     the network, so a transient Yahoo hiccup can't masquerade as a dead
     ticker for a whole TTL window.
     """
-    # Unpack the chosen timeframe into the two args yfinance wants.
+    # Unpack the chosen timeframe into the args yfinance wants — plus the
+    # label format and "live" flag that drive everything below. No
+    # interval string-sniffing: these are explicit PERIOD_MAP data (see
+    # the map's comment for why — a string check already broke once).
     timeframe = PERIOD_MAP[period_key]
-
-    # "Is this the intraday shape?" — asked twice below (labels, TTL), so
-    # answer it once. "5m" is the only intraday interval in PERIOD_MAP;
-    # every other interval (1d, 1wk, 1mo) is date-spaced. (This used to
-    # test `!= "1d"` — which silently mislabelled weekly/monthly bars as
-    # clock times the moment 5Y/MAX moved off daily bars.)
-    is_intraday = timeframe["interval"] == "5m"
+    label_format = timeframe["label"]
 
     # Cache check — is our copy young enough to trust? The TTL depends on
-    # the data's shape: settled history (any date-spaced series) keeps
-    # 600s; the 1D series includes today's still-moving bar, so 120s.
+    # the data's age profile: a "live" series (1D, 5D) includes today's
+    # still-moving bar, so 120s; settled history (1M–MAX) keeps 600s.
     now = time.time()
-    ttl = _HISTORY_TTL_INTRADAY if is_intraday else _HISTORY_TTL_SETTLED
+    ttl = _HISTORY_TTL_LIVE if timeframe["live"] else _HISTORY_TTL_SETTLED
     entry = _history_cache.get((symbol, period_key))
     if entry and (now - entry["fetched_at"]) < ttl:
         return dict(entry["data"])  # cache hit: no network involved
@@ -306,8 +334,7 @@ def get_history(symbol, period_key):
     # df is a pandas DataFrame indexed by timezone-aware timestamps
     # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
     # dict, so walk each (timestamp, row) pair and key it by a clean
-    # string: the date part for weekly/monthly/daily bars, the time part
-    # for intraday.
+    # string in the timeframe's own label format.
     result = {}
     for ts, row in df.iterrows():
         # NaN close = "no bar printed yet" — Yahoo ships this on the
@@ -321,11 +348,9 @@ def get_history(symbol, period_key):
         close = float(row["Close"])
         if math.isnan(close):
             continue
-        # Date-spaced bars: "YYYY-MM-DD" (the first 10 chars of the ISO
-        # text). Intraday bars: just the "HH:MM" time to keep labels
-        # short.
-        label = ts.strftime("%H:%M") if is_intraday \
-            else ts.strftime("%Y-%m-%d")
+        # Label per the timeframe's format: "%H:%M" on 1D, "%Y-%m-%d
+        # %H:%M" on 5D, "%Y-%m-%d" on the date-spaced ranges.
+        label = ts.strftime(label_format)
         result[label] = close
 
     # Cache the SUCCESS (an exception above never reaches this line) and

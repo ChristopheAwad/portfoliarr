@@ -337,16 +337,17 @@ Algorithm: walk every trading day in the range forward, keeping a
     #     honest, simple choice. (A portfolio bought last week is still
     #     held today — pricing only TODAY's transactions painted a flat
     #     zero line all day, which was a bug, not a statement.)
-    # Detect the case by the interval (same dict that drove the fetch) —
-    # "5m" is the ONLY intraday interval in PERIOD_MAP, and this check
-    # must agree with get_history's (which flips on the same string).
-    # (It used to test `!= "1d"`, which silently worked while every
-    # non-1D interval WAS "1d" — and would have misrouted the weekly
-    # 5Y / monthly MAX bars into the intraday branch the moment this
-    # feature moved them off daily bars.)
+    # Detect the case by PERIOD_MAP's explicit "intraday" flag (same dict
+    # that drove the fetch) — NO interval string-sniffing. This used to
+    # test `interval == "5m"`, which worked only while 1D was the sole
+    # intraday row; 5D's 30-minute bars span multiple days, so they keep
+    # the DAILY branch on purpose: their labels are "YYYY-MM-DD HH:MM",
+    # which still sorts correctly against "YYYY-MM-DD" transaction dates
+    # (a buy dated 2026-09-03 applies at 2026-09-03 09:30, that day's
+    # first bar — lexicographic compare is date compare here).
     # Grab today's date once (same local-day rule the frontend's date
     # input uses, so a "today" trade prices into today's intraday chart).
-    is_intraday = PERIOD_MAP[period]["interval"] == "5m"
+    is_intraday = PERIOD_MAP[period]["intraday"]
     label_date_today = date.today().isoformat()
 
     # START THE DAILY AXIS AT THE FIRST LOGGED INVESTMENT — not at the far
@@ -1760,8 +1761,9 @@ def stock_history(symbol):
 
     get_history returns {label: close}; Chart.js wants parallel arrays, so
     sort the labels once and walk them. Plain-string labels sort
-    chronologically in both shapes: "YYYY-MM-DD" dates, and (for the 1D
-    intraday view) "HH:MM" times within their single day.
+    chronologically in every shape: "YYYY-MM-DD" dates, "YYYY-MM-DD
+    HH:MM" (5D's 30-minute bars), and 1D's "HH:MM" times within their
+    single day.
     """
     symbol = symbol.strip().upper()
 

@@ -94,17 +94,24 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   forward-filled — it plots one ticker's own closes, so ending at the last
   real bar is the honest picture there.
 - **Long-horizon charts trade bar precision for load speed.** 5Y serves
-  WEEKLY bars (`1wk`) and MAX serves MONTHLY bars (`1mo`); 1D stays
-  5-minute and the other ranges stay daily. At that zoom the line is about
-  SHAPE, not individual closes — and MAX would otherwise pull ^GSPC's
-  ~25,000 daily bars since 1927. Accepted consequence: a mid-period buy
-  enters the line at the NEXT bar (a mid-August buy appears at September's
-  monthly bar) — the same next-trading-day approximation the weekend-buy
-  rule already uses, just coarser. Contract: "5m" is the ONLY intraday
-  interval in `PERIOD_MAP` — label formatting in `get_history` and the
-  intraday branch in `/api/portfolio/history` both key on exactly that
-  string; any non-"5m" interval is date-spaced ("YYYY-MM-DD" labels,
-  daily-shaped ledger math).
+  WEEKLY bars (`1wk`) and MAX serves MONTHLY bars (`1mo`); the short
+  ranges (1M–1Y) stay daily. At that zoom the line is about SHAPE, not
+  individual closes — and MAX would otherwise pull ^GSPC's ~25,000 daily
+  bars since 1927. Accepted consequence: a mid-period buy enters the line
+  at the NEXT bar (a mid-August buy appears at September's monthly bar) —
+  the same next-trading-day approximation the weekend-buy rule already
+  uses, just coarser. 5D went the OTHER way (finer, not coarser): 30-
+  minute bars (`30m`), because plain daily bars left it a 5-point zigzag.
+  Contract: PERIOD_MAP entries carry explicit flags — `intraday` (True
+  ONLY for 1D: clock-time labels + the route's first-bar ledger branch)
+  and `live` (True for 1D AND 5D: the 120s cache TTL, since today's bar
+  keeps moving; settled date-spaced bars use 600s). Label formats are a
+  PERIOD_MAP `label` field too: 1D "HH:MM", 5D "YYYY-MM-DD HH:MM" (the
+  date keeps its five days from colliding in the {label: price} dict),
+  everything else "YYYY-MM-DD". No code sniffs interval strings. 5D's
+  datetime labels still sort lexicographically against "YYYY-MM-DD"
+  transaction dates, so its ledger math stays daily-shaped (a buy applies
+  at its day's FIRST 30-minute bar).
 
 ## Temporary Decisions (will need rework in the future)
 
@@ -131,8 +138,9 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   acceptable for prices. **Rework trigger:** when the SQLite transaction
   ledger is built, consider moving the price cache into the same database.
 - **History cache is an in-memory dict** (`market_data.py`, keyed
-  `(symbol, period)`, TTL 600s for settled date-spaced bars / 120s for the
-  still-moving 1D series), not SQLite — same call as the quote cache; dies
+  `(symbol, period)`, TTL 600s for settled date-spaced bars / 120s for
+  "live" series that include today's still-moving bar — 1D and 5D), not
+  SQLite — same call as the quote cache; dies
   on restart, acceptable. Successes only: a failed fetch is never cached,
   so a transient Yahoo hiccup retries on the next click instead of posing
   as a dead ticker for a TTL window. **Rework trigger:** the quote cache's

@@ -199,14 +199,16 @@ def test_get_name_raises_when_no_name_exists(fake_yf):
 def test_history_daily_bars_use_date_labels(fake_yf):
     """Daily bar labels are plain 'YYYY-MM-DD' strings — exactly what the
     frontend's chart wants, no timezone objects leaked to the browser.
-    Also asserts the PERIOD_MAP unpacking: '5D' → period='5d', interval='1d'."""
+    (1M is the daily-bars representative: 5D moved to 30-minute bars with
+    'YYYY-MM-DD HH:MM' labels — see test_chart_speed.py.) Also asserts
+    the PERIOD_MAP unpacking: '1M' → period='1mo', interval='1d'."""
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": [100.0, 110.0]},
         index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
     )
-    result = market_data.get_history("AAPL", "5D")
+    result = market_data.get_history("AAPL", "1M")
     assert result == {"2026-08-28": 100.0, "2026-08-31": 110.0}
-    assert ("AAPL", "5d", "1d") in fake_yf.calls
+    assert ("AAPL", "1mo", "1d") in fake_yf.calls
 
 
 def test_history_intraday_bars_use_time_labels(fake_yf):
@@ -239,7 +241,7 @@ def test_history_skips_nan_close_bars(fake_yf):
         {"Close": [100.0, float("nan"), 110.0]},
         index=pd.to_datetime(["2026-08-28", "2026-08-31", "2026-09-01"]),
     )
-    result = market_data.get_history("AAPL", "5D")
+    result = market_data.get_history("AAPL", "1M")
     assert result == {"2026-08-28": 100.0, "2026-09-01": 110.0}
 
 
