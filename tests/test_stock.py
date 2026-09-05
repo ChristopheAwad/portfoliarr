@@ -33,6 +33,30 @@ def test_stock_page_renders_shell_with_normalized_symbol(client):
     assert "AAPL" in html   # also in the <title>
 
 
+# ── Watch-state stamp (the watch button's initial state) ─────────────
+
+def test_stock_page_ships_unwatched_by_default(client):
+    """The watch button's state ships in the HTML (data-watched) so stock.js
+    can paint the check mark WITHOUT a fetch — no flicker, no network on the
+    critical path. An unwatched symbol stamps false."""
+    html = client.get("/stock/aapl").get_data(as_text=True)
+    assert 'data-watched="false"' in html
+
+
+def test_stock_page_ships_watched_when_symbol_is_watched(client, fake_market):
+    """Already on the watchlist → data-watched="true" — the whole point of
+    the feature: the button must reflect reality at LOAD, not only after a
+    click. Exercises the full path: route reads db.is_watched, template
+    stamps the attribute. The watchlist stores 'aapl' normalized to 'AAPL',
+    so this also proves the URL-side normalization matches the DB's.
+    (The fake quote seeds the add route's validation — it refuses to store
+    unquotable symbols.)"""
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
+    client.post("/api/watchlist", json={"symbol": "aapl"})
+    html = client.get("/stock/aapl").get_data(as_text=True)
+    assert 'data-watched="true"' in html
+
+
 # ── Quote endpoint (the polled one) ───────────────────────────────────
 
 def test_stock_quote_returns_quote_plus_name(client, fake_market):

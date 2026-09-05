@@ -12,6 +12,7 @@
     --border-color: #e4e7ec;
     --green-pos: #059669;
     --green-bg: #e7f6ef;
+    --green-bg-hover: #d9f0e4;  /* green state-buttons' hover step */
     --red-neg: #dc2626;
     --red-bg: #fdecec;
     --blue-accent: #2563eb;
@@ -431,13 +432,27 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
-/* Done-state (added, or already on the watchlist): disabled + the green
-   "success" palette, so the button reads as state, not an action. */
+/* Disabled dead-end (stock.js's markUnknownSymbol: when a quote 404s,
+   both action buttons become unclickable). No longer the watchlist
+   done-state — that role lives in .btn-action.watched below. */
 .btn-action:disabled {
     background: var(--green-bg);
     color: var(--green-pos);
     cursor: default;
 }
+
+/* Watched state (the stock page's watch button, already on the list):
+   the same green "state, not action" palette — but the button stays
+   CLICKABLE, because its click now means "remove from watchlist" (the
+   old disabled done-state was a dead end that made watched symbols
+   un-unwatchable from this page). The hover override matters: the plain
+   .btn-action:hover repaints blue, which would lie about the state. */
+.btn-action.watched {
+    background: var(--green-bg);
+    color: var(--green-pos);
+}
+
+.btn-action.watched:hover { background: var(--green-bg-hover); }
 
 /* Inline error beside the buttons (unknown ticker, server down...) — the
    tx-error treatment, relocated to the detail page. */

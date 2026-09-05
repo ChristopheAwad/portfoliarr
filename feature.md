@@ -1,117 +1,51 @@
-# Feature: UI Revamp — "Portfoliarr, polished"
+# Feature: Stock-page watchlist button reflects + toggles watch state
+
+## Problem
+The stock detail page's "Add to Watchlist" button never shows that the symbol
+is ALREADY watched (only learns it from a click's 201/409 response), and the
+done-state is `disabled`, so a watched symbol can't be unwatched from this page.
 
 ## Goal
+- Button paints its true state AT LOAD (check mark if already watched).
+- Clicking while watched asks "Remove from watchlist?" (showConfirm) and
+  DELETEs on confirm; 404 = removed elsewhere → sync to unwatched.
 
-The app works but looks barebones. One coherent visual pass: refined light
-theme (typography, spacing, elevation, hover/focus states), rebrand from
-"Google Finance Clone" to **Portfoliarr** (+ favicon), SVG icons instead of
-text glyphs, custom modals/toasts instead of `prompt()`/`alert()`/`confirm()`,
-and skeleton shimmer while quotes load. No data-flow changes.
+## Subtasks
+1. `db.py` — `is_watched(symbol)` helper (bool SELECT next to add/remove).
+2. `app.py` — `stock_page` passes `watched=db.is_watched(...)` to the template
+   (DB read only; rendering still never touches the network).
+3. `templates/stock.html` — button ships `data-watched="true|false"`.
+4. `static/js/stock.js` — `paintWatchBtn(watched)` paints both states from
+   icon("plus")/icon("check"); boot reads data-watched (no fetch, no flicker);
+   click branches watched → confirm+DELETE / not-watched → POST; 404 on
+   DELETE treated as "already removed" → paint unwatched.
+5. `static/style.css` — new `.btn-action.watched` (green palette, clickable —
+   the old disabled done-state is gone); hover keeps green.
 
-User approved: light-only theme, rebrand, SVG icons, modals/toasts,
-skeletons — "all of it".
+## Contracts that are easy to break (touched here)
+- Layering: db knows nothing about Flask/yfinance; routes decide; JS renders.
+- stock_page's shell rule: template ships state, JS fills data — no network
+  at render time.
+- PUT/POST vocabularies untouched; DELETE /api/watchlist/<symbol> already
+  exists (204 / 404) — no new endpoints.
+- `.btn-action:disabled` is the shared done-state rule; we ADD a sibling
+  class, never repurpose the disabled rule.
+- showConfirm contract: resolves true/false; danger=true for destructive.
 
-## Hard contracts (locked by tests — must survive)
+## Test plan (written first — must fail before implementation)
+- tests/test_db.py:
+  - is_watched False on empty DB; True after add; False after remove.
+  - is_watched is case-sensitive exact match (routes normalize before calling).
+- tests/test_stock.py:
+  - GET /stock/aapl renders data-watched="false" when unwatched.
+  - After POST /api/watchlist {"symbol": "aapl"}, GET /stock/aapl renders
+    data-watched="true" (normalization: stored AAPL matches URL aapl).
 
-- `<table class="ledger-table">` immediately inside `<div class="table-wrap">`
-  (test_routes.py). Keep both class strings verbatim.
-- 11 `<th>` with the exact data-col order and the 7 `.sortable` — header TEXT
-  stays pure text (no SVG inside `<th>`; the regex tests read textContent).
-- Chips stay `<a class="chip" data-symbol=... href=...>` with
-  `.index-name` / `.index-price` / `.index-change` spans inside.
-- Every id/class JS hooks: #ticker-search, #search-results, all ids on both
-  pages, .time-btn, .ledger-group/.ledger-row/.tx-detail/.tx-action-btn,
-  .tx-badge buy/sell, .watchlist-item/.watch-price/.change-tag/.remove-btn,
-  .search-row/.search-meta/.sub-text, .caret, .price-change.pos/.neg, etc.
-  Restyle, never rename; adding decorative wrappers/spans is fine.
-- The ≤600px phone-card ledger layout, the `[hidden]{display:none!important}`
-  guard, and `@media (hover: none)` button visibility all survive.
-- favicon + branding are NEW locks (see test plan).
+JS confirm/unwatch flow has no JS test infra — verified at the GUI gate.
 
-## Shared contract (subagent A = JS, subagent B = HTML/CSS — no file overlap)
-
-### Palette (B defines in :root; A mirrors the chart values exactly)
-- --green-pos: #059669, --green-bg: #e7f6ef
-- --red-neg: #dc2626, --red-bg: #fdecec
-- --blue-accent: #2563eb, --blue-bg: #eaf1fe
-- --bg-color: #f6f7f9, --card-bg: #ffffff, --text-primary: #1a1f36,
-  --text-secondary: #5b6472, --border-color: #e4e7ec
-- A's common.js: CHART_COLORS up line #059669 / fill rgba(5,150,105,0.12),
-  down line #dc2626 / fill rgba(220,38,38,0.10); crosshair #e4e7ec;
-  tooltip bg #1a1f36; y-grid #eef1f5. Keep the anchor comment in sync.
-
-### UI kit (A adds to common.js; B styles the exact classes)
-- `icon(name, className)` → SVG element (createElementNS, 24×24 viewBox,
-  stroke currentColor, fill none, stroke-width 2, feather-style STATIC path
-  data only — never string-built from data). Names: pencil, trash, x, plus,
-  search, caret, check. Base class `.icon`.
-- `showConfirm({title, message, confirmLabel, cancelLabel, danger})` →
-  Promise<boolean>; `showPrompt({title, message, placeholder, confirmLabel,
-  danger})` → Promise<string|null>; `showToast(message, type)` type
-  "error"|"success". Built per call: `.modal-overlay > .modal` with
-  `.modal-title`, `.modal-message`, `.modal-input` (prompt only),
-  `.modal-actions` > `.btn .btn-quiet` cancel + `.btn .btn-primary` /
-  `.btn .btn-danger` confirm. Escape / overlay-click = cancel; Enter in
-  input = confirm; focus input (prompt) or confirm button (confirm) on open;
-  focus restored on close. Toast singleton `#toast-container` fixed
-  bottom-right, `.toast .toast-error / .toast-success`, auto-dismiss ~4s.
-- All existing callers SWAP: main.js prompt→showPrompt (watchlist add, bulk
-  type-ticker), confirm→showConfirm (single tx delete), alert→showToast
-  (every network-failure + cancelled notice). stock.js one line: the
-  "✓ On Watchlist" state becomes icon("check") + " On Watchlist" text node.
-- Icon swaps in JS-built DOM: edit ✎→icon("pencil"), delete ×→icon("trash"),
-  watchlist remove ×→icon("x"), group caret keeps span.caret wrapper with
-  icon("caret") inside (CSS rotate untouched). ALL data-* hooks and title
-  attrs preserved.
-
-### Skeleton loading (pure CSS on :empty — B styles, A+B ship empty)
-- Shimmer on `.current-price:empty`, `.chip .index-price:empty`,
-  `.watchlist .watch-price:empty`, `.stats-grid .stat dd:empty`.
-- Templates must ship these spans/dds TRULY EMPTY (`></span>` — no
-  whitespace inside, or :empty is false forever).
-- A: setChipState("") instead of "…"; watchlist watch-price builds empty.
-  Degraded "—" fills still win over :empty, so degradation is unaffected.
-  Watchlist name keeps its "…"→"" behavior (it can be legitimately empty —
-  no shimmer rule for it).
-- `prefers-reduced-motion: reduce` disables shimmer/modal/toast animation.
-
-### B: rebrand + restyle
-- base.html: Inter via Google Fonts CDN (preconnect + css2 link, system
-  fallback stack), favicon `<link rel="icon" ... favicon.svg>`, Portfoliarr
-  wordmark (inline SVG spark + text, still `a.logo`, still links home),
-  search input gets an inline search SVG (id untouched).
-- index/stock titles → "Portfoliarr" / "{{ symbol }} — Portfoliarr"; stale
-  brand comments updated where they name the product.
-- static/favicon.svg: simple rounded square + upward spark line.
-- style.css: new tokens (radii, shadows/elevation, spacing), refined navbar/
-  chips/cards/buttons (unified primary/quiet/danger), form focus rings,
-  ledger table polish (row hover, nicer group rows/badges/sort/drag states),
-  watchlist, stats grid, custom scrollbars, tabular-nums on numeric cells.
-  PRESERVE: all responsive blocks (≤920px, ≤600px card layout, hover:none).
-- NO sticky thead (considered, dropped: fights the sticky navbar offset).
-
-## Test plan (tests/test_ui_revamp.py — written FIRST, fails before impl)
-
-pytest, template-level only (client fixture; no network, no fakes):
-1. test_base_links_favicon_and_file_exists — dashboard html has
-   `rel="icon"` + favicon.svg; static/favicon.svg exists; GET
-   /static/favicon.svg → 200 with svg content type.
-2. test_branding_rebranded_to_portfoliarr — "/" and "/stock/AAPL" html
-   (comments stripped) contain no "Google"; title contains "Portfoliarr".
-3. test_dashboard_js_hooks_present — the id list above renders.
-4. test_stock_js_hooks_present — stock-page ids render.
-5. test_loading_placeholders_ship_empty — portfolio-value, stock-price,
-   and one stat dd have empty text content between tags (the :empty
-   shimmer contract).
-Then: FULL suite green (`python -m pytest`) — existing locks prove the
-table/chips/wrapper survived the restyle.
-
-## Execution order
-
-1. feature.md (this) → approved.
-2. Failing tests (test_ui_revamp.py) → run to confirm red.
-3. Parallel subagents: A = common.js/main.js/stock.js kit+swaps+chart colors;
-   B = templates/style.css/favicon. Both get the contract above verbatim.
-4. Lead integrates, reviews diffs, runs FULL suite.
-5. GUI gate: user checks both pages desktop + phone width.
-6. Commit gate: explicit yes only.
+## Status
+- [x] Plan approved by user (2026-09-05)
+- [x] Tests written + failing (4 new: 2 db, 2 route)
+- [x] Implemented, full `python -m pytest` green (213 passed)
+- [x] GUI gate (user checked the browser, 2026-09-05)
+- [x] Commit gate (review nits addressed, squash-merging into main)

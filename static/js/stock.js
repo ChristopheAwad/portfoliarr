@@ -217,12 +217,72 @@ async function refreshStockStats() {
 // ACTIONS — the two buttons in the header card.
 // ---------------------------------------------------------------------------
 
-// + Add to Watchlist: the SAME endpoint the dashboard's sidebar uses
-// (POST /api/watchlist) — no duplicate API for the same fact. 201 (added)
-// and 409 (already there) both mean "it's on the watchlist now", so both
-// flip the button to its done-state; anything else is an inline error.
+// The watch button is a two-face STATE MACHINE painted by ONE function, so
+// its markup can never drift between the faces (before this, the watched
+// face was only ever built inside the click handler — which is why a page
+// load never showed an already-watched symbol's check mark). The state
+// itself lives in data-watched (stamped by the route from a DB read); the
+// .watched class drives the green "state, not action" palette in CSS.
+// Note there's no disabled here: a watched button stays CLICKABLE — its
+// click now means "remove" (the old done-state was a dead end, which is
+// why a watched symbol couldn't be unwatched from this page).
+function paintWatchBtn(watched) {
+    addToWatchlistBtn.dataset.watched = String(watched);
+    addToWatchlistBtn.classList.toggle("watched", watched);
+    // Content must be BUILT rather than assigned: a textContent assignment
+    // would wipe the SVG element. Icon first, then a real text node —
+    // icon("plus") for the action, icon("check") for the state.
+    addToWatchlistBtn.textContent = "";
+    addToWatchlistBtn.append(
+        icon(watched ? "check" : "plus"),
+        document.createTextNode(watched ? " On Watchlist" : " Add to Watchlist")
+    );
+}
+
+// Click: ADD when unwatched; confirm-then-REMOVE when watched. Both halves
+// go through the SAME endpoints the dashboard's watchlist uses (POST and
+// DELETE /api/watchlist) — no duplicate API for the same fact.
 addToWatchlistBtn.addEventListener("click", async () => {
     actionErrorEl.hidden = true; // fresh attempt, fresh error state
+
+    // --- REMOVE path. Un-watching is destructive (a misclick on "add"
+    // is harmless; silently deleting a watchlist entry is not), so it
+    // passes through showConfirm's styled modal, resolving true/false.
+    if (addToWatchlistBtn.dataset.watched === "true") {
+        const confirmed = await showConfirm({
+            title: "Remove from watchlist",
+            message: `Remove ${symbol} from your watchlist?`,
+            confirmLabel: "Remove",
+            danger: true,
+        });
+        if (!confirmed) return; // changed their mind — leave state as-is
+        try {
+            const response = await fetch(
+                `/api/watchlist/${encodeURIComponent(symbol)}`,
+                { method: "DELETE" }
+            );
+            // 204 = removed. 404 = it vanished elsewhere (another tab, the
+            // dashboard's ×) — that IS the wanted end state, so sync to
+            // "unwatched" instead of relaying an error. Anything else is
+            // a real failure worth a message.
+            if (response.status === 204 || response.status === 404) {
+                paintWatchBtn(false);
+                return;
+            }
+            showActionError(
+                `Could not remove ${symbol} (HTTP ${response.status})`
+            );
+        } catch (err) {
+            console.error("remove from watchlist failed:", err);
+            showActionError("Could not reach the server — is it running?");
+        }
+        return;
+    }
+
+    // --- ADD path. 201 (added) and 409 (already there — e.g. it raced in
+    // via another tab) both mean "it's on the watchlist now", so both
+    // flip the button to its watched face; anything else is an inline
+    // error.
     try {
         const response = await fetch("/api/watchlist", {
             method: "POST",
@@ -230,13 +290,7 @@ addToWatchlistBtn.addEventListener("click", async () => {
             body: JSON.stringify({ symbol }),
         });
         if (response.status === 201 || response.status === 409) {
-            addToWatchlistBtn.disabled = true;
-            // The done-state carries a check icon now, so it must be
-            // BUILT rather than assigned: a textContent assignment would
-            // wipe the SVG element. Icon first, then a real text node.
-            addToWatchlistBtn.textContent = "";
-            addToWatchlistBtn.append(
-                icon("check"), document.createTextNode(" On Watchlist"));
+            paintWatchBtn(true);
             return;
         }
         // The backend's named error (unknown symbol...) is more useful
@@ -278,6 +332,10 @@ const stockChartHandle = setupTimeframeChart({
 // then poll ONLY what moves on a quote cadence.
 // ---------------------------------------------------------------------------
 
+// paintWatchBtn BEFORE the fetches: it reads the data-watched stamp the
+// route left in the HTML, so the button is correct the moment this script
+// runs — no fetch, no flicker, no network on the critical path.
+paintWatchBtn(addToWatchlistBtn.dataset.watched === "true");
 refreshStockQuote();
 refreshStockStats();
 if (stockChartHandle) stockChartHandle.refresh();

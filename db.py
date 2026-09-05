@@ -171,6 +171,23 @@ def add_symbol(symbol):
         )
 
 
+def is_watched(symbol):
+    """Membership check: is this exact symbol on the watchlist?
+
+    Deliberately an EXACT match (no strip/upper here) — normalizing is the
+    route layer's job (it does it for add/remove too), and a silent
+    normalization here would let a sloppy caller keep passing unnormalized
+    symbols that only *happen* to work for uppercase input. The stock page
+    route calls this at render time to stamp the watch button's initial
+    state, so the page knows it's watched before any JavaScript runs.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM watchlist WHERE symbol = ? LIMIT 1", (symbol,)
+        ).fetchone()
+    return row is not None
+
+
 def remove_symbol(symbol):
     """Delete a symbol's row. Returns True if a row was actually removed,
     False if the symbol wasn't in the watchlist (route turns that into 404).
