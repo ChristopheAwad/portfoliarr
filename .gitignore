@@ -11,10 +11,11 @@ instance/
 # Environment variables & secrets
 .env
 
-# Editors / OS
+# Editors / OS / AI tools
 .DS_Store
 .idea/
 .vscode/
+.opencode/
 
 # Test framework
 .pytest_cache/

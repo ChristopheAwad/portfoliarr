@@ -4,6 +4,7 @@
 - `project-brief.md` — authoritative spec (stack, UI, MVP scope); takes precedence over assumptions.
 - `feature.md` — context file for the feature in progress; read it before resuming work. Starting a new feature? Follow the **Feature workflow** section below: write the plan there first and get user approval before any implementation code.
 - Design decisions that outlive a feature go in their permanent home: the "why" lives in code comments next to the code, cross-cutting rules go in `project-brief.md`'s Design Rules section. Never leave durable rationale only in `feature.md` — it's wiped per feature, so no long-lived file may reference it.
+- `revert-to-table-plan.md` is a DORMANT contingency (the shipped feature kept phone holding cards) — never execute it unless the user asks.
 
 ## Feature workflow (required)
 Applies to every NEW feature; small bug fixes and one-line tweaks skip the gate.
@@ -37,13 +38,22 @@ Use subagents to run independent implementation chunks concurrently — but only
 
 ## Commands
 - Activate venv: `source .venv/bin/activate`
+- Python is pinned at 3.14 (venv, CI, Dockerfile base image); all deps `==`-pinned in `requirements.txt`.
 - Run dev server: `python app.py` (debug mode, port 5000)
 - Verify live data: `curl http://localhost:5000/api/indices`
+
+## Deploy (Docker & CI)
+- Dev machine has NO Docker — never build/run the image locally. `tests/test_docker.py` meta-tests the container config by string-checking `Dockerfile`, `docker-compose.yml`, `.dockerignore`, and `.github/workflows/docker.yml`; editing any of those files means keeping the asserted contracts (right things present, wrong things absent, in both directions).
+- CI on every push to `main` (`.github/workflows/docker.yml`): full `python -m pytest` → build & push `ghcr.io/christopheawad/portfoliarr:latest` + `:<sha>`. A red main never produces an image; `workflow_dispatch` exists for manual rebuilds.
+- Server adopts updates: `docker compose pull && docker compose up -d` (pulls the published image, never builds locally). App at `http://localhost:9967` (host 9967 → container 5000).
+- Prod = gunicorn `app:app`, 1 worker + 8 threads — deliberate: the in-memory quote cache and SQLite want a single process. Dev keeps `python app.py`.
+- Container boots as root ONLY so `docker-entrypoint.sh` can chown the data volume, then `exec gosu appuser` — no `USER` directive by design (locked by test). Named volume `portfoliarr-data` mounted over `/app/instance` keeps the SQLite ledger across image updates; `TZ=America/Toronto` in compose.
 
 ## Testing
 - Run: `python -m pytest` from the project root. Test files live in `tests/`; shared fixtures (`fresh_db`, `client`, `fake_market`) and the `make_quote` helper in root `conftest.py`.
 - Tests never touch the real `instance/` DB — `fresh_db` monkeypatches `db.DB_PATH` to a per-test `tmp_path` file.
 - Patch names WHERE THEY'RE USED, not where they're defined: `market_data` calls `yf` → `monkeypatch.setattr(market_data, "yf", Fake)`; routes call imported `get_quote`/`get_name`/`get_stats`/`get_history`/`search_tickers` → patch on the module: `import app as app_module`, then `monkeypatch.setattr(app_module, "get_quote", ...)`. (`from app import app` binds the Flask object, not the module — classic trap.)
+- `fake_market` also patches the FX helpers: `fx_rates["USDCAD"]` (live) and `fx_on[("USDCAD", "YYYY-MM-DD")]` (historical); an ABSENT key = "Yahoo couldn't answer".
 - Validator error paths call `jsonify()`, which needs app context → wrap calls in `with app.app_context():`.
 - Importing `app` runs `db.init()` on the real DB once — harmless (idempotent).
 - First run is slow (~90s pandas/numpy warmup), steady state ~17s. No test touches the network.
