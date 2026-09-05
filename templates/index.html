@@ -183,7 +183,17 @@
                         <div id="import-report" hidden></div>
                     </div>
 
-                    <table class="ledger-table">
+                    <!-- Responsive scroll wrapper. The ledger has 11
+                         nowrap columns — real readable widths need ~760px,
+                         which no phone has. The CSS gives this div
+                         overflow-x: auto, so the overflow is confined to
+                         HERE: the page never scrolls sideways, the user
+                         swipes within the card instead. The table itself
+                         gets a min-width so its columns squish to mush.
+                         (Pure markup+CSS: main.js finds things by class,
+                         so the wrapper changes nothing it does.) -->
+                    <div class="table-wrap">
+                        <table class="ledger-table">
                         <thead>
                             <tr>
                                 <!-- Every <th> carries a data-col: this row
@@ -245,6 +255,7 @@
                                  row. -->
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
 

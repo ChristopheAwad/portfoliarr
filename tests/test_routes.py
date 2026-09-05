@@ -274,6 +274,32 @@ def test_ledger_sortable_headers_match_sort_vocabulary(client):
                         "total_gain_pct", "day_gain", "day_gain_pct"}
 
 
+# ── Responsive ledger scroll wrapper ──────────────────────────────────
+# On a phone (~375px) the ledger's 11 nowrap columns cannot fit: without a
+# scroll wrapper they either squish unreadable or blow the page width out
+# sideways. The responsive fix wraps the table in <div class="table-wrap">
+# (CSS: overflow-x auto there, min-width on the table) so swiping happens
+# INSIDE the card and the page layout stays intact. Pure template+CSS —
+# main.js's hooks are class/descendant-based and survive a wrapper.
+
+def test_ledger_table_sits_in_scroll_wrapper(client):
+    """The ledger table must be immediately inside <div class="table-wrap">
+    and close before that wrapper's </div> — the phones/tablets contract.
+    The wrapper is what confines the table's min-width overflow to the card
+    (the page must never scroll sideways because of the ledger). Regex
+    shape, chips-test style, comments stripped first. Assert-first: no
+    wrapper at all fails LOUDLY rather than passing vacuously. The lazy
+    .*?</table></div> tail is safe because a table contains no nested
+    <div>s — the first </table> is the ledger's own."""
+    html = re.sub(r"<!--.*?-->", "",
+                  client.get("/").get_data(as_text=True), flags=re.S)
+    wrapper = re.search(
+        r'<div class="table-wrap">\s*<table class="ledger-table">'
+        r'.*?<thead>.*?</thead>.*?</table>\s*</div>', html, re.S)
+    assert wrapper, ('ledger table must sit inside <div class="table-wrap">'
+                     ' with its thead intact')
+
+
 # ── Transactions: POST (log) ──────────────────────────────────────────
 
 def test_log_transaction_201_echoes_db_vocabulary(client, fake_market):

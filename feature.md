@@ -1,90 +1,74 @@
-# Feature: Richer stock detail stats grid (11 cheap fields)
+# Feature: Responsive design for phones & tablets — v2
 
-## What & why
+## Goal
 
-The stock detail page's stats grid shows 7 fields today. The route it reads
-from (`/api/stock/<symbol>/stats` → `get_stats`) already fetches Yahoo's
-heaviest endpoint, `Ticker.info`, but extracts only 8 keys from the ~50+ the
-profile carries. Surfacing more fields is therefore nearly FREE: the network
-call already happens, we just read more keys out of the same dict.
+Make the dashboard feel phone-app-like on a real phone (~375px): the
+desktop-y 11-column ledger becomes stacked holding cards, and the page's
+small-screen details are tightened. The stock detail page is already
+fine per the user — untouched except the shared polish.
 
-User-approved scope: **all 11 fields** (both the "very high value" valuation
-set AND the "high value context" set).
+Round 1 (shipped) put a swipe-scroll wrapper on the ledger + touch fixes;
+the user's real-device test showed it reflows but "still reads desktop".
+v2 replaces the phone presentation, not the data path.
 
-## Fields added (7 → 18 cells)
+## Round-1 changes already in place (kept)
 
-| New backend key | Yahoo `.info` key | Display | Format |
-|---|---|---|---|
-| `pe_ratio` | `trailingPE` | 25.43 | `formatNumber` |
-| `eps` | `trailingEps` | 6.10 | `formatPrice` |
-| `dividend_yield` | `dividendYield` | 0.33% (pass-through) | `formatNumber` + "%" |
-| `beta` | `beta` | 1.20 | `formatNumber` |
-| `fifty_day_average` | `fiftyDayAverage` | 228.40 | `formatPrice` |
-| `two_hundred_day_average` | `twoHundredDayAverage` | 210.15 | `formatPrice` |
-| `avg_volume` | `avgVolume10days` | 42,000,000 | `integerFormat` |
-| `target_price` | `targetMeanPrice` | 260.00 | `formatPrice` |
-| `recommendation` | `recommendationKey` | Buy | text, title-cased |
-| `sector` | `sector` | Technology | text |
-| `industry` | `industry` | Consumer Electronics | text |
+- `<div class="table-wrap">` around the ledger table + `min-width: 760px`
+  (tablets/landscape phones 601–920px still use this swipe table).
+- `@media (hover: none)`: edit/delete/remove buttons always visible on
+  touch.
+- Timeframe buttons wrap; ≤600px navbar/price/chart compactions.
 
-Grid order after the existing Market Cap: P/E, EPS, Div Yield, Beta,
-50-Day Avg, 200-Day Avg, Avg Volume, Analyst Target, Rating, Sector, Industry.
+## v2 changes
 
-### The one unit gotcha: dividend yield is ALREADY a percent
-Initial assumption (a fraction needing ×100) was WRONG — caught live in the
-GUI at CM.TO showing 263%. Verified across CM.TO / RY.TO / AAPL / VZ (Sep
-2026): `Ticker.info["dividendYield"]` ships as a percent (2.63, 0.33, 5.59),
-each matching `dividendRate / currentPrice`. So `get_stats` passes it through
-VERBATIM and the frontend appends "%". No scaling anywhere.
+### 1. Ledger → holding cards on phones — main.js + style.css
 
-### `recommendation` display
-Yahoo sends lowercase keys, sometimes camelCase ("strongBuy"). A 2-line
-title-caser in stock.js splits on the camelCase boundary + capitalizes:
-"strongBuy" → "Strong Buy". Unknown values fall through as before.
+**main.js (only JS change, ~15 lines, zero behavior change on desktop):**
+- At boot, build `ledgerColLabels` (data-col → header text) from the
+  thead — the SAME text the desktop table shows. Strip ▲/▼ defensively.
+- In `buildTxRow` and `buildGroupRow`, the keyed-append stamps every cell:
+  `cell.dataset.col = col` + `cell.dataset.label = ledgerColLabels[col]`.
+  Invisible on desktop until CSS uses them; cell ORDER still comes from
+  `ledgerColOrder` (drag-reorder safe — rows are rebuilt after a drop, so
+  stamps stay truthful).
+- `setLedgerMessage` untouched: its colSpan=11 cell becomes a full-width
+  block in card mode (colSpan ignored in block display — harmless).
 
-## Files
+**style.css, entirely inside `@media (max-width: 600px)`:**
+- thead hidden; `.ledger-table`, tbody/tr/td → display:block (classic
+  responsive-table transform — SAME DOM, no second render path).
+- Reset `min-width: 760px` → auto and `.table-wrap` overflow → visible
+  (card mode doesn't swipe).
+- Group rows (`.ledger-group`) = tinted cards: ticker link prominent,
+  Value/Total Gain/Day Gain (+ pcts) as label:value lines, the caret +
+  "N txns" (the date cell) as the meta line, delete-all button visible.
+- Detail rows (`.ledger-row.tx-detail`) = labeled fact lines
+  ("Date: …", "Price: … CAD", badge, etc.) under their card.
+- Hide the meaningless cells on GROUP rows only: type (blank), price ("—").
+- Actions cell: buttons inline; with the hover:none fix they're always
+  visible.
+- Pos/neg classes keep winning on gain lines (block display doesn't touch
+  classes).
 
-| File | Change |
-|---|---|
-| `market_data.py` | `get_stats()`: add 11 `.get()` extractions (`dividend_yield` VERBATIM — Yahoo already ships it as a percent), update docstring. Same None-gap-fill convention. |
-| `templates/stock.html` | 11 new `<div class="stat">` cells in the `<dl class="stats-grid">`. |
-| `static/js/stock.js` | `paintStats`: map the 11 ids; `STAT_IDS`: add the 11 ids (failure path degrades whole grid still). |
-| `static/style.css` | EXPECTED no change — 4-col grid absorbs 18 cells; mobile 2-col = exactly 9 rows. |
-| `tests/test_market_data.py` | get_stats tests for the new keys. |
-| `tests/test_stock.py` | extend the stats pass-through test's dict. |
+### 2. Phone polish (≤600px)
 
-## Contracts checked
+- Tighter chips; slimmer card padding; log form: inputs full-width rows,
+  Log button full-width.
+- Watchlist/summary unchanged beyond existing compaction.
 
-- Stats endpoint is a pure pass-through; new keys ride the SAME payload —
-  no route change, no new endpoint, no extra API call.
-- None-gap-fill holds: absent fields → None → "—" (indices show "—" for most
-  of these; an unprofitable company has no P/E).
-- `get_name` shares `Ticker.info` and is untouched (name cache unchanged).
-- Formatting stays frontend-only except the dividend unit normalization.
-- Nothing touches PERIOD_MAP, quote cache, ledger math, or the chart.
+### 3. Desktop invariant + known limits
 
-## Test plan (tests-first)
+- EVERYTHING v2 lives inside the ≤600px query — 601px+ renders exactly
+  the round-1 desktop/tablet look.
+- Phones: no column sorting (thead hidden) and no drag-reorder (desktop-
+  only already); groups render in backend newest-first order.
 
-`tests/test_market_data.py`:
-1. Extend `test_get_stats_extracts_and_renames_the_grid_fields` with all 11
-   Yahoo keys → asserts the full 18-key naming contract.
-2. New `test_get_stats_dividend_yield_is_a_percent_pass_through`:
-   `dividendYield: 0.33` → `dividend_yield == 0.33` (pins pass-through, the
-   anti-263% regression guard); absent → None.
-3. Extend `test_get_stats_missing_fields_become_none`: assert all 11 new keys
-   are None too.
+## Test plan
 
-`tests/test_stock.py`:
-4. Extend `test_stock_stats_returned_untouched`'s fake dict with all 11 keys —
-   the existing `body == fake_market.stats["AAPL"]` assertion then locks the
-   route pass-through for the new fields.
-
-## Steps
-
-1. ✅ Plan approved (see above).
-2. Tests first: edits 1–4 above → run scoped → they FAIL (keys absent).
-3. Implement: `get_stats` → template cells → `paintStats` + `STAT_IDS`.
-4. Full `python -m pytest` green.
-5. GUI gate: check AAPL (dividend payer, all fields populated), a non-yield /
-   unprofitable ticker (some "—"), and ^GSPC (most "—"). Check 2-col mobile.
-6. Commit gate: explicit yes only.
+Nothing server-rendered changes — no new pytest is meaningful (the stamps
+are runtime JS; CSS isn't server-rendered). The gates:
+1. Full suite stays green — the existing locks PROTECT this feature: the
+   thead 11-column/data-col tests (test_routes.py) are the contract the
+   CSS keys on; the wrapper test keeps the table findable.
+2. GUI gate: user checks 375px (cards, expand, edit/delete, log form)
+   AND desktop (~1200px) for zero visual drift.
