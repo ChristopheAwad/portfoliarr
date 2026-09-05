@@ -914,8 +914,14 @@ a.logo { text-decoration: none; }
         gap: 12px;
         padding: 0 0 10px;
         border-bottom: none;
-        white-space: normal; /* the .num nowrap rule is table-only */
+        white-space: normal;
     }
+    /* .num cells carry the desktop table's nowrap (`.ledger-table .num`,
+       two classes — it OUTRANKS the plain td rule above, so that rule's
+       `white-space: normal` can never free them). Re-assert at equal
+       strength: in card mode a too-long value must wrap inside its line,
+       not overflow the card. */
+    .ledger-table td.num { white-space: normal; }
     .ledger-table td::before {
         content: attr(data-label);
         flex: 0 0 auto; /* caption never shrinks — long values wrap instead */
