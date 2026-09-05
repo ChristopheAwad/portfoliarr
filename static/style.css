@@ -280,6 +280,8 @@ a.logo { text-decoration: none; }
 
 .chart-timeframe-selectors {
     display: flex;
+    flex-wrap: wrap;   /* nine 1D–MAX buttons ≈ 400px — wider than a phone;
+                          wrapping keeps them all reachable in portrait */
     gap: 6px;
 }
 
@@ -599,8 +601,21 @@ a.logo { text-decoration: none; }
     color: var(--red-neg);
 }
 
+/* Responsive scroll wrapper (index.html). The 11 nowrap columns need
+   ~760px to stay readable — more than any phone gives. This div owns the
+   overflow: overflow-x:auto keeps the page layout intact and puts the
+   sideways swipe INSIDE the card, the standard finance-table pattern.
+   -webkit-overflow-scrolling keeps that swipe smooth on old iOS. The
+   table below the wrapper gets a min-width so its columns keep honest
+   widths instead of squishing to mush. */
+.table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 .ledger-table {
     width: 100%;
+    min-width: 760px;   /* the 11 columns' readable floor — swipe below this */
     border-collapse: collapse; /* borders join into single hairlines */
     font-size: 13px;
 }
@@ -766,6 +781,20 @@ a.logo { text-decoration: none; }
 }
 
 /* Responsive */
+
+/* Touch devices have no hover, so the hover-reveal trick above would
+   leave the edit/delete/remove buttons PERMANENTLY invisible there —
+   hidden state nobody can trigger. (hover: none) matches touch devices
+   (phones/tablets; desktops with a mouse report hover: hover) and pins
+   the buttons visible for good. Touch users get the same controls, just
+   always-on instead of hover-revealed. */
+@media (hover: none) {
+    .tx-action-btn,
+    .remove-btn {
+        visibility: visible;
+    }
+}
+
 @media (max-width: 920px) {
     .dashboard-grid {
         grid-template-columns: 1fr;
@@ -787,5 +816,198 @@ a.logo { text-decoration: none; }
         order: 3;
         flex-basis: 100%;
         margin: 0;
+    }
+}
+
+/* Phone-sized tweaks (~600px and under). The 920px breakpoint above
+   handles tablets + phone landscape; these are the portrait-phone
+   compactions: trim the sticky navbar's vertical cost, ease the big
+   price down so the two change pills share the line, drop the chart's
+   fixed height a notch (Chart.js is fluid, so the canvas follows), and
+   reclaim edge space. */
+@media (max-width: 600px) {
+    .navbar {
+        padding: 10px 16px;
+    }
+
+    .logo {
+        font-size: 18px;
+    }
+
+    .container {
+        padding: 0 12px;
+        margin-top: 14px;
+    }
+
+    .current-price {
+        font-size: 26px;
+    }
+
+    .chart-box {
+        height: 240px;
+    }
+
+    /* Tighter chips + cards: desktop paddings eat a 375px screen. */
+    .chip {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    .card {
+        padding: 14px;
+        margin-bottom: 14px;
+    }
+
+    /* The log form goes vertical: one control per full-width row (flex
+       basis 100% wraps every control), including the Log button — thumb-
+       sized targets instead of six tiny fields squeezed side by side. */
+    .tx-form input,
+    .tx-form select {
+        flex: 1 1 100%;
+        padding: 11px 10px;
+    }
+
+    .tx-form button {
+        flex: 1 1 100%;
+        padding: 12px;
+    }
+
+    /* ── Ledger holding cards ─────────────────────────────────────────
+       The 11-column table is the dashboard's one irreducibly desktop
+       artifact — no phone fits it. Inside this query ONLY, the SAME
+       table transforms into stacked cards (the classic responsive-table
+       pattern): table/thead/tr/td become blocks, the headers disappear,
+       and each cell re-lays out as a labeled line using the data-label
+       main.js stamps on it (read from the thead, so captions can't drift
+       from the column names). One DOM, one render path, desktop and
+       tablets untouched. */
+
+    /* Undo the swipe table: no 760px floor, no scroll in card mode. */
+    .table-wrap { overflow: visible; }
+    .ledger-table { min-width: 0; }
+
+    /* Headers are the desktop sort UI — gone on phones (sorting and
+       drag-reorder are desktop-only; groups render in backend order). */
+    .ledger-table thead { display: none; }
+
+    .ledger-table,
+    .ledger-table tbody,
+    .ledger-table tr,
+    .ledger-table td {
+        display: block;
+        width: 100%;
+    }
+
+    /* Default cell = one labeled fact line: the small muted caption (the
+       header's own text) sits LEFT, the value RIGHT — a flex row stretched
+       across the card (justify-content: space-between), the standard
+       finance-app settings-list look. Baseline alignment keeps caption and
+       value on one optical line even at their different sizes; the gap
+       guarantees they can't collide when a value is long enough to wrap.
+       Row hairlines are pointless in card mode — spacing and the cards
+       themselves separate content. */
+    .ledger-table tr { margin-bottom: 10px; }
+    .ledger-table td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        padding: 0 0 10px;
+        border-bottom: none;
+        white-space: normal; /* the .num nowrap rule is table-only */
+    }
+    .ledger-table td::before {
+        content: attr(data-label);
+        flex: 0 0 auto; /* caption never shrinks — long values wrap instead */
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+
+    /* A collapsed group = the holding card. Tinted page-bg would look
+       like a gap in card mode — give it the real card treatment: border,
+       radius, padding, white. The card itself is a flex-WRAP container:
+       its default cell is a full-width labeled row (flex-basis 100%),
+       while the ticker + meta cells pair onto ONE title row below. */
+    tr.ledger-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        padding: 12px;
+        margin-bottom: 12px;
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+    }
+
+    /* Everything but the title pair takes its own full row. */
+    tr.ledger-group > td { flex: 1 1 100%; }
+
+    /* Meaningless on a summary card: a group has no single type (always
+       blank) and no single price ("—"). Hide the CELLS, not their labels. */
+    tr.ledger-group td.type,
+    tr.ledger-group td.price { display: none; }
+
+    /* Three cells are structure, not facts — no caption: */
+    tr.ledger-group td.date::before,    /* caret + "N txns" = meta line   */
+    tr.ledger-group td.ticker::before,  /* ticker = the card's title      */
+    tr.ledger-group td.actions::before { content: none; }
+
+    /* Title row: ticker grows on the LEFT, the "▸ N txns" meta hugs the
+       RIGHT — one line, no dead space. DOM order is date→ticker (the
+       table's column order), so `order` moves the ticker first VISUALLY
+       only: DOM order, click handlers and screen readers are untouched. */
+    tr.ledger-group td.ticker {
+        order: -1;
+        flex: 1 1 auto;
+        font-size: 16px;
+        padding-bottom: 8px;
+    }
+
+    tr.ledger-group td.date {
+        flex: 0 0 auto;         /* shrink-wraps to caret + "N txns" */
+        justify-content: flex-end;
+        gap: 6px;               /* caret and count sit as one unit */
+        color: var(--text-secondary);
+        font-size: 12px;
+        padding-bottom: 8px;    /* matches the title row's baseline row */
+    }
+
+    /* The card's headline number, a touch above line-item weight. */
+    tr.ledger-group td.value {
+        font-size: 15px;
+        font-weight: 500;
+    }
+
+    tr.ledger-group td.actions {
+        justify-content: flex-end;
+        padding-bottom: 0;
+    }
+
+    /* Expanded detail rows = labeled fact lines tucked under their card,
+       an indent + left rule keeping the "inside this holding" feel. The
+       desktop 28px first-cell indent is a table artifact — reset it. */
+    tr.tx-detail {
+        padding: 2px 0 6px 12px;
+        margin-bottom: 8px;
+        border-left: 2px solid var(--border-color);
+    }
+
+    .ledger-table tr.tx-detail td:first-child { padding-left: 0; }
+
+    /* Ticker repeats the card's title one line up — hide the cell. */
+    tr.tx-detail td.ticker { display: none; }
+
+    tr.tx-detail td.actions::before { content: none; }
+    tr.tx-detail td.actions {
+        justify-content: flex-end;  /* buttons on the right, not flex-spread */
+        padding-bottom: 0;
+    }
+
+    /* Message/empty-state rows: their td carries no data-label, so the
+       ::before is empty — just make the line quiet and full-width. */
+    .ledger-table td.empty-state {
+        padding: 8px 0;
+        color: var(--text-secondary);
     }
 }

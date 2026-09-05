@@ -462,6 +462,18 @@ const ledgerDefaultOrder =
 // cycle, and both builders read this array on every rebuild.
 let ledgerColOrder = [...ledgerDefaultOrder];
 
+// Header TEXT per data-col, read once at boot from the same <th> row —
+// the mobile card layout's labels come from HERE, not a second hardcoded
+// list, so a card line's caption is always the exact text the desktop
+// table shows for that column. (Read at boot: the ▲/▼ indicator spans
+// don't exist yet — the strip below makes that harmless even if a sort
+// was somehow already painted. The actions header's text is "" by design;
+// its card-mode presentation is handled purely in CSS.)
+const ledgerColLabels = {};
+for (const th of ledgerHead.querySelectorAll("th")) {
+    ledgerColLabels[th.dataset.col] = th.textContent.replace(/[▲▼]/g, "").trim();
+}
+
 // Restore a saved order, if one exists AND is still valid. Validation is
 // deliberately strict: the saved value must be a PERMUTATION of the live
 // headers — same keys, same count, no duplicates — with actions last
@@ -495,6 +507,20 @@ function paintLedgerColOrder() {
     }
 }
 paintLedgerColOrder(); // boot: apply the saved (or default) order
+
+// Stamp ONE ledger cell with its column identity: data-col (the machine
+// key, identical to its <th>'s) and data-label (the human caption, read
+// from that header's text at boot). Desktop rendering ignores both — the
+// ≤600px card layout's CSS reads them to re-layout cells BY MEANING and
+// to caption each fact line, so a card label can never drift from the
+// column it represents. Unknown col → the same blank-cell fallback as
+// before, stamped anyway so the cell count never changes.
+function stampCell(col, cells) {
+    const cell = cells[col] ?? document.createElement("td");
+    cell.dataset.col = col;
+    cell.dataset.label = ledgerColLabels[col] ?? "";
+    return cell;
+}
 
 // Build ONE transaction detail row — the same 10 data cells the flat table
 // always had, plus a trailing actions cell (edit/delete), extracted from
@@ -620,8 +646,7 @@ function buildTxRow(tx) {
         total_gain_pct: gainPctCell, day_gain: dayGainCell,
         day_gain_pct: dayPctCell, actions: actionsCell,
     };
-    row.append(...ledgerColOrder.map(
-        (col) => cells[col] ?? document.createElement("td")));
+    row.append(...ledgerColOrder.map((col) => stampCell(col, cells)));
     return row;
 }
 
@@ -811,8 +836,7 @@ function buildGroupRow(ticker, txs) {
         total_gain_pct: gainPctCell, day_gain: dayGainCell,
         day_gain_pct: dayPctCell, actions: actionsCell,
     };
-    row.append(...ledgerColOrder.map(
-        (col) => cells[col] ?? document.createElement("td")));
+    row.append(...ledgerColOrder.map((col) => stampCell(col, cells)));
     return row;
 }
 
