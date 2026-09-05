@@ -20,9 +20,13 @@ Resulting progression:
 
     1D(78) → 5D(65) → 1M(22) → 3M(63) → 6M(126) → YTD(~170) → 1Y(252) → 5Y(260) → MAX(~1200)
 
-Strictly monotonically non-decreasing, all in a readable 22–260 band (MAX is the
-one deliberate outlier via monthly bars). 3M at ~63 points over 1000px is ~16px
-per segment — clearly readable, and it sheds the datetime-label complexity.
+Intraday views (1D 78, 5D 65) are naturally the densest — they're the "now"
+zoom. From 1M up the daily ranges are monotonically non-decreasing and sit in a
+readable ~22–260 band: 22 → 63 → 126 → ~170 → 252 → 260 (5Y weekly holds the
+rate; MAX at ~1200 monthly bars is the one deliberate outlier). No longer
+timeframe out-densifies a shorter one — 3M was the only violation, with its
+hourly ~440. 3M at ~63 points over 1000px is ~16px per segment — clearly
+readable, and it sheds the datetime-label complexity.
 
 ## Changes
 
