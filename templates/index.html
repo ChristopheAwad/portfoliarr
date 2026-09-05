@@ -6,40 +6,44 @@
      AFTER common.js — the shared helpers must exist before this page's
      code runs. -->
 
-{% block title %}Google Finance Clone{% endblock %}
+{% block title %}Portfoliarr{% endblock %}
 
 {% block content %}
 
         <!-- Market Index Chips. data-symbol is the hook main.js uses to find
              each chip (by meaning, not position). Every chip here is managed:
-             main.js blanks them to "…" on load and fills with live data.
-             Each chip is ALSO a real <a> to its detail page — a plain anchor
-             (not a JS click handler) gives native middle-click / open-in-
-             new-tab / keyboard Enter for free, same rule as the ledger's
-             ticker links. url_for percent-encodes ^ (illegal raw in a URL)
-             → /stock/%5EGSPC; Flask decodes it back on the way in. Keep
-             data-symbol and url_for's symbol in sync — same ticker, two
-             hooks: one for JS, one for the browser. -->
+             the price/change spans ship EMPTY and main.js fills them with
+             live data — while a span is empty, a CSS :empty shimmer box
+             stands in for the number (and a failed quote still degrades to
+             "—"). No mockup numbers in the markup: static lookalikes would
+             masquerade as live data. Each chip is ALSO a real <a> to its
+             detail page — a plain anchor (not a JS click handler) gives
+             native middle-click / open-in-new-tab / keyboard Enter for
+             free, same rule as the ledger's ticker links. url_for
+             percent-encodes ^ (illegal raw in a URL) → /stock/%5EGSPC;
+             Flask decodes it back on the way in. Keep data-symbol and
+             url_for's symbol in sync — same ticker, two hooks: one for
+             JS, one for the browser. -->
         <section class="indices-bar">
             <a class="chip" data-symbol="^GSPC" href="{{ url_for('stock_page', symbol='^GSPC') }}">
-                <span class="index-name">S&P 500</span>
-                <span class="index-price">5,088.80</span>
-                <span class="index-change pos">+0.42%</span>
+                <span class="index-name">S&amp;P 500</span>
+                <span class="index-price"></span>
+                <span class="index-change pos"></span>
             </a>
             <a class="chip" data-symbol="^IXIC" href="{{ url_for('stock_page', symbol='^IXIC') }}">
                 <span class="index-name">Nasdaq</span>
-                <span class="index-price">16,000.10</span>
-                <span class="index-change pos">+0.83%</span>
+                <span class="index-price"></span>
+                <span class="index-change pos"></span>
             </a>
             <a class="chip" data-symbol="^GSPTSE" href="{{ url_for('stock_page', symbol='^GSPTSE') }}">
                 <span class="index-name">TSX</span>
-                <span class="index-price">38,989.84</span>
-                <span class="index-change neg">-0.15%</span>
+                <span class="index-price"></span>
+                <span class="index-change neg"></span>
             </a>
             <a class="chip" data-symbol="BTC-USD" href="{{ url_for('stock_page', symbol='BTC-USD') }}">
                 <span class="index-name">Bitcoin</span>
-                <span class="index-price">2,016.69</span>
-                <span class="index-change pos">+0.10%</span>
+                <span class="index-price"></span>
+                <span class="index-change pos"></span>
             </a>
         </section>
 
@@ -66,23 +70,27 @@
                             Show USD in USD
                         </label>
                     </div>
-                    <!-- Live portfolio numbers. These spans ship blank
-                         ("…") on purpose — main.js fills them from
-                         GET /api/portfolio/summary the moment the page
-                         loads (backend sends raw floats; formatting is
-                         frontend-only). The ids are the hooks JS finds
-                         them by; the old mockup numbers are gone so they
-                         can never masquerade as live data. -->
+                    <!-- Live portfolio numbers. These spans ship COMPLETELY
+                         EMPTY — not even whitespace (the :empty CSS selector
+                         is false the moment any text node exists, and a
+                         shimmer keyframe in style.css draws a loading
+                         skeleton only while they're empty). main.js fills
+                         them from GET /api/portfolio/summary the moment the
+                         page loads (backend sends raw floats; formatting is
+                         frontend-only). The ids are the hooks JS finds them
+                         by; static mockup numbers are gone so they can
+                         never masquerade as live data. -->
                     <div class="stock-price-container">
-                        <span class="current-price" id="portfolio-value">…</span>
-                        <span class="price-change" id="portfolio-day-change">…</span>
-                        <span class="price-change" id="portfolio-total-return">…</span>
+                        <span class="current-price" id="portfolio-value"></span>
+                        <span class="price-change" id="portfolio-day-change"></span>
+                        <span class="price-change" id="portfolio-total-return"></span>
                     </div>
 
                     <!-- Chart area. Chart.js paints onto a <canvas> — think
-                         of it as a blank drawing pad. main.js finds it by id
-                         and draws the chart on it (placeholder data for now;
-                         real backend data comes later). -->
+                         of it as a blank drawing pad. main.js finds it by
+                         id and draws the real portfolio value history on
+                         it (computed by GET /api/portfolio/history from
+                         the ledger + close prices). -->
                     <div class="chart-box">
                         <canvas id="portfolioChart"></canvas>
                     </div>
@@ -116,7 +124,27 @@
                 <div class="card ledger-card">
                     <div class="card-header">
                         <h3>Transactions</h3>
-                        <button class="btn-text" id="import-btn" type="button">Import</button>
+                        <!-- The decorative upload glyph is inline SVG (not a
+                             font or an emoji) so it inherits the button's
+                             color and scales with it; aria-hidden because
+                             the word "Import" already says what it does.
+                             main.js only toggles the panel on click — it
+                             never rewrites this button's text, so the icon
+                             survives. (The log form's submit button is
+                             DIFFERENT: main.js sets its textContent when
+                             edit mode toggles, which would wipe any child
+                             icon — so that button stays text-only.) -->
+                        <button class="btn-text" id="import-btn" type="button">
+                            <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            Import
+                        </button>
                     </div>
 
                     <!-- The inline log form. name= attributes are what JS
@@ -211,7 +239,11 @@
                                      this hook and reorders the GROUP rows
                                      only (detail rows stay newest-first).
                                      tabindex/role make them keyboard
-                                     reachable; aria-sort is set by JS. -->
+                                     reachable; aria-sort is set by JS.
+                                     Header text stays PURE TEXT — the sort
+                                     ▲/▼ marker is a separate <span> main.js
+                                     adds, and no icons ever go inside a
+                                     <th> (tests read the header text). -->
                                 <th data-col="date">Date</th>
                                 <th data-col="type">Type</th>
                                 <th class="sortable" data-col="ticker"

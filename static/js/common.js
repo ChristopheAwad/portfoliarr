@@ -6,8 +6,12 @@
 //   1. Formatting helpers (backend sends raw floats; formatting is
 //      frontend-only — a permanent rule of this app)
 //   2. paintChange — the signed "change pill" painter
-//   3. The navbar search dropdown (fetch -> JSON -> DOM, like everything
+//   3. The UI kit — SVG icons, promise-based modals (showConfirm /
+//      showPrompt), and toasts: the styled replacements for the browser's
+//      built-in prompt/confirm/alert dialogs
+//   4. The navbar search dropdown (fetch -> JSON -> DOM, like everything
 //      else here; knows nothing about yfinance, Flask, or Python)
+//   5. The shared timeframe-chart factory (both pages' price charts)
 
 // How often the page scripts re-fetch quotes, in milliseconds. Matches
 // the backend's design: the 120s TTL means at most every other poll
@@ -58,6 +62,272 @@ function paintChange(el, value, pct, label) {
     // One call each: set green (pos) or red (neg), replacing the other.
     el.classList.toggle("pos", value >= 0);
     el.classList.toggle("neg", value < 0);
+}
+
+// ---------------------------------------------------------------------------
+// UI KIT — the app's small presentation toolbox: SVG icons, promise-based
+// dialogs, and toasts. These exist so no page ever falls back to the
+// browser's built-in prompt/confirm/alert dialogs, which freeze the whole
+// page while open, can't be styled, and would look alien next to everything
+// else here. Same iron rule as everywhere else: everything is built with
+// createElement/createElementNS + textContent, never innerHTML — titles and
+// messages here come from OUR code, but one DOM habit everywhere is easier
+// to trust than two.
+// ---------------------------------------------------------------------------
+
+// SVG's namespace URI. HTML elements live in the HTML namespace, but an
+// <svg> and its children belong to SVG's own — createElementNS must be told
+// which to use. A plain createElement("svg") creates an element the browser
+// refuses to render as graphics (a boring "HTMLUnknownElement").
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// The icon library: each name maps to a STATIC list of child shapes
+// (tag + attributes) drawn inside the 24×24 viewBox. Path data is written
+// out literally and never assembled from runtime strings — the same
+// "no string-built DOM" rule as everywhere else, applied to SVG, so no
+// runtime value could ever bend an icon into something else. The shapes
+// are feather-style outlines: stroke-drawn, unfilled, inheriting their
+// color from the text around them via stroke="currentColor" (CSS colors an
+// icon exactly like it colors a word).
+const ICONS = {
+    pencil: [
+        { tag: "path",
+          attrs: { d: "M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" } },
+    ],
+    trash: [
+        { tag: "polyline", attrs: { points: "3 6 5 6 21 6" } },
+        { tag: "path",
+          attrs: { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" } },
+        { tag: "line", attrs: { x1: "10", y1: "11", x2: "10", y2: "17" } },
+        { tag: "line", attrs: { x1: "14", y1: "11", x2: "14", y2: "17" } },
+    ],
+    x: [
+        { tag: "line", attrs: { x1: "18", y1: "6", x2: "6", y2: "18" } },
+        { tag: "line", attrs: { x1: "6", y1: "6", x2: "18", y2: "18" } },
+    ],
+    plus: [
+        { tag: "line", attrs: { x1: "12", y1: "5", x2: "12", y2: "19" } },
+        { tag: "line", attrs: { x1: "5", y1: "12", x2: "19", y2: "12" } },
+    ],
+    search: [
+        { tag: "circle", attrs: { cx: "11", cy: "11", r: "8" } },
+        { tag: "line", attrs: { x1: "21", y1: "21", x2: "16.65", y2: "16.65" } },
+    ],
+    // A chevron pointing RIGHT. CSS rotates the wrapper (e.g. the ledger's
+    // .caret span) for the expanded state, so one shape serves both.
+    caret: [
+        { tag: "polyline", attrs: { points: "9 18 15 12 9 6" } },
+    ],
+    check: [
+        { tag: "polyline", attrs: { points: "20 6 9 17 4 12" } },
+    ],
+};
+
+// Build one icon as a live SVG element (never an HTML string). className
+// is optional extra styling layered on top of the shared "icon" base
+// class. aria-hidden marks the picture as decorative for screen readers —
+// the buttons carrying these icons announce themselves via title/label.
+function icon(name, className) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    for (const [attr, value] of Object.entries({
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "2",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        class: "icon" + (className ? " " + className : ""),
+        "aria-hidden": "true",
+    })) {
+        svg.setAttribute(attr, value);
+    }
+    // Stamp in the shape list. An unknown name degrades to a valid empty
+    // SVG rather than a crash — same forgiving-degradation spirit as "—".
+    for (const { tag, attrs } of ICONS[name] || []) {
+        const shape = document.createElementNS(SVG_NS, tag);
+        for (const [attr, value] of Object.entries(attrs)) {
+            shape.setAttribute(attr, value);
+        }
+        svg.append(shape);
+    }
+    return svg;
+}
+
+// The ONE modal builder both dialogs share — internal to this kit: page
+// scripts call showConfirm/showPrompt below, and this function exists so
+// the overlay/dialog/input/focus plumbing is written exactly once.
+//
+// It returns a PROMISE, and that is what makes the swap from the browser's
+// dialogs possible at all: the built-ins BLOCK the script (which is also
+// why they can't be styled), while a promise lets the caller `await` the
+// answer and lets this code paint real DOM for the question meanwhile.
+function openModal({ title, message, wantsInput, placeholder = "",
+                     confirmLabel = "Confirm", cancelLabel = "Cancel",
+                     danger = false }) {
+    return new Promise((resolve) => {
+        // Remember where focus was BEFORE we took over, so it can go back
+        // when the modal closes (usually the very button that opened us).
+        const previouslyFocused = document.activeElement;
+
+        // --- Build the pieces (createElement only — no innerHTML) ---
+        const overlay = document.createElement("div");
+        overlay.className = "modal-overlay"; // the dimmed backdrop
+
+        const dialog = document.createElement("div");
+        dialog.className = "modal";
+        // ARIA: announce this as a modal dialog labelled by its question,
+        // so screen readers introduce it properly.
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.setAttribute("aria-label", title);
+
+        const titleEl = document.createElement("h3");
+        titleEl.className = "modal-title";
+        titleEl.textContent = title;
+
+        const messageEl = document.createElement("p");
+        messageEl.className = "modal-message";
+        messageEl.textContent = message;
+
+        // The prompt-only piece: a text field. Created only when asked
+        // for, so a confirm dialog ships no stray input.
+        let inputEl = null;
+        if (wantsInput) {
+            inputEl = document.createElement("input");
+            inputEl.type = "text";
+            inputEl.className = "modal-input";
+            inputEl.placeholder = placeholder;
+        }
+
+        const actionsEl = document.createElement("div");
+        actionsEl.className = "modal-actions";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button"; // type="button": never a form submit
+        cancelBtn.className = "btn btn-quiet";
+        cancelBtn.textContent = cancelLabel;
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        // danger=true hands the confirm button the destructive styling.
+        confirmBtn.className = danger ? "btn btn-danger" : "btn btn-primary";
+        confirmBtn.textContent = confirmLabel;
+        actionsEl.append(cancelBtn, confirmBtn);
+
+        dialog.append(titleEl, messageEl);
+        if (inputEl) dialog.append(inputEl);
+        dialog.append(actionsEl);
+        overlay.append(dialog);
+        document.body.append(overlay);
+
+        // --- One exit for every path ---
+        // Every way out (confirm, cancel, Escape, backdrop click) funnels
+        // through finish(): it cleans up listeners and DOM, restores
+        // focus, and only THEN resolves — so a caller can never observe a
+        // half-torn-down modal. (Resolving twice is harmless — a promise
+        // keeps its first answer — but cleanup only ever needs doing once.)
+        // The two flavors cancel differently: a prompt resolves null (the
+        // old browser prompt's cancel value), a confirm resolves false.
+        const cancelResult = wantsInput ? null : false;
+
+        function finish(result) {
+            document.removeEventListener("keydown", onKeyDown);
+            overlay.remove();
+            // Hand focus back — without this, focus would fall onto <body>
+            // and keyboard users would lose their place in the page.
+            if (previouslyFocused && previouslyFocused.focus) {
+                previouslyFocused.focus();
+            }
+            resolve(result);
+        }
+
+        // Escape cancels. The listener sits on DOCUMENT while the modal is
+        // open — keydowns land wherever focus is (often inside the input),
+        // and only document-level listeners see them regardless.
+        function onKeyDown(event) {
+            if (event.key === "Escape") finish(cancelResult);
+        }
+        document.addEventListener("keydown", onKeyDown);
+
+        // A click on the dimmed BACKDROP cancels — but only when it truly
+        // landed on the overlay: event.target is the topmost element
+        // clicked, so a click anywhere inside the dialog reports the
+        // dialog (or a button), not the overlay, and is ignored here.
+        overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) finish(cancelResult);
+        });
+
+        cancelBtn.addEventListener("click", () => finish(cancelResult));
+        confirmBtn.addEventListener("click", () => {
+            // The RAW input value, on purpose: trimming and casing are the
+            // CALLER's policy (each call site normalizes to its own rules),
+            // so the kit collects text but never interprets it.
+            finish(wantsInput ? inputEl.value : true);
+        });
+
+        // Prompt convenience: Enter inside the input means confirm — the
+        // same reflex the old browser prompt trained into everyone.
+        if (inputEl) {
+            inputEl.addEventListener("keydown", (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault(); // no form here; Enter = confirm
+                    confirmBtn.click();
+                }
+            });
+        }
+
+        // Focus the first thing the user needs — the input for a prompt,
+        // the confirm button for a confirm — AFTER the overlay is in the
+        // DOM: an element that isn't rendered cannot take focus.
+        (inputEl || confirmBtn).focus();
+    });
+}
+
+// Ask a yes/no question. Resolves true (Confirm) or false (cancelled).
+function showConfirm({ title, message, confirmLabel = "Confirm",
+                       cancelLabel = "Cancel", danger = false } = {}) {
+    return openModal({
+        title, message, confirmLabel, cancelLabel, danger,
+        wantsInput: false,
+    });
+}
+
+// Ask for a line of text. Resolves the RAW typed string, or null when
+// cancelled — the exact null contract the old browser prompt had, so the
+// callers' `=== null` abort checks survive the swap unchanged.
+function showPrompt({ title, message, placeholder = "",
+                      confirmLabel = "Confirm", danger = false } = {}) {
+    return openModal({
+        title, message, placeholder, confirmLabel, danger,
+        wantsInput: true,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// TOASTS — the small transient notices (bottom-right, per the CSS) that
+// replaced the browser alert(). Fire-and-forget by design: showToast
+// returns nothing, toasts stack with any others, and each removes itself
+// after ~4 seconds.
+// ---------------------------------------------------------------------------
+
+// The shared container, created lazily on first use and reused forever —
+// a module-level "singleton" that costs nothing until the first toast.
+let toastContainer = null;
+
+function showToast(message, type = "error") {
+    if (!toastContainer) {
+        toastContainer = document.createElement("div");
+        toastContainer.id = "toast-container";
+        document.body.append(toastContainer);
+    }
+    const toast = document.createElement("div");
+    // The type picks the palette: "error" (the default) or "success".
+    toast.className = type === "success"
+        ? "toast toast-success"
+        : "toast toast-error";
+    toast.textContent = message;
+    toastContainer.append(toast); // CSS animates it in
+    // Each toast removes ITSELF — the timeout is scoped to this one
+    // element, so stacked toasts never cancel each other's timers.
+    setTimeout(() => toast.remove(), 4000);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,13 +500,16 @@ document.addEventListener("click", (event) => {
 // period gained and RED when it lost, matching the change pills' palette.
 // ---------------------------------------------------------------------------
 
-// Mirror of style.css's gain/loss colors (--green-pos / --red-neg). Canvas
-// code can't read CSS custom properties ("var(--green-pos)" is meaningless
-// outside CSS), so the two hex values are duplicated here — the comment
-// anchors them together for whoever changes one side later.
+// Mirror of style.css's palette custom properties: the up/down lines are
+// --green-pos (#059669) / --red-neg (#dc2626) (the fills are the same hues
+// at low alpha), the crosshair mirrors --border-color (#e4e7ec), and the
+// tooltip plate mirrors --text-primary (#1a1f36). Canvas code can't read
+// CSS custom properties ("var(--green-pos)" is meaningless outside CSS),
+// so the hex values are duplicated here — the comment anchors them
+// together for whoever changes one side later.
 const CHART_COLORS = {
-    up:   { line: "#137333", fill: "rgba(19, 115, 51, 0.12)" },
-    down: { line: "#c5221f", fill: "rgba(197, 34, 31, 0.12)" },
+    up:   { line: "#059669", fill: "rgba(5, 150, 105, 0.12)" },
+    down: { line: "#dc2626", fill: "rgba(220, 38, 38, 0.10)" },
 };
 
 // The hover CROSSHAIR: a thin vertical line through whatever point the
@@ -259,7 +532,7 @@ const crosshairPlugin = {
         ctx.beginPath();
         ctx.moveTo(x, top);
         ctx.lineTo(x, bottom);
-        ctx.strokeStyle = "#dadce0";   // Google's hairline gray
+        ctx.strokeStyle = "#e4e7ec";   // --border-color's hairline gray
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
@@ -358,7 +631,7 @@ function setupTimeframeChart(
                     // displayColors: false drops the colored square before
                     // the value — the line above is the color story already.
                     displayColors: false,
-                    backgroundColor: "#202124",
+                    backgroundColor: "#1a1f36", // --text-primary, as the plate
                     padding: 10,
                     cornerRadius: 8,
                     titleFont: { size: 11, weight: "normal" },
@@ -380,7 +653,7 @@ function setupTimeframeChart(
                     ticks: { maxTicksLimit: 8, maxRotation: 0 },
                 },
                 y: {
-                    grid: { color: "#f1f3f4" }, // softer than the old gray
+                    grid: { color: "#eef1f5" }, // hairline gray, border-adjacent
                     border: { display: false },
                     // beginAtZero: false starts the y-axis near the data's
                     // minimum instead of 0 — exactly how real stock charts

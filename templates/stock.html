@@ -8,7 +8,7 @@
      made-up number. The stats grid below the chart is the one card the
      dashboard doesn't have. -->
 
-{% block title %}{{ symbol }} — Google Finance Clone{% endblock %}
+{% block title %}{{ symbol }} — Portfoliarr{% endblock %}
 
 <!-- The symbol is stamped on <body> (via base.html's body_attrs block):
      stock.js's identity hook. The template renders it uppercased by the
@@ -30,14 +30,18 @@
                 <span class="sub-text" id="stock-name"></span>
             </div>
 
-            <!-- Live quote numbers. "…" placeholders on purpose — the same
-                 rule as the dashboard: nothing static can masquerade as
-                 live data. Day change is painted by stock.js through
-                 common.js's paintChange (the +$x (+y%) Today pill); there
-                 is deliberately NO total-return pill here. -->
+            <!-- Live quote numbers. These ship COMPLETELY EMPTY — not even
+                 whitespace (the :empty CSS selector is false the moment any
+                 text node exists, and a shimmer skeleton in style.css draws
+                 only while they're empty) — the same rule as the dashboard:
+                 nothing static can masquerade as live data, and a failed
+                 quote degrades to "—" painted by stock.js. Day change is
+                 painted by stock.js through common.js's paintChange (the
+                 +$x (+y%) Today pill); there is deliberately NO total-
+                 return pill here. -->
             <div class="stock-price-container">
-                <span class="current-price" id="stock-price">…</span>
-                <span class="price-change" id="stock-day-change">…</span>
+                <span class="current-price" id="stock-price"></span>
+                <span class="price-change" id="stock-day-change"></span>
             </div>
 
             <!-- Action row. Log Transaction doesn't open a form here — it
@@ -77,29 +81,30 @@
              ONCE per page load (not polled): they come from Yahoo's heavy
              profile endpoint, and 60s polling would pay its cost for data
              that can't move. A dl (description list) is the honest element
-             for label:value pairs; CSS grids the pairs. Missing fields
-             (an index has no market cap) gap-fill to "—". -->
+             for label:value pairs; CSS grids the pairs. Every <dd> ships
+             EMPTY (the :empty shimmer fills in while the fetch runs);
+             missing fields (an index has no market cap) gap-fill to "—". -->
         <div class="card stats-card">
             <h3>Stats</h3>
             <dl class="stats-grid">
-                <div class="stat"><dt>Open</dt><dd id="stat-open">…</dd></div>
-                <div class="stat"><dt>Day High</dt><dd id="stat-day-high">…</dd></div>
-                <div class="stat"><dt>Day Low</dt><dd id="stat-day-low">…</dd></div>
-                <div class="stat"><dt>Prev Close</dt><dd id="stat-prev-close">…</dd></div>
-                <div class="stat"><dt>Volume</dt><dd id="stat-volume">…</dd></div>
-                <div class="stat"><dt>52W Range</dt><dd id="stat-week52-range">…</dd></div>
-                <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap">…</dd></div>
-                <div class="stat"><dt>P/E</dt><dd id="stat-pe">…</dd></div>
-                <div class="stat"><dt>EPS</dt><dd id="stat-eps">…</dd></div>
-                <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield">…</dd></div>
-                <div class="stat"><dt>Beta</dt><dd id="stat-beta">…</dd></div>
-                <div class="stat"><dt>50-Day Avg</dt><dd id="stat-50d-avg">…</dd></div>
-                <div class="stat"><dt>200-Day Avg</dt><dd id="stat-200d-avg">…</dd></div>
-                <div class="stat"><dt>Avg Volume</dt><dd id="stat-avg-volume">…</dd></div>
-                <div class="stat"><dt>Analyst Target</dt><dd id="stat-target-price">…</dd></div>
-                <div class="stat"><dt>Rating</dt><dd id="stat-rating">…</dd></div>
-                <div class="stat"><dt>Sector</dt><dd id="stat-sector">…</dd></div>
-                <div class="stat"><dt>Industry</dt><dd id="stat-industry">…</dd></div>
+                <div class="stat"><dt>Open</dt><dd id="stat-open"></dd></div>
+                <div class="stat"><dt>Day High</dt><dd id="stat-day-high"></dd></div>
+                <div class="stat"><dt>Day Low</dt><dd id="stat-day-low"></dd></div>
+                <div class="stat"><dt>Prev Close</dt><dd id="stat-prev-close"></dd></div>
+                <div class="stat"><dt>Volume</dt><dd id="stat-volume"></dd></div>
+                <div class="stat"><dt>52W Range</dt><dd id="stat-week52-range"></dd></div>
+                <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap"></dd></div>
+                <div class="stat"><dt>P/E</dt><dd id="stat-pe"></dd></div>
+                <div class="stat"><dt>EPS</dt><dd id="stat-eps"></dd></div>
+                <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield"></dd></div>
+                <div class="stat"><dt>Beta</dt><dd id="stat-beta"></dd></div>
+                <div class="stat"><dt>50-Day Avg</dt><dd id="stat-50d-avg"></dd></div>
+                <div class="stat"><dt>200-Day Avg</dt><dd id="stat-200d-avg"></dd></div>
+                <div class="stat"><dt>Avg Volume</dt><dd id="stat-avg-volume"></dd></div>
+                <div class="stat"><dt>Analyst Target</dt><dd id="stat-target-price"></dd></div>
+                <div class="stat"><dt>Rating</dt><dd id="stat-rating"></dd></div>
+                <div class="stat"><dt>Sector</dt><dd id="stat-sector"></dd></div>
+                <div class="stat"><dt>Industry</dt><dd id="stat-industry"></dd></div>
             </dl>
         </div>
 

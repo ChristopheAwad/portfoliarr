@@ -16,7 +16,31 @@
          can't show the tags literally.) -->
     <title>{% block title %}Portfoliarr{% endblock %}</title>
 
+    <!-- The favicon is a hand-written SVG (static/favicon.svg): a rounded
+         blue tile with an upward spark line — the same mark the navbar
+         wordmark uses. SVG (not .ico) because browsers of every vintage
+         we care about support it, and one vector file stays crisp from a
+         16px tab to a 180px iOS home-screen icon. -->
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <!-- Inter, the app's typeface, from Google Fonts' CDN (a free hosted
+         copy — same pattern as Chart.js below: nothing to install, it
+         ships straight to the browser). The two preconnect lines tell the
+         browser "you WILL talk to these hosts — open the connection now",
+         so the font stylesheet and the font files themselves start
+         downloading the instant the css2 link is parsed instead of
+         waiting for a fresh DNS + TLS handshake. fonts.gstatic.com (the
+         actual font files) needs crossorigin because font requests are
+         CORS-mode requests. display=swap means text renders immediately
+         in the fallback stack and upgrades to Inter when it arrives — no
+         invisible-text period. Weight 400 (body), 500/600 (labels,
+         buttons), 700 (wordmark). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 
     <!-- Chart.js, loaded from a public CDN (a free hosted copy — nothing to
          pip install, it ships straight to the browser). Loading it here adds
@@ -34,19 +58,50 @@
          extend this file, so the navbar exists in exactly ONE place. -->
     <header class="navbar">
         <div class="nav-left">
-            <!-- The logo doubles as "home". It used to be a plain <span>
-                 on the one-page app; now that a second page exists at
-                 /stock/<symbol>, the link is how you get back. -->
-            <a href="/" class="logo"><span class="blue">G</span><span class="red">o</span><span class="yellow">o</span><span class="blue">g</span><span class="green">l</span><span class="red">e</span> <span class="gray">Finance</span></a>
+            <!-- The Portfoliarr wordmark. A small inline SVG spark (the
+                 trend-line motif the favicon carries too) + the brand name,
+                 with the tail accented so it reads as a mark rather than
+                 plain text. The SVG uses stroke="currentColor" and takes
+                 its color from CSS (.logo-mark) — the markup stays
+                 theme-agnostic and the stylesheet stays the single source
+                 of color truth. The logo doubles as "home": it used to be
+                 a plain <span> on the one-page app; now that a second page
+                 exists at /stock/<symbol>, the link is how you get back. -->
+            <a href="/" class="logo">
+                <svg class="logo-mark" viewBox="0 0 24 24" width="24" height="24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <polyline points="3 17 9 11 13 15 21 7"></polyline>
+                </svg>
+                <span>Portfoli<span class="logo-accent">arr</span></span>
+            </a>
         </div>
         <div class="search-container">
             <!-- The search box. common.js (loaded at the bottom) turns
                  typing into /api/search calls and renders the suggestion
                  dropdown below it. autocomplete="off" silences the
                  browser's own suggestion list, which would fight ours for
-                 the same keystrokes. -->
-            <input type="text" id="ticker-search" placeholder="Search for stocks & ETFs..."
-                   autocomplete="off">
+                 the same keystrokes.
+                 The decorative magnifier is pure CSS-positioned eye candy:
+                 pointer-events: none lets clicks fall through to the input,
+                 and it sits inside a .search-input-wrap wrapper rather
+                 than directly in .search-container because the wrapper (not
+                 the container) is its positioning context — the container
+                 itself goes position: static inside the ≤920px media query,
+                 which would otherwise leave the icon anchoring to the
+                 sticky navbar. The input's id/placeholder/autocomplete are
+                 JS hooks and stay untouched. -->
+            <div class="search-input-wrap">
+                <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="ticker-search" placeholder="Search for stocks & ETFs..."
+                       autocomplete="off">
+            </div>
             <!-- Suggestion dropdown. Ships hidden; common.js fills it from
                  /api/search and unhides it while the input has text. -->
             <div id="search-results" class="search-results" hidden></div>
