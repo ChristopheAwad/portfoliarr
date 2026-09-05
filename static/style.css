@@ -545,17 +545,47 @@ a.logo { text-decoration: none; }
     list-style: none;
 }
 
+/* The row is a 3-wide GRID, not flex-space-between. Flex sizes columns to
+   their content, so a row's price block sits wherever its OWN name column
+   and price string happen to end — "1,234.56 USD" lands further right than
+   "182.52 USD", the long company name pushes everything right, and the
+   whole column looks ragged. Grid puts every column in a fixed-rule track:
+   the left column takes all leftover space (minmax(0,1fr) lets it shrink
+   below its content), the price column is a fixed 110px pin, and the
+   remove button hugs the right edge. Identical tracks on every row = the
+   price and % edges align perfectly regardless of name or price width. */
 .watchlist-item {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 110px auto;
+    gap: 8px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border-subtle);
     font-size: 14px;
 }
 
+/* Let the left column's child actually shrink below its content width, so
+   a long company name ellipsizes instead of shoving the price column. */
+.watchlist-item > div:first-child {
+    min-width: 0;
+}
+
+.watchlist-item .text-right {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
 .sub-text {
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+/* Company names in the watchlist truncate with "…" when too long for the
+   leftover column — otherwise min-width mechanics could still shove the
+   price column rightward. The ticker above stays fully visible. */
+.watchlist-item .sub-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .text-right { text-align: right; }
