@@ -30,6 +30,35 @@ _cache = {}
 # no TTL, no timestamps. One Yahoo call per symbol per process lifetime.
 _name_cache = {}
 
+# ── History cache — the chart's answer to "clicking a timeframe re-buys
+#    the same data from Yahoo every time".
+#
+# {(symbol, period_key): {"data": {label: close}, "fetched_at": epoch}}
+# Same shape as the quote cache, different TTLs — because the two data
+# kinds age differently:
+#   daily/weekly/monthly bars are SETTLED history — a past close never
+#   changes — but a fresh fetch must still pick up NEW bars at the right
+#   edge (today's close lands after this session's close), so 600s (ten
+#   minutes) keeps repeat clicks instant without serving a whole evening
+#   of stale data.
+#   the 1D intraday series includes TODAY's bar, which keeps moving all
+#   session — 600s would freeze the line mid-day, so intraday entries
+#   live only 120s, the same cadence as the quote cache.
+# Dies on restart like every module-level dict here — acceptable (the
+# quote cache made the same call; restarting re-warms it once).
+_HISTORY_TTL_SETTLED = 600    # seconds: daily / weekly / monthly bars
+_HISTORY_TTL_INTRADAY = 120   # seconds: the 1D 5-minute series
+_history_cache = {}
+
+
+def clear_history_cache():
+    """Empty the history cache — test isolation's escape hatch.
+
+    Production never needs this (entries expire by TTL); tests do, or a
+    chart test would inherit an entry a previous test cached and call
+    counts would depend on execution order."""
+    _history_cache.clear()
+
 # The page's timeframe buttons map to a Yahoo "period" + "interval" pair.
 # This dict is the single source of truth for that mapping, shared by
 # get_history (the HOW of fetching) and the portfolio-history route (also
@@ -37,8 +66,19 @@ _name_cache = {}
 #
 #   period   — how far back Yahoo goes ("1d", "5d", "3mo", "max"...)
 #   interval — the spacing of data points within that range:
-#              "5m" for 1D (intraday every 5 minutes),
-#              "1d" for everything else (one close per trading day).
+#              "5m"  for 1D (intraday every 5 minutes),
+#              "1d"  for the short ranges (one close per trading day),
+#              "1wk"/"1mo" for 5Y/MAX (speed: weekly/monthly bars cut a
+#              long-range payload ~5–25×, so MAX stops fetching ^GSPC's
+#              ~25,000 daily bars since 1927 and 5Y drops from ~1,260
+#              daily closes to ~260 weekly ones — the difference between
+#              a chart that pops and one that grinds. Same trade Google
+#              Finance makes: the long-horizon view is about SHAPE, and
+#              a weekly line looks identical at this zoom).
+#
+# "5m" is the ONLY intraday interval here — get_history keys its label
+# format and its cache TTL off exactly that string, and the portfolio
+# route keys its intraday branch off it too.
 PERIOD_MAP = {
     "1D":  {"period": "1d",  "interval": "5m"},
     "5D":  {"period": "5d",  "interval": "1d"},
@@ -47,8 +87,8 @@ PERIOD_MAP = {
     "6M":  {"period": "6mo", "interval": "1d"},
     "YTD": {"period": "ytd", "interval": "1d"},
     "1Y":  {"period": "1y",  "interval": "1d"},
-    "5Y":  {"period": "5y",  "interval": "1d"},
-    "MAX": {"period": "max", "interval": "1d"},
+    "5Y":  {"period": "5y",  "interval": "1wk"},
+    "MAX": {"period": "max", "interval": "1mo"},
 }
 
 
@@ -220,17 +260,44 @@ def get_history(symbol, period_key):
 
     The returned dict maps a plain-string label to that point's CLOSE
     price (the standard "price at end of that bar"):
-      - Daily ranges ("5D"...): label is "YYYY-MM-DD" ("2026-08-31").
+      - Date-spaced ranges ("5D"..."MAX" — daily, weekly or monthly
+        bars): label is "YYYY-MM-DD" ("2026-08-31").
       - Intraday (1D):         label is "HH:MM" ("09:30").
 
     These plain strings are exactly what the frontend wants for
     Chart.js x-axis labels — no timezone math leaked to the browser.
 
+    Cached per (symbol, period_key) — see _history_cache for the TTL
+    policy. A cache hit returns a COPY: callers keep their result around
+    (the portfolio route stores it in `histories`), and handing everyone
+    the same dict object would let one accidental mutation rewrite
+    history for every future caller.
+
     Raises on failure — same boundary rule as get_quote: this layer
-    reports problems, the route layer decides the HTTP response.
+    reports problems, the route layer decides the HTTP response. A
+    raised error also means NOTHING was cached: the next call retries
+    the network, so a transient Yahoo hiccup can't masquerade as a dead
+    ticker for a whole TTL window.
     """
     # Unpack the chosen timeframe into the two args yfinance wants.
     timeframe = PERIOD_MAP[period_key]
+
+    # "Is this the intraday shape?" — asked twice below (labels, TTL), so
+    # answer it once. "5m" is the only intraday interval in PERIOD_MAP;
+    # every other interval (1d, 1wk, 1mo) is date-spaced. (This used to
+    # test `!= "1d"` — which silently mislabelled weekly/monthly bars as
+    # clock times the moment 5Y/MAX moved off daily bars.)
+    is_intraday = timeframe["interval"] == "5m"
+
+    # Cache check — is our copy young enough to trust? The TTL depends on
+    # the data's shape: settled history (any date-spaced series) keeps
+    # 600s; the 1D series includes today's still-moving bar, so 120s.
+    now = time.time()
+    ttl = _HISTORY_TTL_INTRADAY if is_intraday else _HISTORY_TTL_SETTLED
+    entry = _history_cache.get((symbol, period_key))
+    if entry and (now - entry["fetched_at"]) < ttl:
+        return dict(entry["data"])  # cache hit: no network involved
+
     df = yf.Ticker(symbol).history(
         period=timeframe["period"],
         interval=timeframe["interval"],
@@ -239,7 +306,8 @@ def get_history(symbol, period_key):
     # df is a pandas DataFrame indexed by timezone-aware timestamps
     # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
     # dict, so walk each (timestamp, row) pair and key it by a clean
-    # string: the date part for daily bars, the time part for intraday.
+    # string: the date part for weekly/monthly/daily bars, the time part
+    # for intraday.
     result = {}
     for ts, row in df.iterrows():
         # NaN close = "no bar printed yet" — Yahoo ships this on the
@@ -253,12 +321,21 @@ def get_history(symbol, period_key):
         close = float(row["Close"])
         if math.isnan(close):
             continue
-        # Daily bars: "YYYY-MM-DD" (the first 10 chars of the ISO text).
-        # Intraday bars: keep just the "HH:MM" time to keep labels short.
-        label = ts.strftime("%Y-%m-%d") if timeframe["interval"] == "1d" \
-            else ts.strftime("%H:%M")
+        # Date-spaced bars: "YYYY-MM-DD" (the first 10 chars of the ISO
+        # text). Intraday bars: just the "HH:MM" time to keep labels
+        # short.
+        label = ts.strftime("%H:%M") if is_intraday \
+            else ts.strftime("%Y-%m-%d")
         result[label] = close
-    return result
+
+    # Cache the SUCCESS (an exception above never reaches this line) and
+    # hand back a copy — see the docstring for why callers get their own
+    # dict rather than the cached object itself.
+    _history_cache[(symbol, period_key)] = {
+        "data": result,
+        "fetched_at": time.time(),
+    }
+    return dict(result)
 
 
 # ── FX rates — the CAD display layer's exchange rates ─────────────────
