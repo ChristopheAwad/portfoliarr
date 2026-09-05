@@ -74,12 +74,19 @@ def test_stock_quote_unquotable_symbol_returns_404(client, fake_market):
 
 def test_stock_stats_returned_untouched(client, fake_market):
     """get_stats already returns the snake_case grid keys — the route is a
-    pure pass-through (including None values for fields Yahoo lacks)."""
+    pure pass-through (including None values for fields Yahoo lacks). The
+    dict now carries the ORIGINAL 8 keys PLUS the 11 cheap additions;
+    equality against the fake proves every new key rides through untouched."""
     fake_market.stats["AAPL"] = {
         "open": 148.0, "day_high": 152.0, "day_low": 147.5,
         "prev_close": 145.0, "volume": 55_000_000,
         "week52_low": 164.0, "week52_high": 237.25,
         "market_cap": None,   # e.g. an index — the frontend gap-fills "—"
+        "pe_ratio": 28.5, "eps": 6.10, "dividend_yield": 0.57,
+        "beta": 1.2, "fifty_day_average": 228.4, "two_hundred_day_average": 210.15,
+        "avg_volume": 42_000_000, "target_price": 260.0,
+        "recommendation": "buy", "sector": "Technology",
+        "industry": "Consumer Electronics",
     }
     res = client.get("/api/stock/AAPL/stats")
     assert res.status_code == 200

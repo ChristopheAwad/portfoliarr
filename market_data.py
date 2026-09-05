@@ -141,18 +141,34 @@ def get_stats(symbol):
         volume                      shares traded today
         week52_low / week52_high    the 52-week range
         market_cap                  shares outstanding × price
+        pe_ratio                    trailing P/E (None when no earnings)
+        eps                         trailing earnings per share
+        dividend_yield              annual yield as a PERCENT figure, e.g.
+                                    2.63 (NOT a fraction! verified live on
+                                    CM.TO/RY.TO/AAPL/VZ Sep 2026: Yahoo's
+                                    .info ships this already-scaled — making
+                                    its own `dividendRate / price` check out.
+                                    The frontend appends "%".)
+        beta                        volatility vs. the market, ~1 = market
+        fifty_day_average           the 50-day simple moving average price
+        two_hundred_day_average     the 200-day simple moving average price
+        avg_volume                  average daily volume (10 trading days)
+        target_price                Wall Street's mean price target
+        recommendation              analyst consensus key ("buy", "hold"...)
+        sector / industry           classification strings
 
     MISSING FIELDS → None, not an error: different security types
-    legitimately lack different figures (an index has no marketCap, crypto
-    has no volume on some venues). The frontend gap-fills those cells with
-    "—", the same visual convention as a failed quote. Only TOTAL failure
-    (Yahoo returns nothing at all) raises — the boundary rule: this layer
-    reports, the route layer decides the HTTP response.
+    legitimately lack different figures (an index has no marketCap, a
+    non-payer company no dividendYield, an unprofitable one no P/E). The
+    frontend gap-fills those cells with "—", the same visual convention as
+    a failed quote. Only TOTAL failure (Yahoo returns nothing at all)
+    raises — the boundary rule: this layer reports, the route layer
+    decides the HTTP response.
     """
     info = yf.Ticker(symbol).info
 
     # An empty profile means Yahoo knows nothing about this symbol —
-    # fail loudly with a named error instead of returning eight Nones
+    # fail loudly with a named error instead of returning nineteen Nones
     # that would masquerade as "real but empty" stats.
     if not info:
         raise ValueError(f"no stats data for {symbol}")
@@ -173,6 +189,21 @@ def get_stats(symbol):
         "week52_low": info.get("fiftyTwoWeekLow"),
         "week52_high": info.get("fiftyTwoWeekHigh"),
         "market_cap": info.get("marketCap"),
+        "pe_ratio": info.get("trailingPE"),
+        "eps": info.get("trailingEps"),
+        # Verbatim pass-through: Yahoo ships this already as a percent
+        # figure (2.63 → 2.63%), so any ×100 here is the double-scaling
+        # bug that showed CM.TO at 263%. "No dividend" → .get() → None →
+        # the grid shows "—", never a fabricated 0.0%.
+        "dividend_yield": info.get("dividendYield"),
+        "beta": info.get("beta"),
+        "fifty_day_average": info.get("fiftyDayAverage"),
+        "two_hundred_day_average": info.get("twoHundredDayAverage"),
+        "avg_volume": info.get("avgVolume10days"),
+        "target_price": info.get("targetMeanPrice"),
+        "recommendation": info.get("recommendationKey"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
     }
 
 

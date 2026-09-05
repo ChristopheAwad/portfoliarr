@@ -270,30 +270,66 @@ def test_history_all_nan_bars_yield_empty_dict(fake_yf):
 
 def test_get_stats_extracts_and_renames_the_grid_fields(fake_yf):
     """Yahoo's camelCase profile → our snake_case grid keys, exactly the
-    translation the route layer relies on."""
+    translation the route layer relies on. Covers the ORIGINAL 8 keys AND
+    the 11 cheap additions (all read out of the same already-fetched
+    profile — no extra network call). dividendYield passes through VERBATIM:
+    Yahoo already ships it as a percent (verified live on CM.TO/RY.TO/AAPL/
+    VZ), so expecting 0.33 → 0.33 pins the pass-through that prevents the
+    double-scaling bug (CM.TO showed 263%)."""
     fake_yf.state["info"] = {
         "open": 148.0, "dayHigh": 152.0, "dayLow": 147.5,
         "regularMarketPreviousClose": 145.0, "volume": 55_000_000,
         "fiftyTwoWeekLow": 164.0, "fiftyTwoWeekHigh": 237.25,
         "marketCap": 3_500_000_000_000,
+        "trailingPE": 28.5, "trailingEps": 6.10, "dividendYield": 0.33,
+        "beta": 1.2, "fiftyDayAverage": 228.4, "twoHundredDayAverage": 210.15,
+        "avgVolume10days": 42_000_000, "targetMeanPrice": 260.0,
+        "recommendationKey": "buy", "sector": "Technology",
+        "industry": "Consumer Electronics",
     }
     assert market_data.get_stats("AAPL") == {
         "open": 148.0, "day_high": 152.0, "day_low": 147.5,
         "prev_close": 145.0, "volume": 55_000_000,
         "week52_low": 164.0, "week52_high": 237.25,
         "market_cap": 3_500_000_000_000,
+        "pe_ratio": 28.5, "eps": 6.10, "dividend_yield": 0.33,
+        "beta": 1.2, "fifty_day_average": 228.4, "two_hundred_day_average": 210.15,
+        "avg_volume": 42_000_000, "target_price": 260.0,
+        "recommendation": "buy", "sector": "Technology",
+        "industry": "Consumer Electronics",
     }
+
+
+def test_get_stats_dividend_yield_is_a_percent_pass_through(fake_yf):
+    """Yahoo's .info ships dividendYield ALREADY as a percent (verified
+    live Sep 2026: CM.TO 2.63 → 2.63%, AAPL 0.33 → 0.33%, VZ 5.59 → 5.59%
+    — each matching dividendRate/currentPrice). So get_stats must pass it
+    through VERBATIM; multiplying by 100 is the double-scaling bug that
+    once showed CM.TO at 263%. A non-payer has no key at all → None
+    (gap-fills "—")."""
+    fake_yf.state["info"] = {"dividendYield": 0.33}
+    assert market_data.get_stats("AAPL")["dividend_yield"] == 0.33
+
+    fake_yf.state["info"] = {"open": 150.0}
+    assert market_data.get_stats("AAPL")["dividend_yield"] is None
 
 
 def test_get_stats_missing_fields_become_none(fake_yf):
     """Different security types legitimately lack different figures (an
-    index has no marketCap): absent fields come back None — data the
-    frontend gap-fills with "—", never a crash."""
+    index has no marketCap, an unprofitable company no P/E): absent fields
+    come back None — data the frontend gap-fills with "—", never a crash."""
     fake_yf.state["info"] = {"open": 5000.0}
     stats = market_data.get_stats("^GSPC")
     assert stats["open"] == 5000.0
+    # The ORIGINAL 8 keys...
     assert stats["market_cap"] is None
     assert stats["volume"] is None
+    # ...and ALL 11 cheap additions, in one loop (same contract: absent →
+    # None, an index legitimately lacks every valuation/fundamental figure).
+    for key in ("pe_ratio", "eps", "dividend_yield", "beta",
+                "fifty_day_average", "two_hundred_day_average", "avg_volume",
+                "target_price", "recommendation", "sector", "industry"):
+        assert stats[key] is None
 
 
 def test_get_stats_prev_close_falls_back_to_alt_spelling(fake_yf):

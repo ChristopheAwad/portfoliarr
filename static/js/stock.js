@@ -123,10 +123,19 @@ function setStat(id, text) {
     document.getElementById(id).textContent = text == null ? "—" : text;
 }
 
+// Yahoo's recommendationKey has no consistent case or formatting: "buy",
+// "hold", and camelCase compounds like "strongBuy". Split on the camelCase
+// boundary (strongBuy → strong Buy) and capitalize the first word → "Strong
+// Buy". Unknown values fall through looking as good as they can.
+function titleCaseRecommendation(key) {
+    const spaced = key.replace(/([a-z])([A-Z])/g, "$1 $2");
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 function paintStats(stats) {
     // Money cells: native currency figures, bare numbers — the currency
-    // lives in the header's price ("229.50 USD") and repeating it eight
-    // times would just be noise (Google Finance does the same).
+    // lives in the header's price ("229.50 USD") and repeating it in every
+    // price-shaped cell would just be noise (Google Finance does the same).
     setStat("stat-open", stats.open === null ? null : formatPrice(stats.open));
     setStat("stat-day-high",
         stats.day_high === null ? null : formatPrice(stats.day_high));
@@ -146,13 +155,49 @@ function paintStats(stats) {
 
     setStat("stat-market-cap",
         stats.market_cap === null ? null : compactFormat.format(stats.market_cap));
+
+    // The 11 cheap additions (same already-fetched profile, more keys read
+    // out of it). One formatter per kind of number:
+    //   ratio (P/E, beta) → plain; EPS → price-shaped; moving averages →
+    //   price-shaped; yield → backend-sent 0-100 figure + "%"; analyst
+    //   target → price-shaped; volume → integer like Volume above.
+    setStat("stat-pe",
+        stats.pe_ratio === null ? null : formatNumber(stats.pe_ratio));
+    setStat("stat-eps",
+        stats.eps === null ? null : formatPrice(stats.eps));
+    setStat("stat-dividend-yield",
+        stats.dividend_yield === null
+            ? null
+            : `${formatNumber(stats.dividend_yield)}%`);
+    setStat("stat-beta",
+        stats.beta === null ? null : formatNumber(stats.beta));
+    setStat("stat-50d-avg",
+        stats.fifty_day_average === null
+            ? null : formatPrice(stats.fifty_day_average));
+    setStat("stat-200d-avg",
+        stats.two_hundred_day_average === null
+            ? null : formatPrice(stats.two_hundred_day_average));
+    setStat("stat-avg-volume",
+        stats.avg_volume === null
+            ? null : integerFormat.format(stats.avg_volume));
+    setStat("stat-target-price",
+        stats.target_price === null ? null : formatPrice(stats.target_price));
+    setStat("stat-rating",
+        stats.recommendation === null
+            ? null : titleCaseRecommendation(stats.recommendation));
+    setStat("stat-sector", stats.sector === null ? null : stats.sector);
+    setStat("stat-industry", stats.industry === null ? null : stats.industry);
 }
 
 // The grid's cell ids — used by the failure path to degrade the whole
 // grid at once ("…" means waiting; "—" means this load couldn't price).
 const STAT_IDS = ["stat-open", "stat-day-high", "stat-day-low",
                   "stat-prev-close", "stat-volume",
-                  "stat-week52-range", "stat-market-cap"];
+                  "stat-week52-range", "stat-market-cap",
+                  "stat-pe", "stat-eps", "stat-dividend-yield", "stat-beta",
+                  "stat-50d-avg", "stat-200d-avg", "stat-avg-volume",
+                  "stat-target-price", "stat-rating", "stat-sector",
+                  "stat-industry"];
 
 async function refreshStockStats() {
     try {

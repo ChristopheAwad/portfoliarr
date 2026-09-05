@@ -1,71 +1,90 @@
-# Feature: Chart restyle (Option A — restyle Chart.js in place)
+# Feature: Richer stock detail stats grid (11 cheap fields)
 
 ## What & why
 
-The user dislikes the current chart's look and hover interaction on BOTH pages
-(dashboard portfolio chart + stock detail chart — both come from the ONE shared
-factory `setupTimeframeChart` in `static/js/common.js`). The eyesores:
+The stock detail page's stats grid shows 7 fields today. The route it reads
+from (`/api/stock/<symbol>/stats` → `get_stats`) already fetches Yahoo's
+heaviest endpoint, `Ticker.info`, but extracts only 8 keys from the ~50+ the
+profile carries. Surfacing more fields is therefore nearly FREE: the network
+call already happens, we just read more keys out of the same dict.
 
-- `pointRadius: 3` paints a dot on EVERY data point (fuzzy line on MAX)
-- `tension: 0.3` curves the line — reads as "smoothed", not real data
-- Flat rgba fill wash, dark-ish grid, default Chart.js tooltip (colored
-  square box that only snaps to dots)
+User-approved scope: **all 11 fields** (both the "very high value" valuation
+set AND the "high value context" set).
 
-Chosen direction: **Option A now, Option B (TradingView lightweight-charts)
-later if the user still dislikes it.** Plan approved by user; line flips
-red/green by direction (Google Finance's signature look).
+## Fields added (7 → 18 cells)
 
-Note: the SELL-aggregates feature plan that was in this file turned out to be
-already implemented and committed (81b7399; its tests exist and pass).
+| New backend key | Yahoo `.info` key | Display | Format |
+|---|---|---|---|
+| `pe_ratio` | `trailingPE` | 25.43 | `formatNumber` |
+| `eps` | `trailingEps` | 6.10 | `formatPrice` |
+| `dividend_yield` | `dividendYield` | 0.33% (pass-through) | `formatNumber` + "%" |
+| `beta` | `beta` | 1.20 | `formatNumber` |
+| `fifty_day_average` | `fiftyDayAverage` | 228.40 | `formatPrice` |
+| `two_hundred_day_average` | `twoHundredDayAverage` | 210.15 | `formatPrice` |
+| `avg_volume` | `avgVolume10days` | 42,000,000 | `integerFormat` |
+| `target_price` | `targetMeanPrice` | 260.00 | `formatPrice` |
+| `recommendation` | `recommendationKey` | Buy | text, title-cased |
+| `sector` | `sector` | Technology | text |
+| `industry` | `industry` | Consumer Electronics | text |
 
-## Scope — frontend-only
+Grid order after the existing Market Cap: P/E, EPS, Div Yield, Beta,
+50-Day Avg, 200-Day Avg, Avg Volume, Analyst Target, Rating, Sector, Industry.
+
+### The one unit gotcha: dividend yield is ALREADY a percent
+Initial assumption (a fraction needing ×100) was WRONG — caught live in the
+GUI at CM.TO showing 263%. Verified across CM.TO / RY.TO / AAPL / VZ (Sep
+2026): `Ticker.info["dividendYield"]` ships as a percent (2.63, 0.33, 5.59),
+each matching `dividendRate / currentPrice`. So `get_stats` passes it through
+VERBATIM and the frontend appends "%". No scaling anywhere.
+
+### `recommendation` display
+Yahoo sends lowercase keys, sometimes camelCase ("strongBuy"). A 2-line
+title-caser in stock.js splits on the camelCase boundary + capitalizes:
+"strongBuy" → "Strong Buy". Unknown values fall through as before.
+
+## Files
 
 | File | Change |
 |---|---|
-| `static/js/common.js` | ONLY the chart section: dataset config, direction colors, gradient fill, interaction + tooltip config, crosshair plugin, and a direction-color update in `refresh()`. Factory signature unchanged → `main.js` / `stock.js` untouched. |
-| `static/style.css` | None expected. |
-| Backend | None. |
-
-## Concrete changes (common.js)
-
-1. `pointRadius: 0` (no dots), `pointHoverRadius: 4` (dot only under cursor)
-2. `tension: 0` — straight segments
-3. Scriptable `backgroundColor`: canvas linear gradient from the line color
-   (top) to transparent (chart bottom) — replaces the flat fill
-4. Direction colors mirroring the CSS palette (`--green-pos: #137333`,
-   `--red-neg: #c5221f`): `refresh()` compares first vs last value and sets
-   `borderColor` + the gradient base; empty data keeps the previous color
-5. Softer y-grid (`#f1f3f4`), borderless axes, x `maxTicksLimit: 8` +
-   `maxRotation: 0`, y `maxTicksLimit: 6`
-6. `interaction: { mode: "index", intersect: false }` — hover follows the
-   cursor anywhere, snaps to the nearest x point
-7. Tooltip restyle: `displayColors: false` (no colored square), dark rounded
-   pill, date title, price body via `formatPrice` (frontend-only formatting
-   rule holds)
-8. ~15-line chart-local crosshair plugin: vertical line at the hovered point
-   (afterDatasetsDraw, from the active tooltip element)
+| `market_data.py` | `get_stats()`: add 11 `.get()` extractions (`dividend_yield` VERBATIM — Yahoo already ships it as a percent), update docstring. Same None-gap-fill convention. |
+| `templates/stock.html` | 11 new `<div class="stat">` cells in the `<dl class="stats-grid">`. |
+| `static/js/stock.js` | `paintStats`: map the 11 ids; `STAT_IDS`: add the 11 ids (failure path degrades whole grid still). |
+| `static/style.css` | EXPECTED no change — 4-col grid absorbs 18 cells; mobile 2-col = exactly 9 rows. |
+| `tests/test_market_data.py` | get_stats tests for the new keys. |
+| `tests/test_stock.py` | extend the stats pass-through test's dict. |
 
 ## Contracts checked
 
-- Factory input/output contract `{canvas, buttonBar, datasetLabel, endpoint,
-  defaultPeriod}` → `{chart, refresh}`: UNCHANGED (callers untouched).
-- Formatting frontend-only: tooltip price goes through `formatPrice`.
-- Timeframe buttons / `PERIOD_MAP` / endpoints: untouched.
-- Chart.js stays the `chart.js@4` CDN script in `base.html` (no dep change).
+- Stats endpoint is a pure pass-through; new keys ride the SAME payload —
+  no route change, no new endpoint, no extra API call.
+- None-gap-fill holds: absent fields → None → "—" (indices show "—" for most
+  of these; an unprofitable company has no P/E).
+- `get_name` shares `Ticker.info` and is untouched (name cache unchanged).
+- Formatting stays frontend-only except the dividend unit normalization.
+- Nothing touches PERIOD_MAP, quote cache, ledger math, or the chart.
 
-## Test plan
+## Test plan (tests-first)
 
-Frontend-only visual change — pytest cannot judge chart pixels and the
-backend is untouched, so there are NO new pytest tests (the tests-first rule
-collapses here by design). Verification:
+`tests/test_market_data.py`:
+1. Extend `test_get_stats_extracts_and_renames_the_grid_fields` with all 11
+   Yahoo keys → asserts the full 18-key naming contract.
+2. New `test_get_stats_dividend_yield_is_a_percent_pass_through`:
+   `dividendYield: 0.33` → `dividend_yield == 0.33` (pins pass-through, the
+   anti-263% regression guard); absent → None.
+3. Extend `test_get_stats_missing_fields_become_none`: assert all 11 new keys
+   are None too.
 
-1. Full `python -m pytest` stays green as the regression guard.
-2. GUI gate (the real test): user checks BOTH pages — every timeframe button
-   (1D–MAX), the hover readout + crosshair, red/green coloring, gradient fill.
+`tests/test_stock.py`:
+4. Extend `test_stock_stats_returned_untouched`'s fake dict with all 11 keys —
+   the existing `body == fake_market.stats["AAPL"]` assertion then locks the
+   route pass-through for the new fields.
 
 ## Steps
 
-1. Restyle `setupTimeframeChart` in `common.js`.
-2. Full `python -m pytest` green.
-3. GUI gate → then, if the user still dislikes the chart, plan the Option B
-   swap (lightweight-charts). Commit gate: explicit yes only.
+1. ✅ Plan approved (see above).
+2. Tests first: edits 1–4 above → run scoped → they FAIL (keys absent).
+3. Implement: `get_stats` → template cells → `paintStats` + `STAT_IDS`.
+4. Full `python -m pytest` green.
+5. GUI gate: check AAPL (dividend payer, all fields populated), a non-yield /
+   unprofitable ticker (some "—"), and ^GSPC (most "—"). Check 2-col mobile.
+6. Commit gate: explicit yes only.
