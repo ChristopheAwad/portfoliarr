@@ -65,6 +65,28 @@ def test_watchlist_remove_reports_whether_it_deleted(fresh_db):
     assert db.get_symbols() == []
 
 
+def test_is_watched_answers_membership(fresh_db):
+    """is_watched is a pure membership question — the stock page uses it at
+    render time to ship the watch button's initial state, so False on an
+    empty DB, True after add, False again after remove."""
+    assert db.is_watched("AAPL") is False
+    db.add_symbol("AAPL")
+    assert db.is_watched("AAPL") is True
+    db.remove_symbol("AAPL")
+    assert db.is_watched("AAPL") is False
+
+
+def test_is_watched_is_an_exact_match(fresh_db):
+    """Exact-match lookup: the route layer normalizes (strip + upper) before
+    calling db, so this layer deliberately does NOT — 'aapl' ≠ 'AAPL' here.
+    Testing the raw behaviour proves no silent normalization is hiding in
+    db.py that a sloppy caller could come to depend on."""
+    db.add_symbol("AAPL")
+    assert db.is_watched("AAPL") is True
+    assert db.is_watched("aapl") is False
+    assert db.is_watched("MSFT") is False
+
+
 # ── Transactions: write & read ────────────────────────────────────────
 
 def test_transaction_round_trip(fresh_db):

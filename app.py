@@ -1602,8 +1602,18 @@ def stock_page(symbol):
     the template ships blank placeholders and stock.js fills them from the
     JSON endpoints below — the same "browser does all rendering" rule as
     the dashboard. The uppercased symbol rides into the template so it can
-    stamp <body data-symbol> (stock.js's identity hook) and <title>."""
-    return render_template("stock.html", symbol=symbol.strip().upper())
+    stamp <body data-symbol> (stock.js's identity hook) and <title>.
+
+    One DB read rides along (never Yahoo): whether this symbol is already
+    on the watchlist. Stamping the answer into the HTML (data-watched)
+    lets stock.js paint the button's check mark at load — the alternative,
+    a fetch on boot, would flicker and put a network call on the critical
+    path. The symbol is uppercased FIRST so the lookup matches what the
+    watchlist routes stored."""
+    symbol = symbol.strip().upper()
+    return render_template(
+        "stock.html", symbol=symbol, watched=db.is_watched(symbol)
+    )
 
 
 @app.route("/api/search")

@@ -49,14 +49,20 @@
                  (ONE form, one submit handler, same reuse rule the ledger's
                  edit mode follows). -->
             <div class="stock-actions">
-                <!-- The plus glyph is inline SVG (not a text "+") so it
-                     inherits the button's color and scales with it — same
-                     pattern as the dashboard's Import button. aria-hidden
-                     because the words already say what the button does.
-                     stock.js only ever REPLACES this button's content when
-                     it flips to the done-state (built via icon("check")),
-                     so the SVG survives every other code path. -->
-                <button class="btn-action" id="add-to-watchlist-btn" type="button">
+                <!-- The watch button ships with its STATE stamped in:
+                     data-watched comes from the route (a DB read, not a
+                     network call), and stock.js paints either the plus
+                     ("Add to Watchlist") or check ("On Watchlist") from it
+                     at load — no fetch, no flicker. The plus glyph below
+                     is the unwatched default markup; like the dashboard's
+                     Import button it's inline SVG (not a text "+") so it
+                     inherits the button's color and scales with it, and
+                     stock.js REBUILDS this content on every state flip
+                     (via icon("plus")/icon("check")), so the SVG survives
+                     every other code path. aria-hidden on the glyph
+                     because the words already say what the button does. -->
+                <button class="btn-action" id="add-to-watchlist-btn" type="button"
+                        data-watched="{{ 'true' if watched else 'false' }}">
                     <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
                          fill="none" stroke="currentColor" stroke-width="2"
                          stroke-linecap="round" aria-hidden="true">

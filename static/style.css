@@ -12,6 +12,7 @@
     --border-color: #e4e7ec;
     --green-pos: #059669;
     --green-bg: #e7f6ef;
+    --green-bg-hover: #d9f0e4;  /* green state-buttons' hover step */
     --red-neg: #dc2626;
     --red-bg: #fdecec;
     --blue-accent: #2563eb;
@@ -437,6 +438,24 @@ a.logo { text-decoration: none; }
     background: var(--green-bg);
     color: var(--green-pos);
     cursor: default;
+}
+
+/* Watched state (the stock page's watch button, already on the list):
+   the same green "state, not action" palette — but the button stays
+   CLICKABLE, because its click now means "remove from watchlist" (the
+   old disabled done-state was a dead end that made watched symbols
+   un-unwatchable from this page). The hover override matters: the plain
+   .btn-action:hover repaints blue, which would lie about the state. */
+.btn-action.watched {
+    background: var(--green-bg);
+    color: var(--green-pos);
+}
+
+.btn-action.watched:hover { background: var(--green-bg-hover); }
+
+.btn-action.watched:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
 /* Inline error beside the buttons (unknown ticker, server down...) — the
