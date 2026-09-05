@@ -47,5 +47,5 @@ JS confirm/unwatch flow has no JS test infra — verified at the GUI gate.
 - [x] Plan approved by user (2026-09-05)
 - [x] Tests written + failing (4 new: 2 db, 2 route)
 - [x] Implemented, full `python -m pytest` green (213 passed)
-- [ ] GUI gate (user checks browser)
-- [ ] Commit gate
+- [x] GUI gate (user checked the browser, 2026-09-05)
+- [x] Commit gate (review nits addressed, squash-merging into main)

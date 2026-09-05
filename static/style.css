@@ -432,8 +432,9 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
-/* Done-state (added, or already on the watchlist): disabled + the green
-   "success" palette, so the button reads as state, not an action. */
+/* Disabled dead-end (stock.js's markUnknownSymbol: when a quote 404s,
+   both action buttons become unclickable). No longer the watchlist
+   done-state — that role lives in .btn-action.watched below. */
 .btn-action:disabled {
     background: var(--green-bg);
     color: var(--green-pos);
@@ -452,11 +453,6 @@ a.logo { text-decoration: none; }
 }
 
 .btn-action.watched:hover { background: var(--green-bg-hover); }
-
-.btn-action.watched:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-}
 
 /* Inline error beside the buttons (unknown ticker, server down...) — the
    tx-error treatment, relocated to the detail page. */
