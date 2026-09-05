@@ -32,8 +32,9 @@ Use subagents to run independent implementation chunks concurrently — but only
 - Two pages, one shared shell: `templates/base.html` owns the head, Chart.js CDN, navbar, and the search box + suggestion dropdown. Pages extend it and fill the `title` / `content` / `scripts` (and optionally `body_attrs`) blocks. `static/js/common.js` (formatters, `paintChange`, search UI, `setupTimeframeChart`) is loaded by base.html BEFORE each page script — page scripts just use the globals.
 - Layering: `market_data.py` = data layer (yfinance + caching, knows nothing about Flask); `db.py` = persistence layer (SQLite, knows nothing about Flask/yfinance); `app.py` = routes (decides WHICH symbols); `static/js/main.js` = dashboard rendering, `static/js/stock.js` = detail-page rendering.
 - Logging lives ONLY in `app.py` (three tiers, console-only). The pure layers (`market_data.py`, `db.py`) never catch or log — they raise; the route layer catches wide, logs with `exc_info=True`, and translates failures to HTTP.
-- Timeframe buttons (1D–MAX) and `/api/portfolio/history` both go through `PERIOD_MAP` (`market_data.py`) — the route validates client-supplied period keys against it. Adding a timeframe = edit it there once.
+- Timeframe buttons (1D–MAX) and `/api/portfolio/history` both go through `PERIOD_MAP` (`market_data.py`) — the route validates client-supplied period keys against it. Adding a timeframe = edit it there once. "5m" is its only intraday interval — label formatting and the route's intraday branch key on that exact string; 5Y (`1wk`) and MAX (`1mo`) serve coarser bars by design.
 - Quote cache is an in-memory dict in `market_data.py` (TTL 120s), deliberately NOT SQLite despite the brief's stack table. Dies on restart — acceptable. Rework trigger documented in `project-brief.md`.
+- History cache is an in-memory dict in `market_data.py` keyed `(symbol, period)` (TTL 600s settled bars / 120s intraday 1D) — same NOT-SQLite call as the quote cache; dies on restart, acceptable. Successes only: a failed fetch is never cached, so the next click retries. Rework trigger shared with the quote cache (`project-brief.md`).
 - SQLite DBs go in `instance/` (gitignored, per Flask convention).
 
 ## Commands
@@ -46,7 +47,7 @@ Use subagents to run independent implementation chunks concurrently — but only
 - Dev machine has NO Docker — never build/run the image locally. `tests/test_docker.py` meta-tests the container config by string-checking `Dockerfile`, `docker-compose.yml`, `.dockerignore`, and `.github/workflows/docker.yml`; editing any of those files means keeping the asserted contracts (right things present, wrong things absent, in both directions).
 - CI on every push to `main` (`.github/workflows/docker.yml`): full `python -m pytest` → build & push `ghcr.io/christopheawad/portfoliarr:latest` + `:<sha>`. A red main never produces an image; `workflow_dispatch` exists for manual rebuilds.
 - Server adopts updates: `docker compose pull && docker compose up -d` (pulls the published image, never builds locally). App at `http://localhost:9967` (host 9967 → container 5000).
-- Prod = gunicorn `app:app`, 1 worker + 8 threads — deliberate: the in-memory quote cache and SQLite want a single process. Dev keeps `python app.py`.
+- Prod = gunicorn `app:app`, 1 worker + 8 threads — deliberate: the in-memory caches (quote, history, names) and SQLite want a single process. Dev keeps `python app.py`.
 - Container boots as root ONLY so `docker-entrypoint.sh` can chown the data volume, then `exec gosu appuser` — no `USER` directive by design (locked by test). Named volume `portfoliarr-data` mounted over `/app/instance` keeps the SQLite ledger across image updates; `TZ=America/Toronto` in compose.
 
 ## Testing

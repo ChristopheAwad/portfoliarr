@@ -67,8 +67,8 @@ cache is invisible there).
 - [x] Tests written & failing (7 failed, 3 regression locks passed — as designed)
 - [x] Implemented
 - [x] Full suite green: 223 passed
-- [ ] GUI check by user
-- [ ] Commit decision
+- [x] GUI check by user (dashboard + stock page, 2026-09-05)
+- [x] Commit decision (review nits addressed, squash-merging into main)
 
 ## Notes from implementation (things the tests caught)
 
