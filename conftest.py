@@ -26,8 +26,31 @@ from types import SimpleNamespace
 import pytest
 
 import db
+import market_data
 import app as app_module
 from app import app
+
+
+@pytest.fixture(autouse=True)
+def fresh_history_cache():
+    """Empty market_data's history cache around EVERY test, suite-wide.
+
+    WHY suite-wide, not per-file: several test files (test_market_data,
+    test_routes, test_stock, test_chart_speed) run the REAL get_history
+    against a faked yfinance, and any of them can leave an entry behind —
+    e.g. test_routes' NaN regression caches ("META", "5D") and would then
+    serve test_stock's META test a stale dict. An autouse fixture here is
+    the one place that covers every file, present and future. Cleared on
+    BOTH ends: before (no test inherits a neighbour's data) and after (a
+    test that skips/fails mid-flight can't leak into the next file).
+
+    The quote and name caches keep their older per-file cleaning — those
+    files' fixtures know their own needs; this fixture exists because the
+    history cache is NEW and reachable from many files at once.
+    """
+    market_data.clear_history_cache()
+    yield
+    market_data.clear_history_cache()
 
 
 @pytest.fixture

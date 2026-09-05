@@ -2,6 +2,12 @@
 # by the request-timing hook in the LOGGING section below.
 import time
 
+# ThreadPoolExecutor runs one callable across MANY OS threads and
+# collects their results — the portfolio-history route uses it to fetch
+# every ticker's Yahoo history at the same time instead of one after
+# another (I/O waits overlap; CPU work wouldn't).
+from concurrent.futures import ThreadPoolExecutor
+
 # Import the Flask class (used to create the app), render_template (serves
 # Jinja2 HTML templates to the browser), jsonify (converts Python
 # dicts/lists into a proper JSON HTTP response, including the
@@ -229,17 +235,38 @@ Algorithm: walk every trading day in the range forward, keeping a
     if not transactions:
         return jsonify({"labels": [], "values": []})
 
-    # Fetch each ticker's price history once. Per-ticker resilience, the
-    # same rule as the indices bar: a dead/delisted ticker is skipped,
-    # its contribution is 0 for the whole period — never a 503 for the
-    # whole chart.
-    histories = {}
+    # Fetch each ticker's price history once — but IN PARALLEL. The
+    # serial version paid "sum of every Yahoo call" before the chart
+    # could draw (six tickers ≈ six seconds); a thread pool pays only
+    # the SLOWEST single call, because fetching is network WAIT, not CPU
+    # work — while a thread sits blocked on Yahoo's response it holds no
+    # CPU, so eight threads overlap eight waits almost for free.
+    #
+    # UNIQUE symbols first (a dict-as-set would work, but a list keeps
+    # the ledgers' first-appearance order): the old loop's `if symbol in
+    # histories: continue` dedupe moves here, so two AAPL transactions
+    # still cost ONE fetch.
+    unique_symbols = []
+    seen = set()
     for tx in transactions:
-        symbol = tx["ticker"]
-        if symbol in histories:
-            continue
+        if tx["ticker"] not in seen:
+            seen.add(tx["ticker"])
+            unique_symbols.append(tx["ticker"])
+
+    def fetch_history(symbol):
+        """One worker's job: fetch one ticker, or report it dead.
+
+        Per-ticker resilience, the same rule as the indices bar: a
+        dead/delisted ticker is skipped, its contribution is 0 for the
+        whole period — never a 503 for the whole chart. The try/except
+        lives INSIDE the worker (not around the pool) so one ticker's
+        failure degrades only that ticker; returning a (symbol, {})
+        pair instead of raising keeps the pool.map walk below uniform.
+        Logging from a worker thread is safe — the logging module is
+        thread-safe by design, and app.logger needs no request context.
+        """
         try:
-            histories[symbol] = get_history(symbol, period)
+            return symbol, get_history(symbol, period)
         except Exception:
             # TIER 1: without a record, a dead ticker is indistinguishable
             # from "the user never traded it" — both contribute 0 and
@@ -249,7 +276,18 @@ Algorithm: walk every trading day in the range forward, keeping a
                 symbol,
                 exc_info=True,
             )
-            histories[symbol] = {}  # he can't be priced; treat as 0
+            return symbol, {}  # can't be priced; treat as 0
+
+    histories = {}
+    with ThreadPoolExecutor(
+        max_workers=min(len(unique_symbols), 8)
+    ) as pool:
+        # pool.map yields results in INPUT order (not completion order),
+        # so `histories` ends up keyed in the same deterministic order
+        # the serial loop produced — nothing downstream can tell the
+        # difference except the clock.
+        for symbol, history in pool.map(fetch_history, unique_symbols):
+            histories[symbol] = history
 
     # DISPLAY CURRENCY — the chart is ALWAYS CAD (the dashboard's ledger
     # toggle never touches it: this line IS the portfolio total). Each
@@ -299,10 +337,16 @@ Algorithm: walk every trading day in the range forward, keeping a
     #     honest, simple choice. (A portfolio bought last week is still
     #     held today — pricing only TODAY's transactions painted a flat
     #     zero line all day, which was a bug, not a statement.)
-    # Detect the case by the interval (same dict that drove the fetch), and
-    # grab today's date once (same local-day rule the frontend's date input
-    # uses, so a "today" trade prices into today's intraday chart).
-    is_intraday = PERIOD_MAP[period]["interval"] != "1d"
+    # Detect the case by the interval (same dict that drove the fetch) —
+    # "5m" is the ONLY intraday interval in PERIOD_MAP, and this check
+    # must agree with get_history's (which flips on the same string).
+    # (It used to test `!= "1d"`, which silently worked while every
+    # non-1D interval WAS "1d" — and would have misrouted the weekly
+    # 5Y / monthly MAX bars into the intraday branch the moment this
+    # feature moved them off daily bars.)
+    # Grab today's date once (same local-day rule the frontend's date
+    # input uses, so a "today" trade prices into today's intraday chart).
+    is_intraday = PERIOD_MAP[period]["interval"] == "5m"
     label_date_today = date.today().isoformat()
 
     # START THE DAILY AXIS AT THE FIRST LOGGED INVESTMENT — not at the far
