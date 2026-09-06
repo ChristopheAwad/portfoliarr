@@ -979,6 +979,24 @@ a.logo { text-decoration: none; }
     white-space: nowrap;
 }
 
+/* The four "artifact" columns hold short, atomic content — the caret +
+   "N txns" meta, the ticker link, the BUY/SELL badge, the action buttons.
+   They're the only cells in a row that CAN wrap (.num cells already carry
+   nowrap), and an auto-layout table computes column widths from whichever
+   rows are currently visible — so right after a page load (every group
+   collapsed, the least content the table will ever show) these columns can
+   come up too narrow and break "▸ 1 txn" onto two lines, growing the row
+   until some later rebuild re-rolls the column dice. nowrap makes a group
+   row's height deterministic: tight columns overflow gracefully instead of
+   growing the row. Cells are identified by the data-col attribute that
+   stampCell stamps — no cell carries a class. */
+.ledger-table td[data-col="date"],
+.ledger-table td[data-col="ticker"],
+.ledger-table td[data-col="type"],
+.ledger-table td[data-col="actions"] {
+    white-space: nowrap;
+}
+
 /* Row hover tint for the tbody's detail rows (the group rows have their
    own tint rules below — they're controls, so they keep their stronger
    affordance). */
@@ -1516,27 +1534,30 @@ a.logo { text-decoration: none; }
     tr.ledger-group > td { flex: 1 1 100%; }
 
     /* Meaningless on a summary card: a group has no single type (always
-       blank) and no single price ("—"). Hide the CELLS, not their labels. */
-    tr.ledger-group td.type,
-    tr.ledger-group td.price { display: none; }
+       blank) and no single price ("—"). Hide the CELLS, not their labels.
+       Cells are identified by the data-col attribute stampCell writes —
+       no cell carries a .type/.price class, so the bare class form of
+       these selectors once matched nothing and quietly never hid them. */
+    tr.ledger-group td[data-col="type"],
+    tr.ledger-group td[data-col="price"] { display: none; }
 
     /* Three cells are structure, not facts — no caption: */
-    tr.ledger-group td.date::before,    /* caret + "N txns" = meta line   */
-    tr.ledger-group td.ticker::before,  /* ticker = the card's title      */
-    tr.ledger-group td.actions::before { content: none; }
+    tr.ledger-group td[data-col="date"]::before,    /* caret + "N txns" = meta line   */
+    tr.ledger-group td[data-col="ticker"]::before,  /* ticker = the card's title      */
+    tr.ledger-group td[data-col="actions"]::before { content: none; }
 
     /* Title row: ticker grows on the LEFT, the "▸ N txns" meta hugs the
        RIGHT — one line, no dead space. DOM order is date→ticker (the
        table's column order), so `order` moves the ticker first VISUALLY
        only: DOM order, click handlers and screen readers are untouched. */
-    tr.ledger-group td.ticker {
+    tr.ledger-group td[data-col="ticker"] {
         order: -1;
         flex: 1 1 auto;
         font-size: 16px;
         padding-bottom: 8px;
     }
 
-    tr.ledger-group td.date {
+    tr.ledger-group td[data-col="date"] {
         flex: 0 0 auto;         /* shrink-wraps to caret + "N txns" */
         justify-content: flex-end;
         gap: 6px;               /* caret and count sit as one unit */
@@ -1546,12 +1567,12 @@ a.logo { text-decoration: none; }
     }
 
     /* The card's headline number, a touch above line-item weight. */
-    tr.ledger-group td.value {
+    tr.ledger-group td[data-col="value"] {
         font-size: 15px;
         font-weight: 500;
     }
 
-    tr.ledger-group td.actions {
+    tr.ledger-group td[data-col="actions"] {
         justify-content: flex-end;
         padding-bottom: 0;
     }
@@ -1567,11 +1588,13 @@ a.logo { text-decoration: none; }
 
     .ledger-table tr.tx-detail td:first-child { padding-left: 0; }
 
-    /* Ticker repeats the card's title one line up — hide the cell. */
-    tr.tx-detail td.ticker { display: none; }
+    /* Ticker repeats the card's title one line up — hide the cell.
+       Same data-col identity as the group-card rules above: detail cells
+       carry attributes, not classes. */
+    tr.tx-detail td[data-col="ticker"] { display: none; }
 
-    tr.tx-detail td.actions::before { content: none; }
-    tr.tx-detail td.actions {
+    tr.tx-detail td[data-col="actions"]::before { content: none; }
+    tr.tx-detail td[data-col="actions"] {
         justify-content: flex-end;  /* buttons on the right, not flex-spread */
         padding-bottom: 0;
     }
