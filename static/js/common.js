@@ -579,6 +579,153 @@ const crosshairPlugin = {
     },
 };
 
+// ---------------------------------------------------------------------------
+// X-AXIS LABELS — short, sparse, and placed by US.
+//
+// The backend's history replies label each bar with a plain string in
+// one of three fixed shapes (PERIOD_MAP's "label" format, market_data.py):
+//   1D   -> "09:30"             clock time (one trading day)
+//   5D   -> "2026-09-04 14:30"  date + time (one day carries many bars)
+//   rest -> "2026-09-04"        date (one bar per day)
+// Painted verbatim, those strings crowd the axis — eight 16-character
+// labels is noise, not information. So the axis text is REFORMATTED at
+// display time here. The raw labels themselves are never touched: they
+// are load-bearing backend-side (merge keys for the portfolio series,
+// lexicographic sort keys, transaction-date comparisons) — the app's
+// "backend sends data, the browser formats" rule applied to ticks.
+//
+// The format is keyed on the DATA, not on which button was clicked:
+//   - a window spanning >= 2 calendar years shows "Sep 2025" — the month
+//     is the natural unit at that zoom, and the tooltip still has the
+//     exact day (1Y/5Y/MAX always; 3M/6M/1M flip across New Year);
+//   - a window inside one calendar year shows "Sep 4";
+//   - 5D shows the DATE at each day's FIRST bar only ("Sep 3", "Sep 4")
+//     — the Google Finance 5D look; across New Year it still reads
+//     "Dec 30, Jan 2" with no year needed (unambiguous in five days);
+//   - 1D passes its clock times straight through.
+// ---------------------------------------------------------------------------
+
+// Month number -> abbreviation. Our ISO labels carry months as "01".."12"
+// but humans read "Sep". (+n on the parsed slice turns "09" into 9 here.)
+const MONTHS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+// How many labels the x-axis paints, at most. Fewer than the old
+// maxTicksLimit: 8 — real stock charts (the Google Finance look this app
+// copies) show a handful of sparse ticks, not a ruler.
+const X_TICK_TARGET = 6;
+
+// The two parseable shapes above, as anchored regexes. exec() hands
+// back capture groups to parse with; a label matching NEITHER (1D's
+// clock times, or anything malformed) parses to null and falls through
+// to pass-through. Anchored ($ at the end) so a weird label can't
+// partially match and get mangled — it passes through raw.
+const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) \d{2}:\d{2}$/;
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// One parsed date-ish label -> short text. The numeric month/day also
+// strip the ISO leading zero ("Sep 04" would read wrong).
+function monthDay(p) {
+    return `${MONTHS[p.mo - 1]} ${p.d}`;
+}
+
+function monthYear(p) {
+    return `${MONTHS[p.mo - 1]} ${p.y}`;
+}
+
+// Which bar indices get text when spreading `count` bars over the tick
+// target? Even stride from index 0, then the LAST index forced in — but
+// only when it sits at least half a stride away from the previous pick,
+// so "the freshest point" (what 1D's last time tells you) never crowds
+// the tick before it.
+function stridedIndices(count) {
+    const stride = Math.max(1, Math.ceil(count / X_TICK_TARGET));
+    const picks = [];
+    for (let i = 0; i < count; i += stride) {
+        picks.push(i);
+    }
+    const lastPick = picks[picks.length - 1];
+    if (lastPick !== count - 1
+        && (count - 1) - lastPick >= Math.ceil(stride / 2)) {
+        picks.push(count - 1);
+    }
+    return picks;
+}
+
+// Build the axis-text plan: one entry per label, "" meaning "paint
+// nothing on this bar". PURE — it reads only the labels array, which is
+// what lets the chart factory rebuild the plan before every redraw and
+// keeps the formatting testable in isolation. A series' labels are
+// homogeneous by construction (one PERIOD_MAP format per request), but
+// dispatch is defensive: anything unparseable passes through raw rather
+// than crashing the chart (same forgiving spirit as the "—" path).
+function buildXTickLabels(labels) {
+    // Parse every label ONCE. Date-ish shapes keep their parts as
+    // numbers plus a kind ("datetime" = 5D, "date" = daily); "time"
+    // labels and unparseable ones parse to null.
+    const parsed = labels.map((label) => {
+        let m = DATETIME_RE.exec(label);
+        if (m) return { kind: "datetime", y: +m[1], mo: +m[2], d: +m[3] };
+        m = DATE_RE.exec(label);
+        if (m) return { kind: "date", y: +m[1], mo: +m[2], d: +m[3] };
+        return null;
+    });
+
+    // The year-span flag: do the first and last PARSEABLE labels sit in
+    // different calendar years? This is what makes the "Sep 4" vs
+    // "Sep 2025" choice data-driven — no per-button special cases.
+    const firstYear = parsed.find(Boolean)?.y;
+    const lastYear = parsed.findLast(Boolean)?.y;
+    const spansYears = firstYear !== undefined && lastYear !== undefined
+        && firstYear !== lastYear;
+
+    // 5D: many bars per day, so the DAY is the story. Label a bar only
+    // at a day boundary — its date differs from the previous bar's (or
+    // it's the very first bar). Every other bar paints nothing.
+    if (parsed[0]?.kind === "datetime") {
+        const axisText = labels.map(() => "");
+        const boundaries = [];
+        for (let i = 0; i < parsed.length; i++) {
+            const p = parsed[i];
+            const prev = i > 0 ? parsed[i - 1] : null;
+            if (!prev || prev.y !== p.y || prev.mo !== p.mo
+                || prev.d !== p.d) {
+                boundaries.push(i);
+            }
+        }
+        // Five trading days give ~5 boundaries — under the target, so
+        // this thinning is purely defensive: if the shape ever yields
+        // more boundaries than the target, stride the boundary LIST.
+        const shown = boundaries.length > X_TICK_TARGET
+            ? boundaries.filter((unused, k) =>
+                  k % Math.ceil(boundaries.length / X_TICK_TARGET) === 0)
+            : boundaries;
+        for (const i of shown) axisText[i] = monthDay(parsed[i]);
+        return axisText;
+    }
+
+    // Daily bars (one per day): sparse stride, "Sep 4" or "Sep 2025".
+    if (parsed[0]?.kind === "date") {
+        const axisText = labels.map(() => "");
+        for (const i of stridedIndices(parsed.length)) {
+            axisText[i] = spansYears
+                ? monthYear(parsed[i])
+                : monthDay(parsed[i]);
+        }
+        return axisText;
+    }
+
+    // 1D time series (or fully unparseable): pass the raw text through
+    // on the strided picks only.
+    const axisText = labels.map(() => "");
+    for (const i of stridedIndices(parsed.length)) {
+        axisText[i] = labels[i];
+    }
+    return axisText;
+}
+
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod }
 ) {
@@ -595,6 +742,12 @@ function setupTimeframeChart(
     // readers below (borderColor, the gradient's fill color) derive from
     // it, so one flip recolors line + fill together.
     let direction = "up";
+
+    // The x-axis text plan: one entry per bar, "" = paint nothing there.
+    // buildXTickLabels (above) rebuilds it inside refresh() BEFORE each
+    // redraw; the tick callback below reads it at draw time — which is
+    // why it lives in a closure the callback can see.
+    let xTickLabels = [];
 
     // Chart.js paints onto the canvas's "2D context" — the object whose
     // methods actually put pixels on it.
@@ -688,9 +841,17 @@ function setupTimeframeChart(
                 x: {
                     grid: { display: false },   // no vertical gridlines
                     border: { display: false }, // no axis line either
-                    // Cap the label count and forbid angled text — crowded
-                    // or slanted date labels were part of the old mess.
-                    ticks: { maxTicksLimit: 8, maxRotation: 0 },
+                    // Tick placement is OURS, not Chart.js's: autoSkip
+                    // off (its skipper would pick arbitrary bars), no
+                    // rotation (labels never slant), and the callback
+                    // paints the precomputed plan — "" for bars we
+                    // didn't pick, which paints NOTHING (with grid and
+                    // border hidden, an empty tick leaves no trace).
+                    ticks: {
+                        maxRotation: 0,
+                        autoSkip: false,
+                        callback: (value, index) => xTickLabels[index] || "",
+                    },
                 },
                 y: {
                     grid: { color: "#eef1f5" }, // hairline gray, border-adjacent
@@ -731,6 +892,10 @@ function setupTimeframeChart(
             }
             chart.data.labels = data.labels;
             chart.data.datasets[0].data = data.values;
+            // Rebuild the axis-text plan BEFORE the redraw: the tick
+            // callback reads xTickLabels at draw time, so it must
+            // describe the NEW series, not the previous one.
+            xTickLabels = buildXTickLabels(data.labels);
             chart.update();
         } catch (err) {
             console.error("chart refresh failed:", err);
