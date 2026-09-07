@@ -617,13 +617,13 @@ const MONTHS = [
 // copies) show a handful of sparse ticks, not a ruler.
 const X_TICK_TARGET = 6;
 
-// The three fixed shapes above, as anchored regexes. exec() hands back
-// capture groups to parse with; test() is a boolean probe for the
-// shapeless ones. Anchored ($ at the end) so a weird label can't
-// partially match and get mangled — it falls through to pass-through.
+// The two parseable shapes above, as anchored regexes. exec() hands
+// back capture groups to parse with; a label matching NEITHER (1D's
+// clock times, or anything malformed) parses to null and falls through
+// to pass-through. Anchored ($ at the end) so a weird label can't
+// partially match and get mangled — it passes through raw.
 const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) \d{2}:\d{2}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const TIME_RE = /^\d{2}:\d{2}$/;
 
 // One parsed date-ish label -> short text. The numeric month/day also
 // strip the ISO leading zero ("Sep 04" would read wrong).
