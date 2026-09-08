@@ -853,10 +853,39 @@ function setupTimeframeChart(
                     titleFont: { size: 11, weight: "normal" },
                     bodyFont: { size: 13, weight: 600 },
                     callbacks: {
+                        // Tooltip title: reformat the raw ISO label
+                        // (e.g. "2026-09-13" or "2026-09-13 14:30")
+                        // into human-friendly text ("Sep 13").
+                        // 1D clock times pass through as-is.
+                        title(items) {
+                            const raw = lastLabels[items[0].dataIndex] || "";
+                            let m = DATETIME_RE.exec(raw);
+                            if (m) {
+                                const p = { y: +m[1], mo: +m[2], d: +m[3] };
+                                return monthDay(p);
+                            }
+                            m = DATE_RE.exec(raw);
+                            if (m) {
+                                const p = { y: +m[1], mo: +m[2], d: +m[3] };
+                                // If the series spans two calendar years,
+                                // show the year instead of the day — mirrors
+                                // the x-axis tick logic in buildXTickLabels.
+                                const first = lastLabels.find(
+                                    (l) => DATE_RE.test(l));
+                                const last = lastLabels.findLast(
+                                    (l) => DATE_RE.test(l));
+                                const spansYears = first && last
+                                    && first.slice(0, 4) !== last.slice(0, 4);
+                                return spansYears ? monthYear(p) : monthDay(p);
+                            }
+                            return raw;
+                        },
                         // Same formatting rule as everywhere else in the
                         // app: the backend sends raw floats, the browser
                         // formats ("7711.759" -> "7,711.76").
-                        label: (item) => formatPrice(item.parsed.y),
+                        label(item) {
+                            return formatPrice(item.parsed.y);
+                        },
                     },
                 },
             },
