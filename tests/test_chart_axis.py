@@ -103,3 +103,17 @@ def test_label_formatter_contract():
     assert "function buildXTickLabels" in text, "formatter helper missing"
     assert "const MONTHS" in text, "month table missing"
     assert "spansYears" in text, "year-span flag missing"
+
+
+def test_responsive_tick_target():
+    """tickTargetForWidth adapts the label count to the chart's pixel
+    width — narrow mobile screens get fewer labels so they don't overlap.
+    Locking the function name and the width breakpoints keeps the mobile
+    fix from silently vanishing."""
+    text = common_js()
+    assert "function tickTargetForWidth" in text, (
+        "responsive tick-target helper missing"
+    )
+    assert "380" in text, "narrow-mobile breakpoint (380px) missing"
+    assert "500" in text, "small-tablet breakpoint (500px) missing"
+    assert "700" in text, "tablet breakpoint (700px) missing"
