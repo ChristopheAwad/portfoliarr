@@ -612,10 +612,17 @@ const MONTHS = [
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// How many labels the x-axis paints, at most. Fewer than the old
-// maxTicksLimit: 8 — real stock charts (the Google Finance look this app
-// copies) show a handful of sparse ticks, not a ruler.
-const X_TICK_TARGET = 6;
+// How many labels the x-axis paints, at most — scaled by the chart's
+// pixel width so narrow mobile screens don't crowd. Desktop keeps 6;
+// phones shrink to 3–4. Fewer than the old maxTicksLimit: 8 — real
+// stock charts show a handful of sparse ticks, not a ruler.
+const X_TICK_TARGET_DEFAULT = 6;
+function tickTargetForWidth(width) {
+    if (width <= 380) return 3;
+    if (width <= 500) return 4;
+    if (width <= 700) return 5;
+    return X_TICK_TARGET_DEFAULT;
+}
 
 // The two parseable shapes above, as anchored regexes. exec() hands
 // back capture groups to parse with; a label matching NEITHER (1D's
@@ -640,8 +647,8 @@ function monthYear(p) {
 // only when it sits at least half a stride away from the previous pick,
 // so "the freshest point" (what 1D's last time tells you) never crowds
 // the tick before it.
-function stridedIndices(count) {
-    const stride = Math.max(1, Math.ceil(count / X_TICK_TARGET));
+function stridedIndices(count, target) {
+    const stride = Math.max(1, Math.ceil(count / target));
     const picks = [];
     for (let i = 0; i < count; i += stride) {
         picks.push(i);
@@ -661,7 +668,8 @@ function stridedIndices(count) {
 // homogeneous by construction (one PERIOD_MAP format per request), but
 // dispatch is defensive: anything unparseable passes through raw rather
 // than crashing the chart (same forgiving spirit as the "—" path).
-function buildXTickLabels(labels) {
+// `target` = max labels to paint (from tickTargetForWidth).
+function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     // Parse every label ONCE. Date-ish shapes keep their parts as
     // numbers plus a kind ("datetime" = 5D, "date" = daily); "time"
     // labels and unparseable ones parse to null.
@@ -698,9 +706,9 @@ function buildXTickLabels(labels) {
         // Five trading days give ~5 boundaries — under the target, so
         // this thinning is purely defensive: if the shape ever yields
         // more boundaries than the target, stride the boundary LIST.
-        const shown = boundaries.length > X_TICK_TARGET
+        const shown = boundaries.length > target
             ? boundaries.filter((unused, k) =>
-                  k % Math.ceil(boundaries.length / X_TICK_TARGET) === 0)
+                  k % Math.ceil(boundaries.length / target) === 0)
             : boundaries;
         for (const i of shown) axisText[i] = monthDay(parsed[i]);
         return axisText;
@@ -709,7 +717,7 @@ function buildXTickLabels(labels) {
     // Daily bars (one per day): sparse stride, "Sep 4" or "Sep 2025".
     if (parsed[0]?.kind === "date") {
         const axisText = labels.map(() => "");
-        for (const i of stridedIndices(parsed.length)) {
+        for (const i of stridedIndices(parsed.length, target)) {
             axisText[i] = spansYears
                 ? monthYear(parsed[i])
                 : monthDay(parsed[i]);
@@ -720,7 +728,7 @@ function buildXTickLabels(labels) {
     // 1D time series (or fully unparseable): pass the raw text through
     // on the strided picks only.
     const axisText = labels.map(() => "");
-    for (const i of stridedIndices(parsed.length)) {
+    for (const i of stridedIndices(parsed.length, target)) {
         axisText[i] = labels[i];
     }
     return axisText;
@@ -749,6 +757,11 @@ function setupTimeframeChart(
     // why it lives in a closure the callback can see.
     let xTickLabels = [];
 
+    // The raw labels from the last successful fetch — needed by the
+    // resize plugin to rebuild the tick plan at the new width without
+    // re-fetching data from the backend.
+    let lastLabels = [];
+
     // Chart.js paints onto the canvas's "2D context" — the object whose
     // methods actually put pixels on it.
     const chart = new Chart(canvas.getContext("2d"), {
@@ -758,7 +771,17 @@ function setupTimeframeChart(
 
         // Chart-local plugins: passed HERE they apply to this chart only
         // (a global registry would leak into every chart we don't own).
-        plugins: [crosshairPlugin],
+        // crosshairPlugin draws the hover line; the resize plugin
+        // recomputes the x-axis tick plan when the chart's width changes
+        // (e.g. phone rotation) so labels never overlap at the new size.
+        plugins: [crosshairPlugin, {
+            id: "responsiveXTicks",
+            afterResize(chart) {
+                const target = tickTargetForWidth(canvas.parentElement.clientWidth);
+                xTickLabels = buildXTickLabels(lastLabels, target);
+                chart.update("none");
+            },
+        }],
 
         // Empty by design — refresh() fills these in. The dataset object is
         // created here so its presentational config lives in ONE place and
@@ -894,8 +917,11 @@ function setupTimeframeChart(
             chart.data.datasets[0].data = data.values;
             // Rebuild the axis-text plan BEFORE the redraw: the tick
             // callback reads xTickLabels at draw time, so it must
-            // describe the NEW series, not the previous one.
-            xTickLabels = buildXTickLabels(data.labels);
+            // describe the NEW series, not the previous one. The target
+            // adapts to the chart's current width (fewer labels on phones).
+            lastLabels = data.labels;
+            const target = tickTargetForWidth(canvas.parentElement.clientWidth);
+            xTickLabels = buildXTickLabels(data.labels, target);
             chart.update();
         } catch (err) {
             console.error("chart refresh failed:", err);
