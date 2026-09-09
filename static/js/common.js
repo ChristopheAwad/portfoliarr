@@ -121,6 +121,23 @@ const ICONS = {
     check: [
         { tag: "polyline", attrs: { points: "20 6 9 17 4 12" } },
     ],
+    // Sun icon for the dark-mode toggle (shown when dark mode is ON).
+    sun: [
+        { tag: "circle", attrs: { cx: "12", cy: "12", r: "5" } },
+        { tag: "line", attrs: { x1: "12", y1: "1", x2: "12", y2: "3" } },
+        { tag: "line", attrs: { x1: "12", y1: "21", x2: "12", y2: "23" } },
+        { tag: "line", attrs: { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" } },
+        { tag: "line", attrs: { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" } },
+        { tag: "line", attrs: { x1: "1", y1: "12", x2: "3", y2: "12" } },
+        { tag: "line", attrs: { x1: "21", y1: "12", x2: "23", y2: "12" } },
+        { tag: "line", attrs: { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" } },
+        { tag: "line", attrs: { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" } },
+    ],
+    // Moon icon for the dark-mode toggle (shown when dark mode is OFF).
+    moon: [
+        { tag: "path",
+          attrs: { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" } },
+    ],
 };
 
 // Build one icon as a live SVG element (never an HTML string). className
@@ -540,17 +557,35 @@ document.addEventListener("click", (event) => {
 // period gained and RED when it lost, matching the change pills' palette.
 // ---------------------------------------------------------------------------
 
-// Mirror of style.css's palette custom properties: the up/down lines are
-// --green-pos (#059669) / --red-neg (#dc2626) (the fills are the same hues
-// at low alpha), the crosshair mirrors --border-color (#e4e7ec), and the
-// tooltip plate mirrors --text-primary (#1a1f36). Canvas code can't read
-// CSS custom properties ("var(--green-pos)" is meaningless outside CSS),
-// so the hex values are duplicated here — the comment anchors them
-// together for whoever changes one side later.
-const CHART_COLORS = {
-    up:   { line: "#059669", fill: "rgba(5, 150, 105, 0.12)" },
-    down: { line: "#dc2626", fill: "rgba(220, 38, 38, 0.10)" },
-};
+// ---------------------------------------------------------------------------
+// CHART COLORS — read from CSS custom properties so they follow the theme.
+//
+// Canvas code can't use var(--green-pos) directly, so we read the computed
+// value at call time. getComputedStyle(document.documentElement) gives us
+// the live value from whichever theme (.dark or light) is active.
+// ---------------------------------------------------------------------------
+function hexToRgba(hex, alpha) {
+    // Strip # and parse RGB components from a 6-digit hex string.
+    const h = hex.replace("#", "");
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getChartColors() {
+    const style = getComputedStyle(document.documentElement);
+    const up = style.getPropertyValue("--green-pos").trim();
+    const down = style.getPropertyValue("--red-neg").trim();
+    return {
+        up:   { line: up, fill: hexToRgba(up, 0.12) },
+        down: { line: down, fill: hexToRgba(down, 0.10) },
+    };
+}
+
+// Keep a live reference so chart updates can swap colors without
+// re-reading CSS on every frame. refresh() updates this when data lands.
+let CHART_COLORS = getChartColors();
 
 // The hover CROSSHAIR: a thin vertical line through whatever point the
 // tooltip is showing, drawn the full height of the plot. A Chart.js plugin
@@ -561,18 +596,18 @@ const CHART_COLORS = {
 const crosshairPlugin = {
     id: "crosshair",
     afterDatasetsDraw(chart) {
-        // No tooltip showing → nothing to draw through. getActiveElements()
-        // returns the data point(s) the tooltip is currently attached to.
         const active = chart.tooltip?.getActiveElements();
         if (!active || active.length === 0) return;
-        const x = active[0].element.x; // the hovered point's x pixel
+        const x = active[0].element.x;
         const { top, bottom } = chart.chartArea;
-        const ctx = chart.ctx;         // the canvas's 2D drawing pen
-        ctx.save();                    // snapshot pen styles, restore below
+        const ctx = chart.ctx;
+        ctx.save();
         ctx.beginPath();
         ctx.moveTo(x, top);
         ctx.lineTo(x, bottom);
-        ctx.strokeStyle = "#e4e7ec";   // --border-color's hairline gray
+        // Read --border-color from CSS so the crosshair follows the theme.
+        ctx.strokeStyle = getComputedStyle(document.documentElement)
+            .getPropertyValue("--border-color").trim();
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
@@ -814,7 +849,11 @@ function setupTimeframeChart(
                         // Colored tint at the top fading to nothing at the
                         // bottom: the classic "glow under the line".
                         gradient.addColorStop(0, CHART_COLORS[direction].fill);
-                        gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+                        // Fade to the page background color (transparent).
+                        // Using --bg-color keeps the gradient seamless in dark mode.
+                        const bg = getComputedStyle(document.documentElement)
+                            .getPropertyValue("--bg-color").trim();
+                        gradient.addColorStop(1, bg + "00");  // hex + "00" alpha = transparent
                         return gradient;
                     },
                     fill: true,
@@ -844,10 +883,10 @@ function setupTimeframeChart(
                 // With only one dataset, the legend swatch adds nothing.
                 legend: { display: false },
                 tooltip: {
-                    // displayColors: false drops the colored square before
-                    // the value — the line above is the color story already.
                     displayColors: false,
-                    backgroundColor: "#1a1f36", // --text-primary, as the plate
+                    // Read --text-primary from CSS so the tooltip follows the theme.
+                    backgroundColor: getComputedStyle(document.documentElement)
+                        .getPropertyValue("--text-primary").trim(),
                     padding: 10,
                     cornerRadius: 8,
                     titleFont: { size: 11, weight: "normal" },
@@ -906,7 +945,9 @@ function setupTimeframeChart(
                     },
                 },
                 y: {
-                    grid: { color: "#eef1f5" }, // hairline gray, border-adjacent
+                    // Read --border-subtle from CSS so grid lines follow the theme.
+                    grid: { color: getComputedStyle(document.documentElement)
+                        .getPropertyValue("--border-subtle").trim() },
                     border: { display: false },
                     // beginAtZero: false starts the y-axis near the data's
                     // minimum instead of 0 — exactly how real stock charts
@@ -981,3 +1022,45 @@ function setupTimeframeChart(
 
     return { chart, refresh };
 }
+
+// ---------------------------------------------------------------------------
+// DARK MODE TOGGLE — wires the #theme-toggle button in the navbar.
+//
+// The FOUC-prevention script in <head> already applied the saved theme
+// (or OS preference) before first paint. This code handles the RUNTIME
+// toggle: clicking the button flips .dark on <html>, saves to localStorage,
+// swaps the icon, and fires a custom "themechange" event so page scripts
+// (main.js, stock.js) can update their Chart.js instances with the new
+// CSS variable values.
+// ---------------------------------------------------------------------------
+
+(function initThemeToggle() {
+    const btn = document.getElementById("theme-toggle");
+    if (!btn) return;  // graceful no-op if the button is somehow missing
+
+    const root = document.documentElement;  // the <html> element
+
+    // Set the icon: sun when dark mode is ON (clicking will switch to light),
+    // moon when dark mode is OFF (clicking will switch to dark).
+    function updateIcon() {
+        btn.textContent = "";  // clear previous icon
+        const isDark = root.classList.contains("dark");
+        btn.append(icon(isDark ? "sun" : "moon"));
+    }
+
+    updateIcon();  // set the initial icon from the FOUC-applied state
+
+    btn.addEventListener("click", () => {
+        const isDark = root.classList.toggle("dark");
+        localStorage.setItem("theme", isDark ? "dark" : "light");
+        updateIcon();
+        // Refresh the live CHART_COLORS so the next chart draw uses the
+        // new CSS variable values (the crosshair/tooltip/grid read CSS
+        // on every draw, but CHART_COLORS is cached for the fill/border).
+        CHART_COLORS = getChartColors();
+        // Notify page scripts that the theme changed — they can call
+        // chart.update() to repaint with the new palette.
+        document.dispatchEvent(new CustomEvent("themechange",
+            { detail: { dark: isDark } }));
+    });
+})();

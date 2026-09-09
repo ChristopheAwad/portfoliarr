@@ -50,6 +50,21 @@
          library exists before main.js / stock.js (bottom of <body>) try to
          use it. Both pages have a chart, so it lives in the shared head. -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+
+    <!-- Dark mode FOUC prevention: read the saved theme (or OS preference)
+         and set class="dark" on <html> BEFORE first paint. Without this,
+         the page flashes light then snaps dark. The script is tiny (no
+         external deps) and runs synchronously in <head> so the browser
+         never renders the wrong theme. -->
+    <script>
+        (function() {
+            var saved = localStorage.getItem('theme');
+            var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (saved === 'dark' || (!saved && prefersDark)) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
 </head>
 <!-- The body tag itself is a block hole: pages can stamp attributes onto
      it. stock.html uses it for data-symbol (stock.js's identity hook). -->
@@ -80,6 +95,12 @@
                 <span>Portfoli<span class="logo-accent">arr</span></span>
             </a>
         </div>
+        <!-- Theme toggle: sun/moon button. common.js wires the click
+             handler and swaps the icon. The button sits between the logo
+             and the search box — always reachable, never in the way. -->
+        <button id="theme-toggle" class="theme-toggle" type="button"
+                title="Toggle dark mode" aria-label="Toggle dark mode">
+        </button>
         <div class="search-container">
             <!-- The search box. common.js (loaded at the bottom) turns
                  typing into /api/search calls and renders the suggestion
