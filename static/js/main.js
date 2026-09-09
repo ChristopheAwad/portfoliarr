@@ -1742,6 +1742,14 @@ function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
     if (portfolioChartHandle) portfolioChartHandle.refresh(period);
 }
 
+// When the theme toggles, repaint the chart so tooltip/grid/line colors
+// pick up the new CSS variable values (the crosshair and gradient already
+// read CSS on every draw, but the tooltip bg, grid color, and line border
+// are set at creation / refresh time and need an explicit update).
+document.addEventListener("themechange", () => {
+    if (portfolioChartHandle) portfolioChartHandle.chart.update();
+});
+
 // ---------------------------------------------------------------------------
 // BOOT — the script's entry point. This block runs top-to-bottom the moment
 // the browser reaches it, and only now are all the functions above defined.

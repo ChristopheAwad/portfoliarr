@@ -853,7 +853,7 @@ function setupTimeframeChart(
                         // Using --bg-color keeps the gradient seamless in dark mode.
                         const bg = getComputedStyle(document.documentElement)
                             .getPropertyValue("--bg-color").trim();
-                        gradient.addColorStop(1, bg + "00");  // hex + "00" alpha = transparent
+                        gradient.addColorStop(1, hexToRgba(bg, 0));
                         return gradient;
                     },
                     fill: true,
