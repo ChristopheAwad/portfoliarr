@@ -49,6 +49,58 @@
     /* Focus ring: a soft blue halo, applied via box-shadow (not outline)
        so it follows rounded corners. Used by every input + button. */
     --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.18);
+
+    /* Tokens for formerly-hardcoded values (navbar, buttons, overlays,
+       shimmer, scrollbar) — so .dark mode can override them all. */
+    --navbar-bg: rgba(255, 255, 255, 0.85);
+    --btn-text: #fff;
+    --red-neg-hover: #b91c1c;
+    --overlay-bg: rgba(16, 24, 40, 0.45);
+    --shimmer-base: #eef1f5;
+    --shimmer-highlight: #f8fafc;
+    --scrollbar-hover: #b7bfca;
+}
+
+/* ═══ Dark mode ════════════════════════════════════════════════════════
+   Deep blue-gray palette, activated by class="dark" on <html>. The
+   FOUC-prevention script in base.html sets this class before first
+   paint; common.js's toggle handler flips it at runtime. Every color
+   token is redefined here — components that use var() automatically
+   follow the theme; hardcoded values (now tokenized above) follow too. */
+.dark {
+    --bg-color: #0f1117;
+    --card-bg: #1a1d27;
+    --text-primary: #e4e4e7;
+    --text-secondary: #9ca3af;
+    --border-color: #2a2d3a;
+
+    --green-pos: #34d399;
+    --green-bg: #0d3320;
+    --green-bg-hover: #134d2e;
+    --red-neg: #f87171;
+    --red-bg: #3d1418;
+    --blue-accent: #60a5fa;
+    --blue-bg: #1a2744;
+    --blue-accent-hover: #3b82f6;
+
+    --bg-hover: #252830;
+    --bg-inset: #16181f;
+    --border-subtle: #252830;
+    --border-strong: #3a3d4a;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.4);
+
+    --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.25);
+
+    --navbar-bg: rgba(15, 17, 23, 0.85);
+    --btn-text: #fff;
+    --red-neg-hover: #dc2626;
+    --overlay-bg: rgba(0, 0, 0, 0.6);
+    --shimmer-base: #252830;
+    --shimmer-highlight: #2a2d3a;
+    --scrollbar-hover: #4a4d5a;
 }
 
 * {
@@ -86,7 +138,7 @@ body {
        shows through softly blurred instead of stopping at a hard edge —
        the modern finance-app bar. The blur is progressive enhancement:
        browsers without backdrop-filter just show the 85% white. */
-    background: rgba(255, 255, 255, 0.85);
+    background: var(--navbar-bg);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border-color);
@@ -111,6 +163,33 @@ body {
    the "pos" (up) color the app already uses everywhere. */
 .logo-mark { color: var(--green-pos); flex: 0 0 auto; }
 .logo-accent { color: var(--green-pos); }
+
+/* Theme toggle button: a quiet icon button in the navbar. The icon
+   (sun/moon) is set by common.js based on the current theme. */
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color 150ms ease, color 150ms ease;
+}
+
+.theme-toggle:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.theme-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
 
 /* The logo is a link (it doubles as "home", see base.html) — strip the
    browser's default anchor styling so it reads as the brand, not a link. */
@@ -162,7 +241,7 @@ a.logo { text-decoration: none; }
 }
 
 .search-container input:focus {
-    background-color: #fff;
+    background-color: var(--card-bg);
     border-color: var(--blue-accent);
     box-shadow: var(--focus-ring);
 }
@@ -381,7 +460,7 @@ a.logo { text-decoration: none; }
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: #fff;
+    background: var(--card-bg);
     box-shadow: var(--shadow-sm);
     transform: translateY(-50%);
     transition: transform 0.2s ease;
@@ -506,7 +585,7 @@ a.logo { text-decoration: none; }
     border: none;
     border-radius: 8px;
     background: var(--blue-accent);
-    color: #fff;
+    color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -761,7 +840,7 @@ a.logo { text-decoration: none; }
     border: none;
     border-radius: 8px;
     background: var(--blue-accent);
-    color: #fff;
+    color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -829,7 +908,7 @@ a.logo { text-decoration: none; }
     border: none;
     border-radius: 8px;
     background: var(--blue-accent);
-    color: #fff;
+    color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -1143,17 +1222,17 @@ a.logo { text-decoration: none; }
 
 .btn-primary {
     background: var(--blue-accent);
-    color: #fff;
+    color: var(--btn-text);
 }
 
 .btn-primary:hover { background: var(--blue-accent-hover); }
 
 .btn-danger {
     background: var(--red-neg);
-    color: #fff;
+    color: var(--btn-text);
 }
 
-.btn-danger:hover { background: #b91c1c; }
+.btn-danger:hover { background: var(--red-neg-hover); }
 
 /* The quiet step (Cancel buttons): transparent until hovered, then the
    same grey tint every hoverable row gets. */
@@ -1176,7 +1255,7 @@ a.logo { text-decoration: none; }
 .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(16, 24, 40, 0.45);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1320,7 +1399,7 @@ a.logo { text-decoration: none; }
 .table-wrap::-webkit-scrollbar-thumb:hover,
 #import-report::-webkit-scrollbar-thumb:hover,
 .search-results::-webkit-scrollbar-thumb:hover {
-    background: #b7bfca;
+    background: var(--scrollbar-hover);
 }
 
 /* ── Skeleton shimmer (loading placeholders) ───────────────────────────
@@ -1340,7 +1419,7 @@ a.logo { text-decoration: none; }
     content: "";
     display: inline-block;
     border-radius: var(--radius-sm);
-    background: linear-gradient(90deg, #eef1f5 25%, #f8fafc 50%, #eef1f5 75%);
+    background: linear-gradient(90deg, var(--shimmer-base) 25%, var(--shimmer-highlight) 50%, var(--shimmer-base) 75%);
     background-size: 200% 100%;
     animation: shimmer 1.4s ease-in-out infinite;
 }
