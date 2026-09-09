@@ -830,20 +830,19 @@ function setupTimeframeChart(
             },
         }, {
             id: "prevCloseLine",
-            beforeDraw(chart) {
-                // Expand the y-axis to include prevClose when it falls
-                // outside the data range — without this, a stock that
-                // gapped up/down would draw the line off-screen.
+            // Fires DURING the scale update (before layout computes pixel
+            // positions) — the only safe place to mutate scale limits.
+            // beforeDraw is too late: the pixel mapping is already baked.
+            afterDataLimits(chart, { scale }) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
-                const yScale = chart.scales.y;
-                if (!yScale) return;
-                const lo = yScale.min ?? 0;
-                const hi = yScale.max ?? 1;
+                if (scale.id !== "y") return;
+                const lo = scale.min;
+                const hi = scale.max;
                 if (prevClose < lo || prevClose > hi) {
-                    const range = hi - lo || hi * 0.05;  // fallback for empty data
-                    const pad = range * 0.1;             // 10% breathing room
-                    yScale.min = Math.min(lo, prevClose - pad);
-                    yScale.max = Math.max(hi, prevClose + pad);
+                    const range = hi - lo || hi * 0.05;
+                    const pad = range * 0.1;
+                    scale.min = Math.min(lo, prevClose - pad);
+                    scale.max = Math.max(hi, prevClose + pad);
                 }
             },
             afterDraw(chart) {
