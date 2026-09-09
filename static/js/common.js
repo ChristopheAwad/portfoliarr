@@ -833,9 +833,10 @@ function setupTimeframeChart(
             afterDraw(chart) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
                 const y = chart.scales.y.getPixelForValue(prevClose);
-                const { left, right } = chart.chartArea;
+                const { left, right, top } = chart.chartArea;
                 const ctx = chart.ctx;
                 ctx.save();
+                // Dashed horizontal line across the full chart width.
                 ctx.beginPath();
                 ctx.setLineDash([5, 3]);
                 ctx.moveTo(left, y);
@@ -844,13 +845,20 @@ function setupTimeframeChart(
                     .getPropertyValue("--prev-close").trim();
                 ctx.lineWidth = 1;
                 ctx.stroke();
+                // "Prev close $X.XX" label — positioned above the line by
+                // default, but flipped below when too close to the top edge
+                // to prevent clipping.
+                const labelAbove = y - 18 > top;
                 ctx.setLineDash([]);
                 ctx.font = "11px sans-serif";
                 ctx.textAlign = "right";
-                ctx.textBaseline = "bottom";
+                ctx.textBaseline = labelAbove ? "bottom" : "top";
                 ctx.fillStyle = getComputedStyle(document.documentElement)
                     .getPropertyValue("--prev-close").trim();
-                ctx.fillText(`Prev close ${formatPrice(prevClose)}`, right, y - 4);
+                ctx.fillText(
+                    `Prev close ${formatPrice(prevClose)}`,
+                    right, labelAbove ? y - 4 : y + 4
+                );
                 ctx.restore();
             },
         }],
@@ -1001,7 +1009,6 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod) {
-        currentPeriod = period;
         try {
             const response = await fetch(`${endpoint}?period=${period}`);
             // fetch does NOT throw on 4xx/5xx — only on network failure. A
@@ -1031,6 +1038,10 @@ function setupTimeframeChart(
             const target = tickTargetForWidth(canvas.parentElement.clientWidth);
             xTickLabels = buildXTickLabels(data.labels, target);
             chart.update();
+            // Track the period AFTER the successful update — if the fetch
+            // fails, the chart still shows the previous period's data and
+            // the reference line should stay consistent with that.
+            currentPeriod = period;
         } catch (err) {
             console.error("chart refresh failed:", err);
         }
