@@ -840,8 +840,10 @@ function setupTimeframeChart(
                 const lo = yScale.min ?? 0;
                 const hi = yScale.max ?? 1;
                 if (prevClose < lo || prevClose > hi) {
-                    yScale.min = Math.min(lo, prevClose);
-                    yScale.max = Math.max(hi, prevClose);
+                    const range = hi - lo || hi * 0.05;  // fallback for empty data
+                    const pad = range * 0.1;             // 10% breathing room
+                    yScale.min = Math.min(lo, prevClose - pad);
+                    yScale.max = Math.max(hi, prevClose + pad);
                 }
             },
             afterDraw(chart) {
