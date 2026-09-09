@@ -59,10 +59,17 @@
     <script>
         (function() {
             var saved = localStorage.getItem('theme');
-            var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            var mql = window.matchMedia('(prefers-color-scheme: dark)');
+            var prefersDark = mql.matches;
             if (saved === 'dark' || (!saved && prefersDark)) {
                 document.documentElement.classList.add('dark');
             }
+            // If the user hasn't explicitly chosen, follow OS changes live.
+            mql.addEventListener('change', function(e) {
+                if (!localStorage.getItem('theme')) {
+                    document.documentElement.classList.toggle('dark', e.matches);
+                }
+            });
         })();
     </script>
 </head>

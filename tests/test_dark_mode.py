@@ -162,3 +162,23 @@ def test_shimmer_uses_tokens():
         "shimmer gradient still has hardcoded #eef1f5"
     assert "#f8fafc" not in shimmer_section, \
         "shimmer gradient still has hardcoded #f8fafc"
+
+
+# ── 5. Themechange consumer contract ──────────────────────────────────
+
+def test_main_js_listens_for_themechange():
+    """main.js must listen for the 'themechange' custom event dispatched
+    by common.js's toggle handler, so the portfolio chart repaints with
+    the new theme's colors. Without this, tooltip/grid/line colors stay
+    stuck in the original theme after toggle."""
+    js = (PROJECT_ROOT / "static" / "js" / "main.js").read_text()
+    assert "themechange" in js, \
+        "main.js doesn't listen for themechange — chart won't repaint on toggle"
+
+
+def test_stock_js_listens_for_themechange():
+    """stock.js must listen for the 'themechange' custom event so the
+    stock detail chart repaints on theme toggle."""
+    js = (PROJECT_ROOT / "static" / "js" / "stock.js").read_text()
+    assert "themechange" in js, \
+        "stock.js doesn't listen for themechange — chart won't repaint on toggle"
