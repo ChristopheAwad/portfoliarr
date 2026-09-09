@@ -786,6 +786,16 @@ function setupTimeframeChart(
     // it, so one flip recolors line + fill together.
     let direction = "up";
 
+    // The previous day's closing price — fed in by callers (stock.js,
+    // main.js) via updatePrevClose(). The prevCloseLine plugin reads
+    // this and draws a horizontal dashed reference line, but ONLY when
+    // the active period is "1D" (intraday).
+    let prevClose = null;
+
+    // Which period is currently displayed — tracked so the prevCloseLine
+    // plugin can short-circuit when the user is on any timeframe except 1D.
+    let currentPeriod = defaultPeriod;
+
     // The x-axis text plan: one entry per bar, "" = paint nothing there.
     // buildXTickLabels (above) rebuilds it inside refresh() BEFORE each
     // redraw; the tick callback below reads it at draw time — which is
@@ -808,13 +818,63 @@ function setupTimeframeChart(
         // (a global registry would leak into every chart we don't own).
         // crosshairPlugin draws the hover line; the resize plugin
         // recomputes the x-axis tick plan when the chart's width changes
-        // (e.g. phone rotation) so labels never overlap at the new size.
+        // (e.g. phone rotation) so labels never overlap at the new size;
+        // prevCloseLine draws a horizontal dashed reference at yesterday's
+        // close on 1D charts.
         plugins: [crosshairPlugin, {
             id: "responsiveXTicks",
             afterResize(chart) {
                 const target = tickTargetForWidth(canvas.parentElement.clientWidth);
                 xTickLabels = buildXTickLabels(lastLabels, target);
                 chart.update("none");
+            },
+        }, {
+            id: "prevCloseLine",
+            // Fires DURING the scale update (before layout computes pixel
+            // positions) — the only safe place to mutate scale limits.
+            // beforeDraw is too late: the pixel mapping is already baked.
+            afterDataLimits(chart, { scale }) {
+                if (currentPeriod !== "1D" || prevClose == null) return;
+                if (scale.id !== "y") return;
+                const lo = scale.min;
+                const hi = scale.max;
+                if (prevClose < lo || prevClose > hi) {
+                    const range = hi - lo || hi * 0.05;
+                    const pad = range * 0.1;
+                    scale.min = Math.min(lo, prevClose - pad);
+                    scale.max = Math.max(hi, prevClose + pad);
+                }
+            },
+            afterDraw(chart) {
+                if (currentPeriod !== "1D" || prevClose == null) return;
+                const y = chart.scales.y.getPixelForValue(prevClose);
+                const { left, right, top } = chart.chartArea;
+                const ctx = chart.ctx;
+                ctx.save();
+                // Dashed horizontal line across the full chart width.
+                ctx.beginPath();
+                ctx.setLineDash([5, 3]);
+                ctx.moveTo(left, y);
+                ctx.lineTo(right, y);
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--prev-close").trim();
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                // "Prev close $X.XX" label — positioned above the line by
+                // default, but flipped below when too close to the top edge
+                // to prevent clipping.
+                const labelAbove = y - 18 > top;
+                ctx.setLineDash([]);
+                ctx.font = "11px sans-serif";
+                ctx.textAlign = "right";
+                ctx.textBaseline = labelAbove ? "bottom" : "top";
+                ctx.fillStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--prev-close").trim();
+                ctx.fillText(
+                    `Prev close ${formatPrice(prevClose)}`,
+                    right, labelAbove ? y - 4 : y + 4
+                );
+                ctx.restore();
             },
         }],
 
@@ -992,6 +1052,11 @@ function setupTimeframeChart(
             lastLabels = data.labels;
             const target = tickTargetForWidth(canvas.parentElement.clientWidth);
             xTickLabels = buildXTickLabels(data.labels, target);
+            // Set currentPeriod BEFORE chart.update() so the prevCloseLine
+            // plugin sees the correct period during the synchronous redraw.
+            // If the fetch failed, we never reach here (the throw skips
+            // this line), so the period stays correct for the old data.
+            currentPeriod = period;
             chart.update();
         } catch (err) {
             console.error("chart refresh failed:", err);
@@ -1020,7 +1085,14 @@ function setupTimeframeChart(
         refresh(period);
     });
 
-    return { chart, refresh };
+    return {
+        chart,
+        refresh,
+        updatePrevClose(val) {
+            prevClose = val;
+            chart.update();
+        },
+    };
 }
 
 // ---------------------------------------------------------------------------

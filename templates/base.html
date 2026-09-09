@@ -50,6 +50,10 @@
          library exists before main.js / stock.js (bottom of <body>) try to
          use it. Both pages have a chart, so it lives in the shared head. -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <!-- Annotation plugin for Chart.js — draws the prev-close reference
+         line on 1D charts. Loaded after Chart.js so the global "Chart"
+         class exists; the plugin auto-registers when it loads. -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
 
     <!-- Dark mode FOUC prevention: read the saved theme (or OS preference)
          and set class="dark" on <html> BEFORE first paint. Without this,

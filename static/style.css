@@ -59,6 +59,9 @@
     --shimmer-base: #eef1f5;
     --shimmer-highlight: #f8fafc;
     --scrollbar-hover: #b7bfca;
+
+    /* Prev-close reference line color (1D chart). */
+    --prev-close: #2563eb;
 }
 
 /* ═══ Dark mode ════════════════════════════════════════════════════════
@@ -101,6 +104,9 @@
     --shimmer-base: #252830;
     --shimmer-highlight: #2a2d3a;
     --scrollbar-hover: #4a4d5a;
+
+    /* Prev-close reference line color (1D chart). */
+    --prev-close: #facc15;
 }
 
 * {

@@ -86,6 +86,10 @@ async function refreshStockQuote() {
         // change_pct are exactly the pill's inputs — shared paintChange,
         // same pos/neg colouring as the dashboard's totals.
         paintChange(stockDayChangeEl, quote.change, quote.change_pct, "Today");
+
+        // Feed the previous close into the chart handle so the 1D view
+        // can draw a horizontal reference line at yesterday's close.
+        if (stockChartHandle) stockChartHandle.updatePrevClose(quote.previous_close);
     } catch (err) {
         console.error("stock quote refresh failed:", err);
         // Distinguish "Yahoo doesn't know this symbol" (permanent — stop
