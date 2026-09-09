@@ -830,6 +830,20 @@ function setupTimeframeChart(
             },
         }, {
             id: "prevCloseLine",
+            beforeDraw(chart) {
+                // Expand the y-axis to include prevClose when it falls
+                // outside the data range — without this, a stock that
+                // gapped up/down would draw the line off-screen.
+                if (currentPeriod !== "1D" || prevClose == null) return;
+                const yScale = chart.scales.y;
+                if (!yScale) return;
+                const lo = yScale.min ?? 0;
+                const hi = yScale.max ?? 1;
+                if (prevClose < lo || prevClose > hi) {
+                    yScale.min = Math.min(lo, prevClose);
+                    yScale.max = Math.max(hi, prevClose);
+                }
+            },
             afterDraw(chart) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
                 const y = chart.scales.y.getPixelForValue(prevClose);

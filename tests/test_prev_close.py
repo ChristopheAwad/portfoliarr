@@ -94,6 +94,16 @@ def test_prev_close_line_plugin_exists():
     )
 
 
+def test_prev_close_line_expands_y_axis():
+    """The plugin must have a beforeDraw hook that expands the y-axis to
+    include prevClose — without this, a stock that gapped up/down would
+    draw the line off-screen (invisible)."""
+    js = common_js()
+    assert "beforeDraw" in js, (
+        "prevCloseLine plugin must have a beforeDraw hook to expand the y-axis"
+    )
+
+
 def test_update_prev_close_method_exists():
     """The chart factory must expose an updatePrevClose method on its
     return handle so callers (stock.js, main.js) can feed the value
