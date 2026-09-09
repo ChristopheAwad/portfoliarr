@@ -1037,11 +1037,12 @@ function setupTimeframeChart(
             lastLabels = data.labels;
             const target = tickTargetForWidth(canvas.parentElement.clientWidth);
             xTickLabels = buildXTickLabels(data.labels, target);
-            chart.update();
-            // Track the period AFTER the successful update — if the fetch
-            // fails, the chart still shows the previous period's data and
-            // the reference line should stay consistent with that.
+            // Set currentPeriod BEFORE chart.update() so the prevCloseLine
+            // plugin sees the correct period during the synchronous redraw.
+            // If the fetch failed, we never reach here (the throw skips
+            // this line), so the period stays correct for the old data.
             currentPeriod = period;
+            chart.update();
         } catch (err) {
             console.error("chart refresh failed:", err);
         }
