@@ -786,6 +786,16 @@ function setupTimeframeChart(
     // it, so one flip recolors line + fill together.
     let direction = "up";
 
+    // The previous day's closing price — fed in by callers (stock.js,
+    // main.js) via updatePrevClose(). The prevCloseLine plugin reads
+    // this and draws a horizontal dashed reference line, but ONLY when
+    // the active period is "1D" (intraday).
+    let prevClose = null;
+
+    // Which period is currently displayed — tracked so the prevCloseLine
+    // plugin can short-circuit when the user is on any timeframe except 1D.
+    let currentPeriod = defaultPeriod;
+
     // The x-axis text plan: one entry per bar, "" = paint nothing there.
     // buildXTickLabels (above) rebuilds it inside refresh() BEFORE each
     // redraw; the tick callback below reads it at draw time — which is
@@ -808,13 +818,40 @@ function setupTimeframeChart(
         // (a global registry would leak into every chart we don't own).
         // crosshairPlugin draws the hover line; the resize plugin
         // recomputes the x-axis tick plan when the chart's width changes
-        // (e.g. phone rotation) so labels never overlap at the new size.
+        // (e.g. phone rotation) so labels never overlap at the new size;
+        // prevCloseLine draws a horizontal dashed reference at yesterday's
+        // close on 1D charts.
         plugins: [crosshairPlugin, {
             id: "responsiveXTicks",
             afterResize(chart) {
                 const target = tickTargetForWidth(canvas.parentElement.clientWidth);
                 xTickLabels = buildXTickLabels(lastLabels, target);
                 chart.update("none");
+            },
+        }, {
+            id: "prevCloseLine",
+            afterDraw(chart) {
+                if (currentPeriod !== "1D" || prevClose == null) return;
+                const y = chart.scales.y.getPixelForValue(prevClose);
+                const { left, right } = chart.chartArea;
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([5, 3]);
+                ctx.moveTo(left, y);
+                ctx.lineTo(right, y);
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--prev-close").trim();
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.font = "11px sans-serif";
+                ctx.textAlign = "right";
+                ctx.textBaseline = "bottom";
+                ctx.fillStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--prev-close").trim();
+                ctx.fillText(`Prev close ${formatPrice(prevClose)}`, right, y - 4);
+                ctx.restore();
             },
         }],
 
@@ -964,6 +1001,7 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod) {
+        currentPeriod = period;
         try {
             const response = await fetch(`${endpoint}?period=${period}`);
             // fetch does NOT throw on 4xx/5xx — only on network failure. A
@@ -1020,7 +1058,14 @@ function setupTimeframeChart(
         refresh(period);
     });
 
-    return { chart, refresh };
+    return {
+        chart,
+        refresh,
+        updatePrevClose(val) {
+            prevClose = val;
+            chart.update();
+        },
+    };
 }
 
 // ---------------------------------------------------------------------------

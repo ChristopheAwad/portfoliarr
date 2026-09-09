@@ -1,68 +1,120 @@
-# Feature: Dark Mode
+# Feature: Previous Day Close Reference Line (1D)
 
 ## Problem
-No dark mode exists. The app is light-only with no way to switch themes.
+No visual reference for where the stock/portfolio closed yesterday. On a 1D intraday chart, it's hard to tell at a glance whether the current price is above or below yesterday's close. Google Finance shows this as a horizontal dotted line — we want the same.
 
 ## Plan
 
-### 1. CSS: Add `.dark` variable overrides
-Add a `.dark` selector after `:root` that redefines all color tokens for a deep blue-gray palette:
-- `--bg-color: #0f1117`
-- `--card-bg: #1a1d27`
-- `--text-primary: #e4e4e7`
-- `--text-secondary: #9ca3af`
-- `--border-color: #2a2d3a`
-- `--bg-hover: #252830`
-- `--bg-inset: #16181f`
-- `--border-subtle: #252830`
-- `--border-strong: #3a3d4a`
-- `--green-bg: #0d3320`
-- `--green-bg-hover: #134d2e`
-- `--red-bg: #3d1418`
-- `--blue-bg: #1a2744`
-- `--focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.25)`
-- Shadows: darker rgba tones
+### 1. CDN: Add chartjs-plugin-annotation
+In `templates/base.html`, add the annotation plugin CDN `<script>` after the existing Chart.js tag (line 52). This plugin handles horizontal reference lines out of the box.
 
-### 2. CSS: Fix hardcoded color values
-Replace these hardcoded values with CSS custom properties so they respond to `.dark`:
-- `.navbar` background `rgba(255, 255, 255, 0.85)` → new `--navbar-bg` token
-- `.search-container input:focus` `#fff` → `var(--card-bg)`
-- `.fx-knob` `background: #fff` → `var(--card-bg)`
-- `.btn-action` / `.tx-form button` / `.import-actions button` / `.btn-primary` / `.btn-danger` `color: #fff` → new `--btn-text` token
-- `.btn-danger:hover` `#b91c1c` → new `--red-neg-hover` token
-- `.modal-overlay` `rgba(16, 24, 40, 0.45)` → new `--overlay-bg` token
-- `.skeleton shimmer` `#eef1f5`/`#f8fafc` → new `--shimmer-base`/`--shimmer-highlight` tokens
-- Scrollbar thumb hover `#b7bfca` → new `--scrollbar-hover` token
+```html
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+```
 
-### 3. HTML: Toggle button + FOUC prevention
-In `base.html`:
-- Add inline `<script>` in `<head>` to read `localStorage('theme')` or OS preference and set `class="dark"` on `<html>` before paint
-- Add a sun/moon toggle button in the navbar (right side, between logo and search)
+### 2. JS: Modify `setupTimeframeChart()` in `common.js`
+Add prev-close support to the shared chart factory (lines 772–1024):
 
-### 4. JS: Dynamic chart colors
-In `common.js`:
-- Replace hardcoded `CHART_COLORS` with a function that reads CSS vars via `getComputedStyle`
-- Replace hardcoded crosshair `#e4e7ec` with computed `--border-color`
-- Replace hardcoded tooltip `#1a1f36` with computed `--text-primary`
-- Replace hardcoded y-axis grid `#eef1f5` with computed `--border-subtle`
-- Replace gradient endpoint `rgba(255, 255, 255, 0)` with theme-aware transparent
+**New closure variables:**
+- `let prevClose = null;` — the previous close value
+- `let currentPeriod = defaultPeriod;` — track the active period
 
-### 5. JS: Toggle handler
-In `common.js`:
-- Add click handler for the toggle button
-- Toggle `.dark` on `<html>`, save to `localStorage('theme')`
-- Update chart colors on theme change (re-read CSS vars)
+**New chart-local plugin** (inline, same pattern as `crosshairPlugin`):
+```js
+{
+    id: "prevCloseLine",
+    afterDraw(chart) {
+        if (currentPeriod !== "1D" || prevClose == null) return;
+        const y = chart.scales.y.getPixelForValue(prevClose);
+        const { left, right } = chart.chartArea;
+        const ctx = chart.ctx;
+        ctx.save();
+        // Dashed horizontal line
+        ctx.beginPath();
+        ctx.setLineDash([5, 3]);
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.strokeStyle = getComputedStyle(document.documentElement)
+            .getPropertyValue("--text-muted").trim();
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Right-aligned label
+        ctx.setLineDash([]);
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(`Prev close ${formatPrice(prevClose)}`, right, y - 4);
+        ctx.restore();
+    },
+}
+```
+
+**In `refresh()`:**
+- Store the period being fetched into `currentPeriod`
+- After `chart.update()`, the plugin auto-draws when period is 1D
+
+**New method on return handle:**
+```js
+updatePrevClose(val) {
+    prevClose = val;
+    chart.update();
+}
+```
+
+**Return object** changes from `{ chart, refresh }` to `{ chart, refresh, updatePrevClose }`.
+
+### 3. JS: Stock detail page (`stock.js`)
+In `refreshStockQuote()` (line 68–103), read `quote.previous_close` and pass it to the chart handle:
+
+```js
+// After existing paintChange call (line 88):
+if (stockChartHandle && quote.previous_close != null) {
+    stockChartHandle.updatePrevClose(quote.previous_close);
+}
+```
+
+This runs on every 60s poll cycle, so the value stays current. The line only renders when the period is 1D.
+
+### 4. JS: Portfolio dashboard (`main.js`)
+In `refreshPortfolioSummary()` (line 1657–1699), compute yesterday's portfolio value and pass it to the chart handle:
+
+```js
+// After existing paintChange calls (around line 1694):
+if (portfolioChartHandle && data.total_value != null && data.day_gain != null) {
+    portfolioChartHandle.updatePrevClose(data.total_value - data.day_gain);
+}
+```
+
+This runs on every 60s poll cycle. The value is `total_value - day_gain` = portfolio value at yesterday's close.
 
 ## Files touched
-- `static/style.css` — dark overrides + fix hardcoded values
-- `templates/base.html` — toggle button + FOUC script
-- `static/js/common.js` — dynamic chart colors + toggle handler
+- `templates/base.html` — annotation plugin CDN tag
+- `static/js/common.js` — `setupTimeframeChart()` modifications (closure vars, plugin, `updatePrevClose`)
+- `static/js/stock.js` — read `quote.previous_close`, call `updatePrevClose()`
+- `static/js/main.js` — compute `total_value - day_gain`, call `updatePrevClose()`
+
+## Data flow
+```
+Stock page:
+  quote fetch (60s poll) → quote.previous_close → stockChartHandle.updatePrevClose()
+  chart refresh (button click) → period tracked in closure → plugin draws line if 1D
+
+Dashboard:
+  summary fetch (60s poll) → total_value - day_gain → portfolioChartHandle.updatePrevClose()
+  chart refresh (button click) → period tracked in closure → plugin draws line if 1D
+```
+
+## Visual spec
+- **Line**: horizontal, dashed (`[5, 3]`), color from `--text-muted` CSS var
+- **Label**: "Prev close $123.45" right-aligned at chart edge, 11px sans-serif, same muted color
+- **Scope**: 1D only — plugin short-circuits when period is not `"1D"`
+- **No line** if prevClose is null (graceful degradation during initial load)
 
 ## Test plan
-- Toggle button renders in navbar on both pages
-- `data-theme` attribute or `.dark` class present on `<html>` when dark
-- Theme persists across page loads (localStorage)
-- CSS vars are redefined under `.dark`
-- Hardcoded colors replaced with tokens
-- Chart colors are dynamic
+- `setupTimeframeChart()` accepts `prevClose` and exposes `updatePrevClose()`
+- When period is 1D and prevClose is set, the annotation plugin draws
+- When period is not 1D, no annotation is drawn (short-circuit)
+- When prevClose is null, no annotation is drawn
+- Stock page reads `previous_close` from quote and passes to chart handle
+- Dashboard computes `total_value - day_gain` and passes to chart handle
 - Full `python -m pytest` passes

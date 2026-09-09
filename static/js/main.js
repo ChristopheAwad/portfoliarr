@@ -1692,6 +1692,16 @@ async function refreshPortfolioSummary() {
                     "Today");
         paintChange(portfolioTotalReturnEl, data.total_gain,
                     data.total_gain_pct, "Total");
+
+        // Feed yesterday's portfolio value into the chart handle so the
+        // 1D view can draw a horizontal reference line at yesterday's close.
+        if (portfolioChartHandle) {
+            portfolioChartHandle.updatePrevClose(
+                data.total_value != null && data.day_gain != null
+                    ? data.total_value - data.day_gain
+                    : null
+            );
+        }
     } catch (err) {
         console.error("portfolio summary refresh failed:", err);
         setPortfolioUnavailable();
