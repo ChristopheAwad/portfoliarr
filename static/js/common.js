@@ -944,9 +944,11 @@ function setupTimeframeChart(
                 legend: { display: false },
                 tooltip: {
                     displayColors: false,
-                    // Read --text-primary from CSS so the tooltip follows the theme.
-                    backgroundColor: getComputedStyle(document.documentElement)
-                        .getPropertyValue("--text-primary").trim(),
+                    // Fixed dark tooltip with white text — consistent contrast
+                    // in both light and dark mode.
+                    backgroundColor: "#1a1f36",
+                    titleColor: "#fff",
+                    bodyColor: "#fff",
                     padding: 10,
                     cornerRadius: 8,
                     titleFont: { size: 11, weight: "normal" },
@@ -1127,8 +1129,8 @@ function setupTimeframeChart(
         localStorage.setItem("theme", isDark ? "dark" : "light");
         updateIcon();
         // Refresh the live CHART_COLORS so the next chart draw uses the
-        // new CSS variable values (the crosshair/tooltip/grid read CSS
-        // on every draw, but CHART_COLORS is cached for the fill/border).
+        // new CSS variable values (the crosshair/grid read CSS on every
+        // draw, but CHART_COLORS is cached for the fill/border).
         CHART_COLORS = getChartColors();
         // Notify page scripts that the theme changed — they can call
         // chart.update() to repaint with the new palette.

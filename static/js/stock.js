@@ -331,8 +331,8 @@ const stockChartHandle = setupTimeframeChart({
     defaultPeriod: "5D", // must match the `active` button in stock.html
 });
 
-// When the theme toggles, repaint the chart so tooltip/grid/line colors
-// pick up the new CSS variable values.
+// When the theme toggles, repaint the chart so grid/line colors pick up
+// the new CSS variable values.
 document.addEventListener("themechange", () => {
     if (stockChartHandle) stockChartHandle.chart.update();
 });
