@@ -714,6 +714,102 @@ a.logo { text-decoration: none; }
 
 .btn-text:hover { background-color: var(--blue-bg); }
 
+/* Card header actions: wraps Import + settings button on the right side
+   of the ledger card header. flex + gap keeps them neatly spaced. */
+.card-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Icon-only button (gear menu trigger, direction toggle). Same blue
+   accent as .btn-text but square and padding-free — the SVG fills it. */
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    border: none;
+    color: var(--blue-accent);
+    cursor: pointer;
+    transition: background-color 150ms ease;
+}
+
+.btn-icon:hover { background-color: var(--blue-bg); }
+
+.btn-icon:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-icon:disabled:hover { background: none; }
+
+/* Relative anchor so the dropdown panel positions against it. */
+.ledger-menu-wrap {
+    position: relative;
+}
+
+/* Dropdown panel: absolute-positioned popover for sort settings.
+   z-index 200 matches the search dropdown so it layers above the
+   table content. --shadow-md gives it the "lifted" feel. */
+.ledger-menu-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    min-width: 220px;
+    padding: 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    z-index: 200;
+}
+
+.ledger-menu-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.ledger-menu-row {
+    display: flex;
+    gap: 4px;
+}
+
+/* Native select: flex-1 fills the row, styled to match the app's
+   input vocabulary (border, radius, bg from design tokens). */
+.ledger-menu-select {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.ledger-menu-select:focus {
+    outline: 2px solid var(--blue-accent);
+    outline-offset: -1px;
+}
+
+/* Direction toggle: sits right of the select, shows ▲/▼. */
+.btn-dir {
+    flex-shrink: 0;
+    font-size: 12px;
+}
+
 .watchlist {
     list-style: none;
 }

@@ -415,6 +415,11 @@ const expandedTickers = new Set();
 // data-col values the sortable <th>s carry and dir is "asc"|"desc".
 let ledgerSort = null;
 
+// Persistent default sort — loaded from localStorage at boot. When no
+// user-initiated sort is active (ledgerSort === null), this controls the
+// initial sort order. Survives page reloads. {col, dir} or null.
+let defaultSort = null;
+
 // Which data-col values identity keys off. The sortable columns (matching
 // the data-col attrs in index.html) map to the matching key of the object
 // groupSortKeys returns — so sorting by a column reads the VERY value the
@@ -428,6 +433,16 @@ const SORT_COLS = {
     day_gain: "dayGain",
     day_gain_pct: "dayGainPct",
 };
+
+// Load default sort from localStorage (must come after SORT_COLS so we
+// can validate the saved column key).
+try {
+    const saved = JSON.parse(localStorage.getItem("ledgerDefaultSort"));
+    if (saved && SORT_COLS[saved.col] &&
+        (saved.dir === "asc" || saved.dir === "desc")) {
+        defaultSort = saved;
+    }
+} catch { /* first visit or corrupt — keep null */ }
 
 // Paint (or clear) the ▲/▼ indicator + aria-sort on the sortable <th>s.
 // ▲ = ascending, ▼ = descending — a plain, honest statement of the current
@@ -912,6 +927,13 @@ function renderLedger(transactions) {
         return;
     }
 
+    // On first render, if no user-initiated sort is active, apply the
+    // persistent default. This ensures the ledger opens sorted even before
+    // the user clicks a header.
+    if (ledgerSort === null && defaultSort) {
+        ledgerSort = { ...defaultSort };
+    }
+
     // Keep the ▲/▼ header indicators in step with the sort state.
     renderSortIndicators();
 
@@ -1052,6 +1074,12 @@ function applyLedgerSort(col) {
         const defaultDir = col === "ticker" ? "asc" : "desc";
         ledgerSort = { col, dir: defaultDir };
     }
+
+    // Persist header-click sort as the new default so it survives reload.
+    defaultSort = { ...ledgerSort };
+    localStorage.setItem("ledgerDefaultSort", JSON.stringify(defaultSort));
+    syncMenuUI();
+
     renderLedger(lastTransactions);
 }
 ledgerHead.addEventListener("click", (event) => {
@@ -1764,6 +1792,89 @@ document.addEventListener("themechange", () => {
 // BOOT — the script's entry point. This block runs top-to-bottom the moment
 // the browser reaches it, and only now are all the functions above defined.
 // ---------------------------------------------------------------------------
+
+// --- Ledger sort menu (gear icon dropdown) --------------------------------
+// Wires the settings dropdown in the ledger card header. The menu lets the
+// user pick a persistent default sort column and direction — saved to
+// localStorage so it survives page reloads. Works on both mobile (where the
+// <thead> sort headers are hidden) and desktop (as a visible alternative to
+// clicking column headers).
+
+const menuBtn = document.getElementById("ledger-menu-btn");
+const menuPanel = document.getElementById("ledger-menu-panel");
+const sortColSelect = document.getElementById("ledger-sort-col");
+const sortDirBtn = document.getElementById("ledger-sort-dir-btn");
+const sortDirIcon = document.getElementById("ledger-sort-dir-icon");
+
+// Toggle panel open/close. aria-expanded tracks state for screen readers.
+menuBtn.addEventListener("click", () => {
+    const open = !menuPanel.hidden;
+    menuPanel.hidden = open;
+    menuBtn.setAttribute("aria-expanded", !open);
+});
+
+// Close on click outside the panel (but not on the button itself).
+document.addEventListener("click", (e) => {
+    if (!menuPanel.hidden &&
+        !menuPanel.contains(e.target) &&
+        e.target !== menuBtn) {
+        menuPanel.hidden = true;
+        menuBtn.setAttribute("aria-expanded", "false");
+    }
+});
+
+// Escape key also closes the panel.
+menuPanel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        menuPanel.hidden = true;
+        menuBtn.setAttribute("aria-expanded", "false");
+        menuBtn.focus();
+    }
+});
+
+// Sync the select/direction UI to match the current defaultSort state.
+function syncMenuUI() {
+    if (defaultSort) {
+        sortColSelect.value = defaultSort.col;
+        sortDirBtn.disabled = false;
+        sortDirIcon.textContent = defaultSort.dir === "asc" ? "▲" : "▼";
+    } else {
+        sortColSelect.value = "";
+        sortDirBtn.disabled = true;
+        sortDirIcon.textContent = "▼";
+    }
+}
+
+// Column selection change: update defaultSort, persist, and apply immediately.
+sortColSelect.addEventListener("change", () => {
+    const col = sortColSelect.value;
+    if (!col) {
+        defaultSort = null;
+        localStorage.removeItem("ledgerDefaultSort");
+    } else {
+        const dir = col === "ticker" ? "asc" : "desc";
+        defaultSort = { col, dir };
+        localStorage.setItem("ledgerDefaultSort", JSON.stringify(defaultSort));
+    }
+    sortDirBtn.disabled = !col;
+    // Apply immediately: set ledgerSort and re-render.
+    ledgerSort = defaultSort ? { ...defaultSort } : null;
+    renderLedger(lastTransactions);
+    syncMenuUI();
+});
+
+// Direction toggle: flip asc/desc, persist, and apply.
+sortDirBtn.addEventListener("click", () => {
+    if (!defaultSort) return;
+    defaultSort.dir = defaultSort.dir === "asc" ? "desc" : "asc";
+    localStorage.setItem("ledgerDefaultSort", JSON.stringify(defaultSort));
+    ledgerSort = { ...defaultSort };
+    renderLedger(lastTransactions);
+    syncMenuUI();
+});
+
+// Boot: sync the menu UI with any saved default sort.
+syncMenuUI();
 
 // 1. Blank both managed sections so the outdated mockup numbers can never
 //    masquerade as live data. The indices chips ship EMPTY — the CSS
