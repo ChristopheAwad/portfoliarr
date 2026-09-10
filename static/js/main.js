@@ -1813,11 +1813,11 @@ menuBtn.addEventListener("click", () => {
     menuBtn.setAttribute("aria-expanded", !open);
 });
 
-// Close on click outside the panel (but not on the button itself).
+// Close on click outside the panel (but not on the button or its SVG child).
 document.addEventListener("click", (e) => {
     if (!menuPanel.hidden &&
         !menuPanel.contains(e.target) &&
-        e.target !== menuBtn) {
+        !menuBtn.contains(e.target)) {
         menuPanel.hidden = true;
         menuBtn.setAttribute("aria-expanded", "false");
     }
