@@ -962,6 +962,7 @@ a.logo { text-decoration: none; }
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     font-size: 13px;
+    color: var(--text-primary);
     background: var(--card-bg);
     outline: none;
     flex: 1 1 90px;
@@ -975,6 +976,25 @@ a.logo { text-decoration: none; }
 .tx-form select:focus {
     border-color: var(--blue-accent);
     box-shadow: var(--focus-ring);
+}
+
+/* Placeholder text: use --text-secondary so it's consistently visible
+   in both light and dark mode regardless of the input's background. */
+input::placeholder,
+textarea::placeholder {
+    color: var(--text-secondary);
+}
+
+/* Native date input's "mm/dd/yyyy" text uses internal pseudo-elements
+   (not ::placeholder), so target those too for dark-mode consistency. */
+input[type="date"]::-webkit-datetime-edit {
+    color: var(--text-secondary);
+}
+input[type="date"]:focus::-webkit-datetime-edit {
+    color: var(--text-primary);
+}
+input[type="date"]::-moz-placeholder {
+    color: var(--text-secondary);
 }
 
 /* The Log button — one of the three primary buttons (with .btn-action
