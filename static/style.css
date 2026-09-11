@@ -294,8 +294,7 @@ body {
 }
 
 .pref-sort-row .pref-select {
-    flex: 1;
-    width: auto;
+    width: 140px;
 }
 
 .pref-sort-row .btn-dir {
