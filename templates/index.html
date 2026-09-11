@@ -26,23 +26,31 @@
              JS, one for the browser. -->
         <section class="indices-bar">
             <a class="chip" data-symbol="^GSPC" href="{{ url_for('stock_page', symbol='^GSPC') }}">
-                <span class="index-name">S&amp;P 500</span>
-                <span class="index-price"></span>
+                <div class="chip-top">
+                    <span class="index-name">S&amp;P 500</span>
+                    <span class="index-price"></span>
+                </div>
                 <span class="index-change pos"></span>
             </a>
             <a class="chip" data-symbol="^IXIC" href="{{ url_for('stock_page', symbol='^IXIC') }}">
-                <span class="index-name">Nasdaq</span>
-                <span class="index-price"></span>
+                <div class="chip-top">
+                    <span class="index-name">Nasdaq</span>
+                    <span class="index-price"></span>
+                </div>
                 <span class="index-change pos"></span>
             </a>
             <a class="chip" data-symbol="^GSPTSE" href="{{ url_for('stock_page', symbol='^GSPTSE') }}">
-                <span class="index-name">TSX</span>
-                <span class="index-price"></span>
+                <div class="chip-top">
+                    <span class="index-name">TSX</span>
+                    <span class="index-price"></span>
+                </div>
                 <span class="index-change neg"></span>
             </a>
             <a class="chip" data-symbol="BTC-USD" href="{{ url_for('stock_page', symbol='BTC-USD') }}">
-                <span class="index-name">Bitcoin</span>
-                <span class="index-price"></span>
+                <div class="chip-top">
+                    <span class="index-name">Bitcoin</span>
+                    <span class="index-price"></span>
+                </div>
                 <span class="index-change pos"></span>
             </a>
         </section>

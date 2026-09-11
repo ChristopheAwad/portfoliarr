@@ -435,9 +435,11 @@ a.logo { text-decoration: none; }
     padding: 10px 14px;
     border-radius: var(--radius-md);
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 4px;
     font-size: 13px;
-    align-items: center;
+    align-items: flex-start;
+    white-space: nowrap;     /* price/change never wrap to a second line */
     color: inherit;          /* anchor blue would tint the name span */
     text-decoration: none;   /* the card IS the link, no underline */
     box-shadow: var(--shadow-sm);
@@ -453,6 +455,12 @@ a.logo { text-decoration: none; }
     outline: none; /* we supply our own focus cue via the border */
 }
 
+.chip-top {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
 .index-name { font-weight: 600; }
 
 /* tabular-nums: every digit occupies the same width, so live-updating
@@ -461,6 +469,8 @@ a.logo { text-decoration: none; }
 .index-price {
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex: 1;
 }
 .index-change { font-size: 12px; white-space: nowrap; }
 
@@ -1681,6 +1691,11 @@ input[type="date"]::-moz-placeholder {
     .chip {
         padding: 8px 10px;
         font-size: 12px;
+        gap: 2px;
+    }
+
+    .chip-top {
+        gap: 6px;
     }
 
     .card {
