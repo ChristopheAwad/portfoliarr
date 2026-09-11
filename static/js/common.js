@@ -753,7 +753,7 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
 }
 
 function setupTimeframeChart(
-    { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod }
+    { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -1043,6 +1043,17 @@ function setupTimeframeChart(
             // this line), so the period stays correct for the old data.
             currentPeriod = period;
             chart.update();
+            // Hand the period's first/last values back to the caller so
+            // page scripts can derive a period return (e.g. the stock
+            // page's change pill). Only fires when there are at least two
+            // points — a single bar can't define a direction.
+            if (onPeriodData && values.length > 1) {
+                onPeriodData({
+                    firstValue: values[0],
+                    lastValue: values.at(-1),
+                    period,
+                });
+            }
         } catch (err) {
             console.error("chart refresh failed:", err);
         }
