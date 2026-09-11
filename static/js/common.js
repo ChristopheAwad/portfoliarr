@@ -961,6 +961,11 @@ function setupTimeframeChart(
                 ctx.fillText(pctText, clampedX + boxW / 2, clampedY + 27);
                 ctx.restore();
             },
+            // Suppress the Chart.js tooltip while measuring — the
+            // date/price readout would flicker over the measurement label.
+            beforeTooltipDraw(chart, args) {
+                if (chart._priceDiffMeasuring) args.cancel = true;
+            },
         }],
 
         // Empty by design — refresh() fills these in. The dataset object is
@@ -1161,6 +1166,16 @@ function setupTimeframeChart(
             measuring = false;
             chart._priceDiffMeasuring = false;
         }
+        chart.draw();
+    });
+
+    // If the user starts a drag inside the chart but releases outside the
+    // canvas, the canvas mouseup never fires. A document-level listener
+    // catches that edge case and prevents the measuring state from sticking.
+    document.addEventListener("mouseup", () => {
+        if (!measuring) return;
+        measuring = false;
+        chart._priceDiffMeasuring = false;
         chart.draw();
     });
 

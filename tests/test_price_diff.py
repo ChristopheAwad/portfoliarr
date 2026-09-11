@@ -185,3 +185,13 @@ def test_get_value_for_pixel_used():
         "priceDiff plugin must use getValueForPixel to map pixels to data "
         "values"
     )
+
+
+def test_tooltip_suppressed_during_measure():
+    """The priceDiff plugin must have a beforeTooltipDraw hook that cancels
+    the tooltip when measuring is active — the date/price readout would
+    flicker over the measurement label."""
+    js = common_js()
+    assert "beforeTooltipDraw" in js, (
+        "priceDiff plugin must have a beforeTooltipDraw hook"
+    )
