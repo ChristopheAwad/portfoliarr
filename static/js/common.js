@@ -579,6 +579,9 @@ let CHART_COLORS = getChartColors();
 const crosshairPlugin = {
     id: "crosshair",
     afterDatasetsDraw(chart) {
+        // Skip the crosshair while a price-diff measurement is active —
+        // the vertical line would clash with the measurement overlay.
+        if (chart._priceDiffMeasuring) return;
         const active = chart.tooltip?.getActiveElements();
         if (!active || active.length === 0) return;
         const x = active[0].element.x;
@@ -790,6 +793,14 @@ function setupTimeframeChart(
     // re-fetching data from the backend.
     let lastLabels = [];
 
+    // ── Price-difference measurement state ────────────────────────────────
+    // measureStart / measureEnd hold the two endpoints the user picked
+    // (pixel coords + data values). measuring is true while a gesture is
+    // active — the crosshair and tooltip skip when it's set.
+    let measureStart = null;
+    let measureEnd = null;
+    let measuring = false;
+
     // Chart.js paints onto the canvas's "2D context" — the object whose
     // methods actually put pixels on it.
     const chart = new Chart(canvas.getContext("2d"), {
@@ -858,6 +869,102 @@ function setupTimeframeChart(
                     right, labelAbove ? y - 4 : y + 4
                 );
                 ctx.restore();
+            },
+        }, {
+            // ── Price-difference ruler ────────────────────────────────────
+            // Draws a dashed line between two user-picked points with a
+            // floating label showing the price difference and % change.
+            // Desktop: mousedown → mousemove → mouseup.
+            // Mobile: two-finger touch (touches[0] + touches[1]).
+            id: "priceDiff",
+            afterDatasetsDraw(chart) {
+                if (!measureStart || !measureEnd) return;
+                const ctx = chart.ctx;
+                const { left, right, top, bottom } = chart.chartArea;
+                const x1 = measureStart.x, y1 = measureStart.y;
+                const x2 = measureEnd.x, y2 = measureEnd.y;
+
+                // Dashed line connecting the two endpoints.
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([5, 3]);
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--text-muted").trim();
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Small filled circles at each endpoint.
+                ctx.beginPath();
+                ctx.arc(x1, y1, 4, 0, Math.PI * 2);
+                ctx.fillStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--text-muted").trim();
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x2, y2, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Price-difference label at the midpoint of the line.
+                const val1 = measureStart.dataY;
+                const val2 = measureEnd.dataY;
+                const diff = val2 - val1;
+                const pct = val1 !== 0 ? (diff / val1) * 100 : 0;
+                const sign = diff >= 0 ? "+" : "";
+                const diffText = `${sign}${formatPrice(diff)}`;
+                const pctText = `${sign}${pct.toFixed(2)}%`;
+
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+
+                ctx.font = "bold 12px sans-serif";
+                const diffW = ctx.measureText(diffText).width;
+                const pctW = ctx.measureText(pctText).width;
+                const boxW = Math.max(diffW, pctW) + 16;
+                const boxH = 38;
+                const boxX = midX - boxW / 2;
+                const boxY = midY - boxH / 2;
+
+                // Clamp the label box inside the chart area so it never
+                // clips off the edges.
+                const clampedX = Math.max(left, Math.min(boxX, right - boxW));
+                const clampedY = Math.max(top, Math.min(boxY, bottom - boxH));
+
+                // Rounded background pill.
+                const r = 6;
+                ctx.beginPath();
+                ctx.moveTo(clampedX + r, clampedY);
+                ctx.lineTo(clampedX + boxW - r, clampedY);
+                ctx.arcTo(clampedX + boxW, clampedY, clampedX + boxW, clampedY + r, r);
+                ctx.lineTo(clampedX + boxW, clampedY + boxH - r);
+                ctx.arcTo(clampedX + boxW, clampedY + boxH, clampedX + boxW - r, clampedY + boxH, r);
+                ctx.lineTo(clampedX + r, clampedY + boxH);
+                ctx.arcTo(clampedX, clampedY + boxH, clampedX, clampedY + boxH - r, r);
+                ctx.lineTo(clampedX, clampedY + r);
+                ctx.arcTo(clampedX, clampedY, clampedX + r, clampedY, r);
+                ctx.closePath();
+                ctx.fillStyle = "#1a1f36";
+                ctx.fill();
+
+                // Label text — green for gains, red for losses.
+                const positive = diff >= 0;
+                const color = getComputedStyle(document.documentElement)
+                    .getPropertyValue(positive ? "--green-pos" : "--red-neg")
+                    .trim();
+                ctx.fillStyle = color;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.font = "bold 12px sans-serif";
+                ctx.fillText(diffText, clampedX + boxW / 2, clampedY + 12);
+                ctx.font = "11px sans-serif";
+                ctx.fillText(pctText, clampedX + boxW / 2, clampedY + 27);
+                ctx.restore();
+            },
+            // Suppress the Chart.js tooltip while measuring — the
+            // date/price readout would flicker over the measurement label.
+            beforeTooltipDraw(chart, args) {
+                if (chart._priceDiffMeasuring) args.cancel = true;
             },
         }],
 
@@ -1004,11 +1111,134 @@ function setupTimeframeChart(
         },
     });
 
+    // Expose measuring state on the chart instance so global plugins
+    // (crosshair) can read it without closure access.
+    chart._priceDiffMeasuring = false;
+
+    // ── Price-difference gesture handlers ─────────────────────────────────
+    // Desktop: mousedown → mousemove (live preview) → mouseup (finalize).
+    // Mobile: two-finger touchstart → touchmove → touchend (finalize).
+    // These are native canvas listeners, not Chart.js events, because
+    // Chart.js only passes one touch point in its event system.
+
+    function pixelToData(px, py) {
+        return {
+            x: px,
+            y: py,
+            dataY: chart.scales.y.getValueForPixel(py),
+        };
+    }
+
+    canvas.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return; // left button only
+        const rect = canvas.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        // Only start inside the chart area.
+        const { left, right, top, bottom } = chart.chartArea;
+        if (px < left || px > right || py < top || py > bottom) return;
+        measureStart = pixelToData(px, py);
+        measureEnd = null;
+        measuring = true;
+        chart._priceDiffMeasuring = true;
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+        if (!measuring || !measureStart) return;
+        const rect = canvas.getBoundingClientRect();
+        measureEnd = pixelToData(
+            e.clientX - rect.left,
+            e.clientY - rect.top
+        );
+        chart.draw(); // live preview during drag
+    });
+
+    canvas.addEventListener("mouseup", () => {
+        if (!measuring) return;
+        if (!measureEnd) {
+            // Click with no drag — clear any previous measurement.
+            measureStart = null;
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+        } else {
+            // Finalize — keep the overlay visible until the user taps
+            // elsewhere or switches timeframes.
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+        }
+        chart.draw();
+    });
+
+    // If the user starts a drag inside the chart but releases outside the
+    // canvas, the canvas mouseup never fires. A document-level listener
+    // catches that edge case and prevents the measuring state from sticking.
+    document.addEventListener("mouseup", () => {
+        if (!measuring) return;
+        measuring = false;
+        chart._priceDiffMeasuring = false;
+        chart.draw();
+    });
+
+    // Mobile: detect two-finger touch for measurement.
+    canvas.addEventListener("touchstart", (e) => {
+        if (e.touches.length >= 2) {
+            e.preventDefault(); // block Chart.js from processing this
+            const t0 = e.touches[0], t1 = e.touches[1];
+            const rect = canvas.getBoundingClientRect();
+            measureStart = pixelToData(
+                t0.clientX - rect.left, t0.clientY - rect.top
+            );
+            measureEnd = pixelToData(
+                t1.clientX - rect.left, t1.clientY - rect.top
+            );
+            measuring = true;
+            chart._priceDiffMeasuring = true;
+            chart.draw();
+        } else if (e.touches.length === 1 && measureStart) {
+            // Single finger tap while measurement is showing — dismiss.
+            measureStart = null;
+            measureEnd = null;
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+            chart.draw();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (e) => {
+        if (!measuring || e.touches.length < 2) return;
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const rect = canvas.getBoundingClientRect();
+        measureStart = pixelToData(
+            t0.clientX - rect.left, t0.clientY - rect.top
+        );
+        measureEnd = pixelToData(
+            t1.clientX - rect.left, t1.clientY - rect.top
+        );
+        chart.draw();
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", (e) => {
+        if (e.touches.length < 2 && measuring) {
+            // Lifted a finger — finalize the measurement.
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+            chart.draw();
+        }
+    });
+
     // One refresh cycle: GET endpoint?period=... then swap the arrays and
     // redraw. The presentational config was set once at creation and is
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod) {
+        // Clear any active price-diff measurement — stale points on a new
+        // series would be confusing and point to wrong data.
+        measureStart = null;
+        measureEnd = null;
+        measuring = false;
+        chart._priceDiffMeasuring = false;
+
         try {
             const response = await fetch(`${endpoint}?period=${period}`);
             // fetch does NOT throw on 4xx/5xx — only on network failure. A
@@ -1087,6 +1317,13 @@ function setupTimeframeChart(
         updatePrevClose(val) {
             prevClose = val;
             chart.update();
+        },
+        clearMeasurement() {
+            measureStart = null;
+            measureEnd = null;
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+            chart.draw();
         },
     };
 }
