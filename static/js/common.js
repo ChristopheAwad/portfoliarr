@@ -121,23 +121,6 @@ const ICONS = {
     check: [
         { tag: "polyline", attrs: { points: "20 6 9 17 4 12" } },
     ],
-    // Sun icon for the dark-mode toggle (shown when dark mode is ON).
-    sun: [
-        { tag: "circle", attrs: { cx: "12", cy: "12", r: "5" } },
-        { tag: "line", attrs: { x1: "12", y1: "1", x2: "12", y2: "3" } },
-        { tag: "line", attrs: { x1: "12", y1: "21", x2: "12", y2: "23" } },
-        { tag: "line", attrs: { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" } },
-        { tag: "line", attrs: { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" } },
-        { tag: "line", attrs: { x1: "1", y1: "12", x2: "3", y2: "12" } },
-        { tag: "line", attrs: { x1: "21", y1: "12", x2: "23", y2: "12" } },
-        { tag: "line", attrs: { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" } },
-        { tag: "line", attrs: { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" } },
-    ],
-    // Moon icon for the dark-mode toggle (shown when dark mode is OFF).
-    moon: [
-        { tag: "path",
-          attrs: { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" } },
-    ],
 };
 
 // Build one icon as a live SVG element (never an HTML string). className
@@ -1098,43 +1081,51 @@ function setupTimeframeChart(
 }
 
 // ---------------------------------------------------------------------------
-// DARK MODE TOGGLE — wires the #theme-toggle button in the navbar.
-//
-// The FOUC-prevention script in <head> already applied the saved theme
-// (or OS preference) before first paint. This code handles the RUNTIME
-// toggle: clicking the button flips .dark on <html>, saves to localStorage,
-// swaps the icon, and fires a custom "themechange" event so page scripts
-// (main.js, stock.js) can update their Chart.js instances with the new
-// CSS variable values.
+// PROFILE DROPDOWN — wires the user-menu dropdown in the navbar's
+// top-right corner. The dropdown contains a single "Preferences" link
+// that navigates to /preferences. All preference logic lives in
+// preferences.js (loaded only on that page).
 // ---------------------------------------------------------------------------
 
-(function initThemeToggle() {
-    const btn = document.getElementById("theme-toggle");
-    if (!btn) return;  // graceful no-op if the button is somehow missing
+(function initProfileMenu() {
+    const profileBtn = document.getElementById("profile-btn");
+    const dropdown = document.getElementById("profile-dropdown");
+    if (!profileBtn || !dropdown) return;
 
-    const root = document.documentElement;  // the <html> element
+    // --- Dropdown open/close ---
+    profileBtn.addEventListener("click", () => {
+        const open = !dropdown.hidden;
+        dropdown.hidden = open;
+        profileBtn.setAttribute("aria-expanded", !open);
+    });
 
-    // Set the icon: sun when dark mode is ON (clicking will switch to light),
-    // moon when dark mode is OFF (clicking will switch to dark).
-    function updateIcon() {
-        btn.textContent = "";  // clear previous icon
-        const isDark = root.classList.contains("dark");
-        btn.append(icon(isDark ? "sun" : "moon"));
-    }
+    // Close on click outside (but not on the button or inside the dropdown).
+    document.addEventListener("click", (e) => {
+        if (!dropdown.hidden &&
+            !dropdown.contains(e.target) &&
+            !profileBtn.contains(e.target)) {
+            dropdown.hidden = true;
+            profileBtn.setAttribute("aria-expanded", "false");
+        }
+    });
 
-    updateIcon();  // set the initial icon from the FOUC-applied state
+    // Escape key closes the dropdown and returns focus to the button.
+    dropdown.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            dropdown.hidden = true;
+            profileBtn.setAttribute("aria-expanded", "false");
+            profileBtn.focus();
+        }
+    });
 
-    btn.addEventListener("click", () => {
-        const isDark = root.classList.toggle("dark");
-        localStorage.setItem("theme", isDark ? "dark" : "light");
-        updateIcon();
-        // Refresh the live CHART_COLORS so the next chart draw uses the
-        // new CSS variable values (the crosshair/grid read CSS on every
-        // draw, but CHART_COLORS is cached for the fill/border).
-        CHART_COLORS = getChartColors();
-        // Notify page scripts that the theme changed — they can call
-        // chart.update() to repaint with the new palette.
-        document.dispatchEvent(new CustomEvent("themechange",
-            { detail: { dark: isDark } }));
+    // Follow OS theme changes live when no explicit choice is saved.
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    mql.addEventListener("change", (e) => {
+        if (!localStorage.getItem("theme")) {
+            document.documentElement.classList.toggle("dark", e.matches);
+            CHART_COLORS = getChartColors();
+            document.dispatchEvent(new CustomEvent("themechange",
+                { detail: { dark: e.matches } }));
+        }
     });
 })();

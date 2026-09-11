@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Preferences — Portfoliarr{% endblock %}
+
+{% block content %}
+
+        <div class="preferences-page">
+            <h2>Preferences</h2>
+
+            <!-- Theme setting. Light/Dark/System — the same three options
+                 the old inline dropdown offered, now on a dedicated page.
+                 preferences.js reads localStorage on load and saves on change. -->
+            <div class="card preferences-card">
+                <h3>Appearance</h3>
+                <div class="pref-row">
+                    <label class="pref-label" for="pref-theme">Theme</label>
+                    <select id="pref-theme" class="pref-select">
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="system">System</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Default ledger sort. Column + direction — the same controls
+                 that used to live in the gear menu, now on a dedicated page.
+                 Dashboard header-click sorting still works independently. -->
+            <div class="card preferences-card">
+                <h3>Ledger</h3>
+                <div class="pref-row">
+                    <label class="pref-label" for="pref-sort-col">Default sort</label>
+                    <div class="pref-sort-row">
+                        <select id="pref-sort-col" class="pref-select">
+                            <option value="">None (backend order)</option>
+                            <option value="ticker">Ticker</option>
+                            <option value="qty">Qty</option>
+                            <option value="value">Value</option>
+                            <option value="total_gain">Total Gain</option>
+                            <option value="total_gain_pct">Total Gain %</option>
+                            <option value="day_gain">Day Gain</option>
+                            <option value="day_gain_pct">Day Gain %</option>
+                        </select>
+                        <button class="btn-icon btn-dir" id="pref-sort-dir-btn"
+                                type="button" aria-label="Sort direction" disabled>
+                            <span id="pref-sort-dir-icon">▼</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/preferences.js') }}"></script>
+{% endblock %}

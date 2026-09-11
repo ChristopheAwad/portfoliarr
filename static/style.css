@@ -170,9 +170,16 @@ body {
 .logo-mark { color: var(--green-pos); flex: 0 0 auto; }
 .logo-accent { color: var(--green-pos); }
 
-/* Theme toggle button: a quiet icon button in the navbar. The icon
-   (sun/moon) is set by common.js based on the current theme. */
-.theme-toggle {
+/* Right side of navbar: profile/preferences button + dropdown. */
+.nav-right {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+/* Profile button: a quiet icon button in the navbar (user silhouette). */
+.profile-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -187,14 +194,113 @@ body {
     transition: background-color 150ms ease, color 150ms ease;
 }
 
-.theme-toggle:hover {
+.profile-btn:hover {
     background-color: var(--bg-hover);
     color: var(--text-primary);
 }
 
-.theme-toggle:focus-visible {
+.profile-btn:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
+}
+
+/* Dropdown panel: absolute-positioned popover for the profile menu.
+   z-index 200 matches the search dropdown so it layers above content. */
+.profile-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    min-width: 160px;
+    padding: 6px 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    z-index: 200;
+}
+
+/* Single link inside the dropdown. */
+.profile-dropdown-link {
+    display: block;
+    padding: 8px 16px;
+    font-size: 14px;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background-color 150ms ease;
+}
+
+.profile-dropdown-link:hover {
+    background-color: var(--bg-hover);
+}
+
+/* Preferences page layout. */
+.preferences-page {
+    max-width: 560px;
+    margin: 0 auto;
+}
+
+.preferences-page h2 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 20px;
+}
+
+.preferences-card {
+    margin-bottom: 16px;
+}
+
+.preferences-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+/* Each preference row: label on left, control on right. */
+.pref-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+}
+
+.pref-label {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+/* Select used on the preferences page. */
+.pref-select {
+    width: 140px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.pref-select:focus {
+    outline: 2px solid var(--blue-accent);
+    outline-offset: -1px;
+}
+
+/* Sort row: select + direction button. */
+.pref-sort-row {
+    display: flex;
+    gap: 4px;
+}
+
+.pref-sort-row .pref-select {
+    flex: 1;
+    width: auto;
+}
+
+.pref-sort-row .btn-dir {
+    flex-shrink: 0;
+    font-size: 12px;
 }
 
 /* The logo is a link (it doubles as "home", see base.html) — strip the
@@ -748,67 +854,7 @@ a.logo { text-decoration: none; }
 
 .btn-icon:disabled:hover { background: none; }
 
-/* Relative anchor so the dropdown panel positions against it. */
-.ledger-menu-wrap {
-    position: relative;
-}
 
-/* Dropdown panel: absolute-positioned popover for sort settings.
-   z-index 200 matches the search dropdown so it layers above the
-   table content. --shadow-md gives it the "lifted" feel. */
-.ledger-menu-panel {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    min-width: 220px;
-    padding: 12px;
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
-    z-index: 200;
-}
-
-.ledger-menu-label {
-    display: block;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-}
-
-.ledger-menu-row {
-    display: flex;
-    gap: 4px;
-}
-
-/* Native select: flex-1 fills the row, styled to match the app's
-   input vocabulary (border, radius, bg from design tokens). */
-.ledger-menu-select {
-    flex: 1;
-    padding: 6px 8px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-color);
-    color: var(--text-primary);
-    font-size: 13px;
-    font-family: inherit;
-    cursor: pointer;
-}
-
-.ledger-menu-select:focus {
-    outline: 2px solid var(--blue-accent);
-    outline-offset: -1px;
-}
-
-/* Direction toggle: sits right of the select, shows ▲/▼. */
-.btn-dir {
-    flex-shrink: 0;
-    font-size: 12px;
-}
 
 .watchlist {
     list-style: none;

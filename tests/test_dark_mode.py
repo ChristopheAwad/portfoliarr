@@ -4,14 +4,16 @@
 #
 # WHY ONLY THESE TESTS? Dark mode is mostly CSS + browser JS, which no
 # pytest can see. What the server renders and what this file locks is:
-#   1. The TOGGLE BUTTON: exists in the navbar on both pages, with the
-#      correct id so common.js can wire the click handler.
-#   2. The FOUC-PREVENTION SCRIPT: an inline <script> in <head> that reads
+#   1. The PROFILE DROPDOWN: exists in the navbar on both pages, with a
+#      "Preferences" link that navigates to /preferences.
+#   2. The PREFERENCES PAGE: renders with a theme select (Light/Dark/System)
+#      so preferences.js can wire the change handler.
+#   3. The FOUC-PREVENTION SCRIPT: an inline <script> in <head> that reads
 #      localStorage / OS preference and sets class="dark" on <html> BEFORE
 #      first paint — without it, the page flashes light then snaps dark.
-#   3. The CSS CONTRACT: style.css contains a .dark selector that redefines
+#   4. The CSS CONTRACT: style.css contains a .dark selector that redefines
 #      the core palette tokens, proving the dark palette exists.
-#   4. HARDCODED COLOR CLEANUP: key selectors use CSS custom properties
+#   5. HARDCODED COLOR CLEANUP: key selectors use CSS custom properties
 #      instead of hardcoded hex values, so they respond to .dark.
 
 import re
@@ -20,31 +22,53 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-# ── 1. Toggle button renders ─────────────────────────────────────────
+# ── 1. Profile dropdown renders ─────────────────────────────────────
 
-def test_dark_toggle_renders_on_dashboard(client):
-    """The navbar must contain a theme-toggle button with id="theme-toggle"
-    so common.js can attach the click handler."""
+def test_profile_dropdown_renders_on_dashboard(client):
+    """The navbar must contain a profile dropdown with a Preferences link
+    so the user can navigate to the preferences page."""
     html = client.get("/").get_data(as_text=True)
-    assert 'id="theme-toggle"' in html, "theme-toggle button missing from dashboard"
+    assert 'id="profile-dropdown"' in html, "profile-dropdown missing from dashboard"
+    assert '/preferences' in html, "Preferences link missing from dashboard dropdown"
 
 
-def test_dark_toggle_renders_on_stock_page(client):
-    """Same toggle on the detail page (it lives in base.html, shared by
+def test_profile_dropdown_renders_on_stock_page(client):
+    """Same dropdown on the detail page (it lives in base.html, shared by
     both — but 'for free' is an assumption until asserted)."""
     html = client.get("/stock/AAPL").get_data(as_text=True)
-    assert 'id="theme-toggle"' in html, "theme-toggle button missing from stock page"
+    assert 'id="profile-dropdown"' in html, "profile-dropdown missing from stock page"
+    assert '/preferences' in html, "Preferences link missing from stock page dropdown"
 
 
-def test_toggle_is_button_element(client):
-    """The toggle must be a <button> (not a <div> or <a>) for keyboard
-    accessibility — buttons are focusable and fire Enter/Space natively."""
+# ── 2. Preferences page renders ─────────────────────────────────────
+
+def test_preferences_page_renders(client):
+    """The /preferences page must render with a theme select so
+    preferences.js can wire the change handler."""
+    html = client.get("/preferences").get_data(as_text=True)
+    assert 'id="pref-theme"' in html, "pref-theme select missing from preferences page"
+    # Must contain the three theme options.
+    for option in ("light", "dark", "system"):
+        assert f'value="{option}"' in html, f"pref-theme missing {option} option"
+
+
+def test_preferences_page_has_sort_controls(client):
+    """The /preferences page must render with sort controls so
+    preferences.js can wire the default ledger sort."""
+    html = client.get("/preferences").get_data(as_text=True)
+    assert 'id="pref-sort-col"' in html, "pref-sort-col missing from preferences page"
+    assert 'id="pref-sort-dir-btn"' in html, "pref-sort-dir-btn missing from preferences page"
+
+
+def test_profile_btn_is_button_element(client):
+    """The profile button must be a <button> for keyboard accessibility —
+    buttons are focusable and fire Enter/Space natively."""
     html = client.get("/").get_data(as_text=True)
-    match = re.search(r'<button[^>]*id="theme-toggle"[^>]*>', html)
-    assert match, "theme-toggle is not a <button> element"
+    match = re.search(r'<button[^>]*id="profile-btn"[^>]*>', html)
+    assert match, "profile-btn is not a <button> element"
 
 
-# ── 2. FOUC-prevention script ────────────────────────────────────────
+# ── 3. FOUC-prevention script ────────────────────────────────────────
 
 def test_fouc_script_in_head(client):
     """An inline <script> in <head> must read localStorage('theme') (or
@@ -63,7 +87,7 @@ def test_fouc_script_in_head(client):
         "FOUC script doesn't reference localStorage"
 
 
-# ── 3. CSS contract: .dark exists ─────────────────────────────────────
+# ── 4. CSS contract: .dark exists ─────────────────────────────────────
 
 def test_css_contains_dark_selector():
     """style.css must contain a `.dark` selector that redefines the core
@@ -97,7 +121,7 @@ def test_css_dark_redefines_card_bg():
         ".dark block doesn't redefine --card-bg"
 
 
-# ── 4. Hardcoded color cleanup ───────────────────────────────────────
+# ── 5. Hardcoded color cleanup ───────────────────────────────────────
 
 def test_navbar_uses_token_not_hardcoded_white():
     """The .navbar background must use a CSS custom property, not a
@@ -164,7 +188,7 @@ def test_shimmer_uses_tokens():
         "shimmer gradient still has hardcoded #f8fafc"
 
 
-# ── 5. Themechange consumer contract ──────────────────────────────────
+# ── 6. Themechange consumer contract ──────────────────────────────────
 
 def test_main_js_listens_for_themechange():
     """main.js must listen for the 'themechange' custom event dispatched

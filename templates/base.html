@@ -106,12 +106,27 @@
                 <span>Portfoli<span class="logo-accent">arr</span></span>
             </a>
         </div>
-        <!-- Theme toggle: sun/moon button. common.js wires the click
-             handler and swaps the icon. The button sits between the logo
-             and the search box — always reachable, never in the way. -->
-        <button id="theme-toggle" class="theme-toggle" type="button"
-                title="Toggle dark mode" aria-label="Toggle dark mode">
-        </button>
+        <!-- Right side of navbar: profile/preferences button. common.js
+             wires the dropdown toggle; clicking "Preferences" navigates
+             to the dedicated preferences page. -->
+        <div class="nav-right">
+            <button id="profile-btn" class="profile-btn" type="button"
+                    title="Preferences" aria-label="Preferences"
+                    aria-expanded="false" aria-controls="profile-dropdown">
+                <svg viewBox="0 0 24 24" width="20" height="20"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+            </button>
+            <div id="profile-dropdown" class="profile-dropdown" hidden>
+                <a href="{{ url_for('preferences_page') }}" class="profile-dropdown-link">
+                    Preferences
+                </a>
+            </div>
+        </div>
         <div class="search-container">
             <!-- The search box. common.js (loaded at the bottom) turns
                  typing into /api/search calls and renders the suggestion

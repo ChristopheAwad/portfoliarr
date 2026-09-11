@@ -128,14 +128,15 @@ def log_request_duration(response):
 # The @app.route decorator registers this function as the handler for the
 # root URL "/" (e.g. http://localhost:5000/).
 @app.route("/")
-# Define the "index" view function. Flask calls it whenever the root URL
-# is requested, and its return value becomes the HTTP response.
 def index():
-    # Render "index.html". The watchlist used to be passed in here as a
-    # Jinja variable, but its rows are now built by JavaScript from
-    # /api/watchlist (they're dynamic — add/remove — so static server
-    # rendering doesn't fit them).
     return render_template("index.html")
+
+
+@app.route("/preferences")
+def preferences_page():
+    """Render the preferences page. No server-side state — all settings
+    are stored in the browser's localStorage by preferences.js."""
+    return render_template("preferences.html")
 
 
 # JSON endpoint that powers the live indices bar. The browser's JavaScript
