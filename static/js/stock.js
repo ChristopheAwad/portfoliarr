@@ -32,6 +32,12 @@ const actionErrorEl = document.getElementById("stock-action-error");
 // symbol itself is fixed).
 let symbolKnown = true;
 
+// Which chart period is active — drives the change pill ownership: the
+// chart's onPeriodData callback paints the pill for all periods; the quote
+// poll only overwrites it on "1D" (the dollar-based daily move). Starts at
+// "5D" to match the default button.
+let activePeriod = "5D";
+
 // Inline error for the action buttons (cleared on every fresh attempt —
 // the tx-form's error-line pattern).
 function showActionError(text) {
@@ -85,7 +91,14 @@ async function refreshStockQuote() {
         // The day-change pill: "+2.30 (+1.02%) Today". The quote's change /
         // change_pct are exactly the pill's inputs — shared paintChange,
         // same pos/neg colouring as the dashboard's totals.
-        paintChange(stockDayChangeEl, quote.change, quote.change_pct, "Today");
+        // Only paint on 1D: the chart's onPeriodData callback owns the
+        // pill for every other period, showing the period return instead.
+        // On 1D, the quote poll overwrites the callback's chart-derived
+        // value with the more accurate dollar-based daily move.
+        if (activePeriod === "1D") {
+            paintChange(stockDayChangeEl, quote.change, quote.change_pct,
+                        "Today");
+        }
 
         // Feed the previous close into the chart handle so the 1D view
         // can draw a horizontal reference line at yesterday's close.
@@ -329,6 +342,14 @@ const stockChartHandle = setupTimeframeChart({
     datasetLabel: symbol,
     endpoint: `/api/stock/${encodeURIComponent(symbol)}/history`,
     defaultPeriod: "5D", // must match the `active` button in stock.html
+    // When the chart loads new period data, compute the period return
+    // and paint the change pill. The quote poll will overwrite the pill
+    // on 1D with the dollar-based "Today" figure shortly after.
+    onPeriodData({ firstValue, lastValue, period }) {
+        activePeriod = period;
+        const pct = ((lastValue - firstValue) / firstValue) * 100;
+        paintChange(stockDayChangeEl, pct, null, period);
+    },
 });
 
 // When the theme toggles, repaint the chart so grid/line colors pick up
