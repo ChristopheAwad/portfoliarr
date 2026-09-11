@@ -1078,7 +1078,6 @@ function applyLedgerSort(col) {
     // Persist header-click sort as the new default so it survives reload.
     defaultSort = { ...ledgerSort };
     localStorage.setItem("ledgerDefaultSort", JSON.stringify(defaultSort));
-    syncMenuUI();
 
     renderLedger(lastTransactions);
 }

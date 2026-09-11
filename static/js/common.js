@@ -121,23 +121,6 @@ const ICONS = {
     check: [
         { tag: "polyline", attrs: { points: "20 6 9 17 4 12" } },
     ],
-    // Sun icon for the dark-mode toggle (shown when dark mode is ON).
-    sun: [
-        { tag: "circle", attrs: { cx: "12", cy: "12", r: "5" } },
-        { tag: "line", attrs: { x1: "12", y1: "1", x2: "12", y2: "3" } },
-        { tag: "line", attrs: { x1: "12", y1: "21", x2: "12", y2: "23" } },
-        { tag: "line", attrs: { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" } },
-        { tag: "line", attrs: { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" } },
-        { tag: "line", attrs: { x1: "1", y1: "12", x2: "3", y2: "12" } },
-        { tag: "line", attrs: { x1: "21", y1: "12", x2: "23", y2: "12" } },
-        { tag: "line", attrs: { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" } },
-        { tag: "line", attrs: { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" } },
-    ],
-    // Moon icon for the dark-mode toggle (shown when dark mode is OFF).
-    moon: [
-        { tag: "path",
-          attrs: { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" } },
-    ],
 };
 
 // Build one icon as a live SVG element (never an HTML string). className

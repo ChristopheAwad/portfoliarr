@@ -60,7 +60,15 @@ def test_preferences_page_has_sort_controls(client):
     assert 'id="pref-sort-dir-btn"' in html, "pref-sort-dir-btn missing from preferences page"
 
 
-# ── 2. FOUC-prevention script ────────────────────────────────────────
+def test_profile_btn_is_button_element(client):
+    """The profile button must be a <button> for keyboard accessibility —
+    buttons are focusable and fire Enter/Space natively."""
+    html = client.get("/").get_data(as_text=True)
+    match = re.search(r'<button[^>]*id="profile-btn"[^>]*>', html)
+    assert match, "profile-btn is not a <button> element"
+
+
+# ── 3. FOUC-prevention script ────────────────────────────────────────
 
 def test_fouc_script_in_head(client):
     """An inline <script> in <head> must read localStorage('theme') (or
@@ -79,7 +87,7 @@ def test_fouc_script_in_head(client):
         "FOUC script doesn't reference localStorage"
 
 
-# ── 3. CSS contract: .dark exists ─────────────────────────────────────
+# ── 4. CSS contract: .dark exists ─────────────────────────────────────
 
 def test_css_contains_dark_selector():
     """style.css must contain a `.dark` selector that redefines the core
@@ -113,7 +121,7 @@ def test_css_dark_redefines_card_bg():
         ".dark block doesn't redefine --card-bg"
 
 
-# ── 4. Hardcoded color cleanup ───────────────────────────────────────
+# ── 5. Hardcoded color cleanup ───────────────────────────────────────
 
 def test_navbar_uses_token_not_hardcoded_white():
     """The .navbar background must use a CSS custom property, not a
@@ -180,7 +188,7 @@ def test_shimmer_uses_tokens():
         "shimmer gradient still has hardcoded #f8fafc"
 
 
-# ── 5. Themechange consumer contract ──────────────────────────────────
+# ── 6. Themechange consumer contract ──────────────────────────────────
 
 def test_main_js_listens_for_themechange():
     """main.js must listen for the 'themechange' custom event dispatched
