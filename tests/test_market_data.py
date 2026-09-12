@@ -268,6 +268,19 @@ def test_history_all_nan_bars_yield_empty_dict(fake_yf):
     assert market_data.get_history("AAPL", "5D") == {}
 
 
+def test_history_empty_dataframe_returns_empty_dict(fake_yf):
+    """A truly empty DataFrame (zero rows from yfinance — a delisted
+    ticker, a Yahoo hiccup, or a period with no data) returns {} without
+    crashing. Distinct from the all-NaN test above: that one has rows
+    that drop; this one has NO rows at all. yfinance always provides a
+    Close column with a DatetimeIndex, even on empty DataFrames."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": pd.Series(dtype=float)},
+        index=pd.DatetimeIndex([], name="Date"),
+    )
+    assert market_data.get_history("AAPL", "1M") == {}
+
+
 # ── get_stats: the detail page's stats grid ───────────────────────────
 
 def test_get_stats_extracts_and_renames_the_grid_fields(fake_yf):

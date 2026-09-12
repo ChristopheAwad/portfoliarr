@@ -812,3 +812,51 @@ def test_history_missing_bar_carries_last_known_close(client, fake_market):
     # 08-27: 1×100 + 10×50 = 600.  08-28: 1×110 + 10×50 carried = 610.
     # 08-31: 1×120 + 10×52 = 640.
     assert body["values"] == [600.0, 610.0, 640.0]
+
+
+# ── Gap-fill tests (test gap coverage feature) ────────────────────────
+
+def test_history_intraday_future_buy_returns_empty(client, fake_market):
+    """The intraday (1D) branch: a first buy dated in the FUTURE (after
+    today) means there is nothing to price today — same "empty chart, 200"
+    shape as the daily branch's future-date test, but exercising the
+    is_intraday=True code path at app.py:377-379."""
+    seed_transaction(ticker="AAPL", date="2099-01-01", qty=1,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {"09:30": 150.0, "09:35": 151.0}
+
+    res = client.get("/api/portfolio/history?period=1D")
+    assert res.status_code == 200
+    assert res.get_json() == {"labels": [], "values": []}
+
+
+def test_history_non_usd_cad_ticker_contributes_zero(
+        client, fake_market):
+    """A ticker with a non-USD/CAD currency (e.g. EUR) contributes 0 to
+    the chart — unsupported currencies degrade gracefully, never crash.
+    The CAD ticker carries the line while the EUR ticker is valued at 0."""
+    seed_transaction(ticker="RY.TO", date="2026-08-28", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="EURGD", date="2026-08-28", qty=5,
+                     currency="EUR")
+    fake_market.histories["RY.TO"] = {
+        "2026-08-28": 50.0, "2026-08-31": 52.0,
+    }
+    fake_market.histories["EURGD"] = {
+        "2026-08-28": 10.0, "2026-08-31": 11.0,
+    }
+    # live_rate only fetched for USD — EUR has no conversion path
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["labels"] == ["2026-08-28", "2026-08-31"]
+    # RY.TO: 10×50 = 500, 10×52 = 520.  EURGD contributes 0 (no EURCAD).
+    assert body["values"] == [500.0, 520.0]
+
+
+def test_preferences_page_renders_200(client):
+    """GET /preferences renders the HTML page without error. All user
+    settings are stored client-side in localStorage — the server just
+    serves the template."""
+    res = client.get("/preferences")
+    assert res.status_code == 200
+    assert b"pref-theme" in res.data
