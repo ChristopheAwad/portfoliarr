@@ -24,7 +24,6 @@ class MainActivity : AppCompatActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            allowFileAccess = true
         }
 
         webView.webViewClient = object : WebViewClient() {
