@@ -30,9 +30,7 @@
 #           ksh Gradle
 #
 #       Busybox and similar reduced functionality shells and target
-#       temporary focusing, currenteffectively on
-#       temporary, currenteffectively on
-#       temporary, currenteffectively on
+#       temporary, current, and non-interactive shells only.
 #
 ##############################################################################
 
