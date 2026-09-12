@@ -1,53 +1,51 @@
-# Feature: Pre-fetch all chart timeframes after default load
+# Feature: Android WebView Wrapper
 
 ## Problem
-Clicking a timeframe button for the first time (e.g., switching from "5D" to "1M") is slow because the backend has to fetch all ticker histories from yfinance for that uncached period. The frontend cache we added helps on *repeat* clicks, but the first click on each timeframe still waits for yfinance.
+Want a native Android app experience (launcher icon, full-screen, back button) for Portfoliarr without maintaining a separate native frontend. PWAs require HTTPS, which this project doesn't use.
 
 ## Solution
-After the default "5D" chart loads, fire off requests for ALL other timeframes in the background. By the time the user clicks any button, the backend cache is already warm and the frontend cache serves instantly.
+A thin WebView wrapper that loads the existing web app from a user-configurable server URL. All UI logic stays in Flask + vanilla JS. The wrapper adds: app icon, native back button, status bar theming, and a settings screen for URL entry.
 
-## Files to change
-- `static/js/main.js` — make `refreshPortfolioChart` return its promise + add pre-fetch loop after boot
+## Rollback
+Delete the `android/` folder. Zero changes to the existing codebase.
 
-## Changes
+## Files to create (all inside `android/`)
 
-### 1. `refreshPortfolioChart` returns the promise (main.js:1777-1779)
+| File | ~LoC | Notes |
+|---|---|---|
+| `settings.gradle.kts` | ~20 | Project settings |
+| `gradle/libs.versions.toml` | ~15 | Version catalog |
+| `build.gradle.kts` | ~10 | Root build |
+| `gradle.properties` | ~5 | JVM args |
+| `gradlew` + `gradlew.bat` | ~201 | Wrapper scripts |
+| `gradle/wrapper/gradle-wrapper.properties` | ~3 | Gradle 8.11.1 |
+| `app/build.gradle.kts` | ~30 | compileSdk 34, minSdk 24 |
+| `app/src/main/AndroidManifest.xml` | ~20 | INTERNET perm, cleartext |
+| `app/src/main/java/.../MainActivity.kt` | ~80 | WebView, back button, settings menu |
+| `app/src/main/java/.../SettingsActivity.kt` | ~65 | URL input, save to SharedPreferences |
+| `app/src/main/res/layout/activity_main.xml` | ~10 | Fullscreen WebView |
+| `app/src/main/res/layout/activity_settings.xml` | ~30 | EditText + Save button |
+| `app/src/main/res/menu/main_menu.xml` | ~12 | Settings gear icon |
+| `app/src/main/res/values/themes.xml` | ~12 | Dark status bar |
+| `app/src/main/res/values/colors.xml` | ~5 | #1a1a2e status bar |
+| `app/src/main/res/values/strings.xml` | ~6 | App name "Portfoliarr" |
+| `app/src/main/res/mipmap-*/ic_launcher.png` | binary | 5 densities from assets/logo |
+| `README.md` | ~40 | Build instructions |
 
-Current:
-```javascript
-function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
-    if (portfolioChartHandle) portfolioChartHandle.refresh(period);
-}
+**Real code: ~220 LoC**
+
+## Flow
 ```
-
-Change to:
-```javascript
-function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
-    if (portfolioChartHandle) return portfolioChartHandle.refresh(period);
-}
+First launch → no URL in SharedPreferences → SettingsActivity → save → load WebView
+Return launch → URL exists → load WebView
+Menu gear icon → open SettingsActivity to change URL
 ```
-
-### 2. Pre-fetch loop after default chart loads (after line 1812)
-
-```javascript
-// Pre-fetch all other timeframes in the background so switching is instant.
-// Fire-and-forget — no UI feedback needed. The frontend cache stores each
-// response for its TTL (120s live, 600s settled), so by the time the user
-// clicks a button, the data is already there.
-const ALL_PERIODS = ["1D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
-refreshPortfolioChart().then(() => {
-    for (const period of ALL_PERIODS) {
-        refreshPortfolioChart(period);
-    }
-});
-```
-
-## Why this order
-- Default "5D" fires first (user sees chart immediately)
-- Pre-fetch starts AFTER "5D" completes — avoids hammering Yahoo before the user's chart renders
-- All 8 pre-fetches fire in parallel — total time is ~1×slowest call
-- Backend `_history_cache` warms up from these requests too
 
 ## Test plan
-- Run `python -m pytest` — no backend changes
-- Manual: load dashboard, verify 8 extra history requests fire after "5D" completes, click any button for instant render
+- Build the APK in Android Studio
+- Install on device/emulator
+- First launch shows settings screen, enter server URL
+- WebView loads the web app
+- Back button navigates WebView history, then exits
+- Gear icon opens settings to change URL
+- Status bar matches dark theme
