@@ -884,15 +884,19 @@ function setupTimeframeChart(
                 const x1 = measureStart.x, y1 = measureStart.y;
                 const x2 = measureEnd.x, y2 = measureEnd.y;
 
-                // Dashed line connecting the two endpoints.
+                // Vertical dashed lines at each point's X position,
+                // running from the chart bottom up to the data point.
+                // This makes it clear which date each endpoint corresponds to.
                 ctx.save();
                 ctx.beginPath();
                 ctx.setLineDash([5, 3]);
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x2, y2);
                 ctx.strokeStyle = getComputedStyle(document.documentElement)
-                    .getPropertyValue("--text-muted").trim();
+                    .getPropertyValue("--text-secondary").trim();
                 ctx.lineWidth = 1;
+                ctx.moveTo(x1, bottom);
+                ctx.lineTo(x1, y1);
+                ctx.moveTo(x2, bottom);
+                ctx.lineTo(x2, y2);
                 ctx.stroke();
                 ctx.setLineDash([]);
 
@@ -900,7 +904,7 @@ function setupTimeframeChart(
                 ctx.beginPath();
                 ctx.arc(x1, y1, 4, 0, Math.PI * 2);
                 ctx.fillStyle = getComputedStyle(document.documentElement)
-                    .getPropertyValue("--text-muted").trim();
+                    .getPropertyValue("--text-secondary").trim();
                 ctx.fill();
                 ctx.beginPath();
                 ctx.arc(x2, y2, 4, 0, Math.PI * 2);
@@ -963,8 +967,24 @@ function setupTimeframeChart(
             },
             // Suppress the Chart.js tooltip while measuring — the
             // date/price readout would flicker over the measurement label.
-            beforeTooltipDraw(chart, args) {
-                if (chart._priceDiffMeasuring) args.cancel = true;
+            // Must RETURN false (not args.cancel) — Chart.js checks the
+            // hook's return value, not args.cancel, for this hook.
+            beforeTooltipDraw(chart) {
+                if (chart._priceDiffMeasuring) return false;
+            },
+            // Block Chart.js from processing pointer events during
+            // measurement — prevents the hover tooltip and crosshair from
+            // activating while the user is dragging or two-finger touching.
+            beforeEvent(chart, args) {
+                if (!chart._priceDiffMeasuring) return;
+                // Nuke the tooltip active elements directly so the floating
+                // date/price label cannot appear, no matter how Chart.js
+                // internally resolves hover state.
+                if (chart.tooltip) {
+                    chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+                }
+                chart.setActiveElements([]);
+                args.cancel = true;
             },
         }],
 
@@ -1122,10 +1142,26 @@ function setupTimeframeChart(
     // Chart.js only passes one touch point in its event system.
 
     function pixelToData(px, py) {
+        // Find the nearest data point by X position — the same index
+        // lookup Chart.js hover uses (mode: "index"). For a category
+        // scale, getValueForPixel returns the tick index.
+        const values = chart.data.datasets[0].data;
+        if (values.length === 0) {
+            return { x: px, y: py, dataY: 0, label: "", dataIndex: -1 };
+        }
+        let index = Math.round(chart.scales.x.getValueForPixel(px));
+        // Clamp to valid range so edges don't read past the array.
+        index = Math.max(0, Math.min(index, values.length - 1));
+        const dataValue = values[index];
+        // Convert the actual data value back to a pixel Y so the dot
+        // lands on the line, not at the raw finger position.
+        const snappedY = chart.scales.y.getPixelForValue(dataValue);
         return {
-            x: px,
-            y: py,
-            dataY: chart.scales.y.getValueForPixel(py),
+            x: px,              // raw X kept for the dashed line
+            y: snappedY,        // SNAPPED Y — dot sits on the data point
+            dataY: dataValue,   // actual price at this date
+            label: chart.data.labels[index] || "",
+            dataIndex: index,
         };
     }
 
@@ -1150,7 +1186,13 @@ function setupTimeframeChart(
             e.clientX - rect.left,
             e.clientY - rect.top
         );
-        chart.draw(); // live preview during drag
+        // Clear any stale hover state before redrawing — without this,
+        // chart.draw() would re-render a tooltip from pre-existing active
+        // elements that were set before measurement started.
+        if (chart.tooltip) {
+            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        }
+        chart.draw();
     });
 
     canvas.addEventListener("mouseup", () => {
@@ -1193,6 +1235,9 @@ function setupTimeframeChart(
             );
             measuring = true;
             chart._priceDiffMeasuring = true;
+            if (chart.tooltip) {
+                chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+            }
             chart.draw();
         } else if (e.touches.length === 1 && measureStart) {
             // Single finger tap while measurement is showing — dismiss.
@@ -1215,6 +1260,9 @@ function setupTimeframeChart(
         measureEnd = pixelToData(
             t1.clientX - rect.left, t1.clientY - rect.top
         );
+        if (chart.tooltip) {
+            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        }
         chart.draw();
     }, { passive: false });
 
