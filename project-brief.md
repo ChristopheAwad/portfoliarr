@@ -46,10 +46,18 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - CAD display conversion for portfolio views (USD↔CAD only, via
   Yahoo's `USDCAD=X` pair), with a ledger toggle for native-USD display
 
-**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios, currencies other than USD/CAD.
+**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios, currencies other than USD/CAD, PWA install-to-homescreen.
 
 ## Design Rules (permanent)
 
+- **Portfoliarr is not a PWA — do not half-attempt it again.** Chrome only
+  installs a site from a trusted-HTTPS secure context; plain-HTTP LAN serving
+  can never qualify, and accepting a self-signed cert warning does not create
+  trust (Chrome blocks service workers behind cert errors, so "Add to Home
+  screen" stays a browser-tab shortcut). LAN installs would require a
+  per-device CA install; a trusted public name requires a domain/tunnel.
+  Full investigation and rationale: see `feature.md` and reverted commit
+  `d4cd772`. Scrapped 2026-09-12.
 - **The transaction ledger stores immutable facts only** (ticker, date,
   price, qty, currency, buy/sell type). Anything market-dependent — total
   value, gain $/% — is computed at display time from live quotes, never

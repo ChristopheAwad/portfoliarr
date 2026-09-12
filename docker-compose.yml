@@ -33,50 +33,8 @@ services:
       TZ: America/Toronto
     restart: unless-stopped
 
-  caddy:
-    # HTTPS front door — see Caddyfile for the full story. Short version:
-    # Chrome only installs PWAs from secure contexts (HTTPS), and the phone
-    # reaches this stack over the LAN, so plain HTTP can never be
-    # installable. Caddy terminates TLS with its own locally-issued cert
-    # (`tls internal` — no public CA can verify a LAN server) and reverse-
-    # proxies everything to the app. The phone shows ONE "connection is not
-    # private" warning (it doesn't trust the local CA), taps through, and
-    # from then on the origin is a secure context and the PWA installs.
-    image: caddy:2.10.0
-    container_name: portfoliarr-caddy
-    ports:
-      # host 9968 -> container 443 (the HTTPS port Caddy binds inside).
-      # The phone bookmark becomes https://<server-ip>:9968. The app's
-      # plain-HTTP mapping above stays for desktop use.
-      - "9968:443"
-    volumes:
-      # The config ships with the repo and is mounted read-only — nothing
-      # about the proxy is baked into an image.
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # /data holds Caddy's internal CA and every cert it issues. Without
-      # a volume, certificates are regenerated on every container
-      # recreation and the phone would have to re-accept the warning.
-      # /config holds Caddy's saved (adapted) config — same persistence
-      # logic as the official caddy compose recipe.
-      - caddy-data:/data
-      - caddy-config:/config
-    environment:
-      # The ONE deployment-specific value: the server's LAN IP, which the
-      # cert must carry as its SAN. Set it in a .env file next to this
-      # compose file:  PWA_SITE_ADDRESS=https://192.168.1.50
-      # The Caddyfile also carries its own localhost fallback, so compose
-      # still config-parses on machines that never deploy.
-      PWA_SITE_ADDRESS: ${PWA_SITE_ADDRESS:-https://localhost}
-    depends_on:
-      # Don't start the proxy before the thing it proxies.
-      - portfoliarr
-    restart: unless-stopped
-
 # Named volume declaration — without this block Docker wouldn't create it.
 # Inspect the ledger any time with:
 #   docker volume inspect portfoliarr-data
 volumes:
   portfoliarr-data:
-  # Caddy's cert store and saved config (see the caddy service above).
-  caddy-data:
-  caddy-config:

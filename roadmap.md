@@ -84,11 +84,8 @@ Extend the stock detail page's dynamic period return (shipped separately) to the
 
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
-### 10. PWA Manifest
-A `manifest.json` and minimal service worker for mobile home-screen install. Lets users treat it like a native app on their phone. ~50 lines total.
-
-**Files:** `static/manifest.json` (new), `templates/base.html` (link tag), `static/js/sw.js` (new, minimal)
-**Depends on:** Nothing
+### 10. PWA Manifest — SCRAPPED (2026-09-12)
+Attempted and reverted (commit `d4cd772`). Chrome only installs PWAs from a trusted-HTTPS secure context — unreachable for a LAN-only app without per-device CA installs or third-party infrastructure (Tailscale/Cloudflare/domain). Full postmortem in `feature.md`; do not re-attempt without first solving the trusted-cert problem.
 
 ---
 
@@ -127,9 +124,8 @@ Tier 2.5:
   9. Dashboard Period Return ─────────── depends on stock detail page version
 
 Tier 3 (all independent):
-  10. PWA Manifest ────────────────────┐
-  11. Search Caching ──────────────────┤── can be done in any order
-  12. Stats Caching ───────────────────┘
+  11. Search Caching ──────────────────┐
+  12. Stats Caching ───────────────────┴── can be done in any order
 ```
 
 ---
@@ -147,7 +143,6 @@ For maximum compounding value:
 7. **Benchmark Line** → context for performance
 8. **Multi-Currency** → international expansion
 9. **Dashboard Period Return** → extends stock page pattern to dashboard
-10. **PWA Manifest** → mobile experience
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

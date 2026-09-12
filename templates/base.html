@@ -25,21 +25,6 @@
          master copy. -->
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 
-    <!-- PWA manifest — tells the browser this app is installable to the
-         homescreen. display: standalone removes the browser chrome (URL bar,
-         back button) so it feels like a native app. theme-color paints the
-         mobile status bar. The apple-* tags enable the same behavior on iOS.
-         The link points at the /manifest.json route (not /static/...) so the
-         manifest is served with its spec MIME type, application/manifest+json,
-         from the origin root. NOTE: none of this activates on the phone
-         unless the app is reached over HTTPS (or localhost) — Chrome only
-         treats those as secure contexts, and installability starts there. -->
-    <link rel="manifest" href="{{ url_for('manifest') }}">
-    <meta name="theme-color" content="#0f1117">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
-
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
     <!-- Inter, the app's typeface, from Google Fonts' CDN (a free hosted
@@ -184,27 +169,5 @@
          ORDER MATTERS — the same reason Chart.js sits in <head> above. -->
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     {% block scripts %}{% endblock %}
-
-    <!-- Service Worker registration — part of the PWA setup. The
-         registration must succeed for the SW's shell caching to run at
-         all. The .catch() matters: register() REJECTS on insecure origins
-         (plain HTTP over the LAN) — a bare register() call fails with an
-         unhandled promise rejection that flashes in the console and
-         vanishes, which is exactly how this feature's root cause (the
-         phone reaching the app over plain HTTP) hid for days. The catch
-         prints the browser's actual reason, e.g. "The URL protocol of the
-         current origin is not supported", so the next person sees the
-         real error instead of guessing. -->
-    <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js')
-                .then(function(reg) {
-                    console.info('Service worker registered — scope:', reg.scope);
-                })
-                .catch(function(err) {
-                    console.warn('Service worker registration failed:', err);
-                });
-        }
-    </script>
 </body>
 </html>
