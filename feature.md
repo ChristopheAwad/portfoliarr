@@ -1,42 +1,53 @@
-# Feature: PWA Install-to-Homescreen — SCRAPPED
+# Feature: Pre-fetch all chart timeframes after default load
 
-## Outcome
-Scrapped on 2026-09-12 without ever working. The full implementation (web app
-manifest, service worker, icons, PWA meta tags, root-level routes, and a Caddy
-HTTPS sidecar for docker-compose) shipped in commit `d4cd772` and was reverted
-in the commit that added this note. Nothing remains in the codebase except
-this record.
+## Problem
+Clicking a timeframe button for the first time (e.g., switching from "5D" to "1M") is slow because the backend has to fetch all ticker histories from yfinance for that uncached period. The frontend cache we added helps on *repeat* clicks, but the first click on each timeframe still waits for yfinance.
 
-## What the investigation established (the durable knowledge)
-- Chrome only installs a site as a PWA (WebAPK → standalone window, no
-  browser chrome) from a **secure context**: HTTPS that the browser actually
-  trusts, or localhost. There is no plain-HTTP path, and no manifest or
-  service-worker trick around it.
-- A service worker is NOT part of Chrome's installability criteria anymore —
-  early attempts in this feature (adding one, re-scoping it) were chasing a
-  requirement Chrome removed years ago.
-- Tapping "Proceed anyway" on an untrusted-certificate warning does NOT
-  create trust. Chrome refuses to register service workers behind certificate
-  errors, the site stays non-installable, and "Add to Home screen" produces a
-  bookmark shortcut that opens a regular browser tab. A self-signed cert only
-  works if every device installs the issuing CA into its trust store
-  (Android: Settings → Security → Install a certificate → CA certificate).
-- `chrome://flags` → "Insecure origins treated as secure" is a per-device,
-  per-(host+port) override — explains why one phone can install over plain
-  HTTP, but it is a hack, not a fix.
+## Solution
+After the default "5D" chart loads, fire off requests for ALL other timeframes in the background. By the time the user clicks any button, the backend cache is already warm and the frontend cache serves instantly.
 
-## Why scrapped
-Portfoliarr is LAN-only selfhosted. Every route to a trusted HTTPS name costs
-something the user rejected: installing our own CA on every phone (per-device
-setup), a third-party mesh/tunnel (Tailscale or Cloudflare), or a bought
-domain with DNS-01 certificates and split-horizon DNS (money + setup). None
-were worth it for homescreen-icon convenience on a hobby app, so the whole
-feature was scrapped rather than shipped half-working.
+## Files to change
+- `static/js/main.js` — make `refreshPortfolioChart` return its promise + add pre-fetch loop after boot
 
-## If this is ever revisited
-- Lowest-friction trusted-cert option: add the app to the home server's
-  existing Cloudflare Tunnel (real publicly-trusted cert, zero per-device
-  setup, works off-LAN — but the hostname is internet-reachable).
-- The reverted commit `d4cd772` contains the complete, verified-correct
-  artifact set (manifest, icons, SW, routes, meta tags) — the app code was
-  never the problem.
+## Changes
+
+### 1. `refreshPortfolioChart` returns the promise (main.js:1777-1779)
+
+Current:
+```javascript
+function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
+    if (portfolioChartHandle) portfolioChartHandle.refresh(period);
+}
+```
+
+Change to:
+```javascript
+function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
+    if (portfolioChartHandle) return portfolioChartHandle.refresh(period);
+}
+```
+
+### 2. Pre-fetch loop after default chart loads (after line 1812)
+
+```javascript
+// Pre-fetch all other timeframes in the background so switching is instant.
+// Fire-and-forget — no UI feedback needed. The frontend cache stores each
+// response for its TTL (120s live, 600s settled), so by the time the user
+// clicks a button, the data is already there.
+const ALL_PERIODS = ["1D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+refreshPortfolioChart().then(() => {
+    for (const period of ALL_PERIODS) {
+        refreshPortfolioChart(period);
+    }
+});
+```
+
+## Why this order
+- Default "5D" fires first (user sees chart immediately)
+- Pre-fetch starts AFTER "5D" completes — avoids hammering Yahoo before the user's chart renders
+- All 8 pre-fetches fire in parallel — total time is ~1×slowest call
+- Backend `_history_cache` warms up from these requests too
+
+## Test plan
+- Run `python -m pytest` — no backend changes
+- Manual: load dashboard, verify 8 extra history requests fire after "5D" completes, click any button for instant render

@@ -338,25 +338,12 @@ def get_history(symbol, period_key):
 
     # df is a pandas DataFrame indexed by timezone-aware timestamps
     # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
-    # dict, so walk each (timestamp, row) pair and key it by a clean
-    # string in the timeframe's own label format.
-    result = {}
-    for ts, row in df.iterrows():
-        # NaN close = "no bar printed yet" — Yahoo ships this on the
-        # in-progress current-day bar (observed live: META's daily bar
-        # carried NaN while its live quote was healthy). A NaN is not a
-        # price: it would ride the chart payload as a bare `NaN` token,
-        # which is INVALID JSON for browsers — their response.json()
-        # throws and the chart never paints ("works for some tickers,
-        # not others"). Skipping the row is the honest degradation: the
-        # line simply ends one bar earlier, as if the bar never arrived.
-        close = float(row["Close"])
-        if math.isnan(close):
-            continue
-        # Label per the timeframe's format: "%H:%M" on 1D, "%Y-%m-%d
-        # %H:%M" on 5D, "%Y-%m-%d" on the date-spaced ranges.
-        label = ts.strftime(label_format)
-        result[label] = close
+    # dict. Vectorized ops replace the old iterrows() loop for speed:
+    # dropna() removes NaN closes (same as the old continue), then
+    # strftime on the index builds all labels at once.
+    valid = df["Close"].dropna()
+    labels = valid.index.strftime(label_format)
+    result = dict(zip(labels, valid))
 
     # Cache the SUCCESS (an exception above never reaches this line) and
     # hand back a copy — see the docstring for why callers get their own

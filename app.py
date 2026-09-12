@@ -145,11 +145,12 @@ def preferences_page():
 def index_quotes():
     # Per-symbol resilience: each chip is fetched independently, so one
     # dead symbol cannot blank the whole bar. Failures are skipped.
-    quotes = []
-    failures = 0
-    for symbol in INDEX_SYMBOLS:
+    # Fetch all index quotes in parallel — each is an independent
+    # yfinance call, so threading cuts wall time from N×sequential to
+    # ~1×slowest. Same pattern as portfolio_history's history fetch.
+    def fetch_index_quote(symbol):
         try:
-            quotes.append(get_quote(symbol))
+            return symbol, get_quote(symbol)
         except Exception:
             # Boundary rule: catch WIDE at the edge of the system (yfinance
             # can fail in many ways) and degrade gracefully, per symbol.
@@ -161,11 +162,19 @@ def index_quotes():
                 "index quote failed for %s — chip shows \"—\"", symbol,
                 exc_info=True,
             )
-            failures += 1
+            return symbol, None
+
+    quotes_map = {}
+    with ThreadPoolExecutor(
+        max_workers=min(len(INDEX_SYMBOLS), 8)
+    ) as pool:
+        for symbol, quote in pool.map(fetch_index_quote, INDEX_SYMBOLS):
+            if quote is not None:
+                quotes_map[symbol] = quote
 
     # Only when EVERY symbol fails is the whole endpoint considered sick:
     # 503 = "Service Unavailable — it's me, not you, try again later."
-    if failures == len(INDEX_SYMBOLS):
+    if len(quotes_map) == 0:
         # TIER 1: this is the endpoint's loudest cry for help — every
         # symbol failing at once usually means Yahoo is down or the
         # network is gone, not four unlucky symbols.
@@ -174,8 +183,9 @@ def index_quotes():
         )
         return jsonify({"error": "quote service unavailable"}), 503
 
-    # Successes only: failed symbols are simply absent from the list.
+    # Successes only in original order: failed symbols are absent.
     # The frontend infers which chips to mark unavailable ("—").
+    quotes = [quotes_map[s] for s in INDEX_SYMBOLS if s in quotes_map]
     return jsonify(quotes)
 
 
@@ -562,10 +572,11 @@ def portfolio_summary():
     # number describing the SAME priced-only slice of the portfolio
     # (adding its cost but not its value would fake a loss that never
     # happened). The frontend surfaces the gap via a tooltip.
-    quotes = {}
-    for symbol in net_qty:
+    # One quote per UNIQUE ticker, fetched in parallel — same pattern
+    # as portfolio_history and the other quote endpoints.
+    def fetch_summary_quote(symbol):
         try:
-            quotes[symbol] = get_quote(symbol)
+            return symbol, get_quote(symbol)
         except Exception:
             # Wide catch on purpose: yfinance fails in many ways, and
             # the ledger's facts still stand — degrade, never 500.
@@ -576,7 +587,15 @@ def portfolio_summary():
                 symbol,
                 exc_info=True,
             )
-            quotes[symbol] = None
+            return symbol, None
+
+    quotes = {}
+    if net_qty:
+        with ThreadPoolExecutor(
+            max_workers=min(len(net_qty), 8)
+        ) as pool:
+            for symbol, quote in pool.map(fetch_summary_quote, net_qty):
+                quotes[symbol] = quote
 
     # ONE live USDCAD rate for the whole response — fetched only when
     # something actually needs converting (a USD-priced holding, or a
@@ -679,8 +698,10 @@ def watchlist_quotes():
     # The DB read is the source of truth for what should be displayed.
     symbols = db.get_symbols()
 
-    quotes = []
-    for symbol in symbols:
+    # Fetch all watchlist symbols in parallel — each needs a quote + name,
+    # both independent yfinance calls. Threading cuts wall time from
+    # N×(quote+name) sequential to ~1×slowest pair.
+    def fetch_watchlist_symbol(symbol):
         try:
             # get_quote returns the object SHARED with the cache — mutating
             # it here would leak our edits into every future cache hit. So
@@ -693,7 +714,7 @@ def watchlist_quotes():
                 "watchlist quote failed for %s — row shows \"—\"", symbol,
                 exc_info=True,
             )
-            continue
+            return symbol, None
 
         try:
             quote["name"] = get_name(symbol)
@@ -708,7 +729,18 @@ def watchlist_quotes():
             )
             quote["name"] = None
 
-        quotes.append(quote)
+        return symbol, quote
+
+    quotes_map = {}
+    with ThreadPoolExecutor(
+        max_workers=min(len(symbols), 8)
+    ) as pool:
+        for symbol, quote in pool.map(fetch_watchlist_symbol, symbols):
+            if quote is not None:
+                quotes_map[symbol] = quote
+
+    # Preserve original symbol order for deterministic output.
+    quotes = [quotes_map[s] for s in symbols if s in quotes_map]
 
     # An empty watchlist is a normal state, not an error — the frontend
     # shows a friendly "nothing here yet" message.
@@ -1038,21 +1070,31 @@ def list_transactions():
     if display not in ("CAD", "NATIVE"):
         return jsonify({"error": "currency must be one of: CAD, NATIVE"}), 400
 
-    # One quote per UNIQUE ticker: a ledger with 30 AAPL trades pays for
-    # exactly ONE quote (the 120s cache makes repeats free, and the dict
-    # deduplicates within this request).
-    quotes = {}
+    # One quote per UNIQUE ticker — the same dedup as before (30 trades in
+    # one ticker pay for exactly one quote), but fetched in parallel.
+    unique_symbols = []
+    seen = set()
     for tx in transactions:
-        symbol = tx["ticker"]
-        if symbol in quotes:
-            continue
+        if tx["ticker"] not in seen:
+            seen.add(tx["ticker"])
+            unique_symbols.append(tx["ticker"])
+
+    def fetch_tx_quote(symbol):
         try:
-            quotes[symbol] = get_quote(symbol)
+            return symbol, get_quote(symbol)
         except Exception:
             # Same per-symbol resilience as everywhere else: a dead ticker
             # (delisted, Yahoo hiccup) must not sink the whole response.
             # None marks "couldn't quote" — its rows stay facts-only.
-            quotes[symbol] = None
+            return symbol, None
+
+    quotes = {}
+    if unique_symbols:
+        with ThreadPoolExecutor(
+            max_workers=min(len(unique_symbols), 8)
+        ) as pool:
+            for symbol, quote in pool.map(fetch_tx_quote, unique_symbols):
+                quotes[symbol] = quote
 
     # ONE live USDCAD rate per response, fetched only in CAD mode AND only
     # when a quoted USD holding needs it (native mode and CAD-only
