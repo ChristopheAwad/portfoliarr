@@ -793,6 +793,17 @@ function setupTimeframeChart(
     // re-fetching data from the backend.
     let lastLabels = [];
 
+    // ── Frontend chart cache ──────────────────────────────────────────
+    // Avoids redundant network requests when the user toggles back and
+    // forth between timeframes. Keyed by period string, stores the
+    // server response until its TTL expires. TTLs mirror the backend's
+    // _HISTORY_TTL_LIVE / _HISTORY_TTL_SETTLED so the client never
+    // serves data older than the server would.
+    const chartCache = {};
+    const TTL_LIVE_MS = 120_000;     // 1D, 5D — live bars still moving
+    const TTL_SETTLED_MS = 600_000;  // 1M–MAX — settled daily/weekly/monthly bars
+    const LIVE_PERIODS = new Set(["1D", "5D"]);
+
     // ── Price-difference measurement state ────────────────────────────────
     // measureStart / measureEnd hold the two endpoints the user picked
     // (pixel coords + data values). measuring is true while a gesture is
@@ -1279,7 +1290,7 @@ function setupTimeframeChart(
     // redraw. The presentational config was set once at creation and is
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
-    async function refresh(period = defaultPeriod) {
+    async function refresh(period = defaultPeriod, { silent = false } = {}) {
         // Clear any active price-diff measurement — stale points on a new
         // series would be confusing and point to wrong data.
         measureStart = null;
@@ -1288,13 +1299,31 @@ function setupTimeframeChart(
         chart._priceDiffMeasuring = false;
 
         try {
-            const response = await fetch(`${endpoint}?period=${period}`);
-            // fetch does NOT throw on 4xx/5xx — only on network failure. A
-            // 400 (bad period key) arrives with ok === false; the buttons
-            // only ever send valid keys, so this mainly guards against
-            // drift between the two ends.
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json(); // {labels, values}
+            // Check the frontend cache first — if the data is still
+            // within its TTL, use it directly and skip the network round-
+            // trip. This makes back-and-forth timeframe toggling instant.
+            const ttl = LIVE_PERIODS.has(period)
+                ? TTL_LIVE_MS : TTL_SETTLED_MS;
+            const cached = chartCache[period];
+            let data;
+            if (cached && (Date.now() - cached.fetchedAt) < ttl) {
+                data = cached.data;
+            } else {
+                const response = await fetch(`${endpoint}?period=${period}`);
+                // fetch does NOT throw on 4xx/5xx — only on network failure. A
+                // 400 (bad period key) arrives with ok === false; the buttons
+                // only ever send valid keys, so this mainly guards against
+                // drift between the two ends.
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                data = await response.json(); // {labels, values}
+                // Store in cache for future requests of this period.
+                chartCache[period] = { data, fetchedAt: Date.now() };
+            }
+
+            // Silent mode: fetch + cache only, don't repaint the chart.
+            // Used by the pre-fetch loop to warm the cache without
+            // causing the visible chart to jump between timeframes.
+            if (silent) return;
 
             // Green for a gaining period, red for a losing one: compare
             // the FIRST and LAST close. values.at(-1) is the LAST element;

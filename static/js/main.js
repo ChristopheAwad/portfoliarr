@@ -1774,9 +1774,13 @@ const portfolioChartHandle = setupTimeframeChart({
 
 // The boot section below calls this with no argument (the default 5D view);
 // nothing else needs it — button clicks are wired inside the factory.
-function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD) {
+function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD, opts) {
     // If Chart.js never loaded, the handle is null — nothing to paint.
-    if (portfolioChartHandle) portfolioChartHandle.refresh(period);
+    // Return the promise so callers can chain .then() (used by the
+    // pre-fetch loop below to wait for the default chart before firing
+    // off the remaining timeframes). opts forwards {silent: true} for
+    // pre-fetches that should warm the cache without repainting.
+    if (portfolioChartHandle) return portfolioChartHandle.refresh(period, opts);
 }
 
 // When the theme toggles, repaint the chart so grid/line colors pick up
@@ -1809,7 +1813,21 @@ refreshPortfolioSummary();
 // again only when a timeframe button is clicked — unlike the quote-driven
 // sections, price history doesn't change on a 60s cadence, so it would be
 // wasteful (and Yahoo rate-limit-hammering) to poll it too.
-refreshPortfolioChart();
+const chartReady = refreshPortfolioChart();
+
+// Pre-fetch all other timeframes in the background so switching is instant.
+// Fire-and-forget — no UI feedback needed. The frontend cache stores each
+// response for its TTL (120s live, 600s settled), so by the time the user
+// clicks a button, the data is already there. All 8 fire in parallel, and
+// they start only AFTER the default 5D chart has rendered — avoids
+// hammering Yahoo before the user sees their chart. Optional chain guards
+// against Chart.js CDN failure (refreshPortfolioChart returns undefined).
+const ALL_PERIODS = ["1D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+chartReady?.then?.(() => {
+    for (const period of ALL_PERIODS) {
+        refreshPortfolioChart(period, { silent: true });
+    }
+});
 
 // 3. Poll. ONE timer drives all cycles: all four sections' data changes at
 //    the same rate (the summary is quote-driven too — prices move, totals
