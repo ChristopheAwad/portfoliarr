@@ -1,122 +1,64 @@
-# Feature: Chart Price-Difference Tool
+# Feature: PWA Install-to-Homescreen
 
 ## Problem
-The user wants to measure the price difference and percentage gain/loss between any two points on the chart. Desktop uses click-and-drag; mobile uses two-finger touch (one finger per endpoint). This is a standard trading-chart "ruler" feature.
+The user wants the app to be installable as a PWA — an icon on the homescreen that opens the app in standalone mode (no browser chrome). No offline support needed.
 
-## Target State
-- **Desktop:** Click point A → drag to point B → release. A dashed line connects the two points with a floating label showing price difference and % change. Click anywhere else (or start a new drag) to dismiss.
-- **Mobile:** Place finger 1 on chart (Point A) → place finger 2 on chart (Point B). Same dashed line + label appears between the two touch points. Lift fingers to dismiss (or tap elsewhere).
-- The overlay is visible during drag on desktop (live preview). On mobile, it appears once both fingers are down.
-- The tooltip and crosshair are suppressed while measuring.
-- Switching timeframes clears the measurement.
-- Works on both the dashboard portfolio chart AND the stock detail chart (shared factory = automatic).
+## Status: ROOT CAUSE FOUND — implemented, tests green (316/316), awaiting commit approval
+The manifest, icons, meta tags, service worker, and routes were all **correct all along** (verified: icons are real 192×192/512×512 PNGs, `/sw.js` serves 200 with the right MIME type, manifest fields match Chrome's criteria). The bug was never in the code.
 
-## Files to touch
-- `static/js/common.js` — add `priceDiffPlugin` (custom Chart.js plugin), attach canvas touch listeners in `setupTimeframeChart()`, expose `clearMeasurement()` on the returned handle, clear measurement in `refresh()`
-- `static/style.css` — no changes needed (all drawing is canvas-based, matching prevCloseLine pattern)
-- `tests/test_price_diff.py` — new contract tests (string checks, same pattern as test_prev_close.py)
+### The actual root cause: insecure origin on the phone
+The phone reaches the app at `http://<dev-PC-IP>:5000` — plain HTTP over the LAN. Chrome only treats `https://` or `localhost` origins as **secure contexts**, and on an insecure origin it will never install a PWA:
+- No automatic prompt (this is Chrome's non-negotiable rule).
+- "Add to Home screen" degrades to a bookmark shortcut that opens in a regular Chrome tab — exactly the reported symptom.
 
-## Plan
+feature.md's checklist had one wrong checkmark: "✅ Served over HTTPS (localhost counts)" — true only on the dev machine's own browser, false from the phone's perspective.
 
-### 1. Add priceDiffPlugin to `common.js` (below crosshairPlugin, ~line 598)
+### Postmortem of the failed attempts
+- **Attempt 1 (added a service worker):** Chrome **no longer requires a service worker** for installability — the requirement was removed from the official install criteria (web.dev "What does it take to be installable?", updated 2024-09-19). Chasing a removed requirement.
+- **Attempt 2 (served SW from `/sw.js`):** correct hygiene, but irrelevant — no SW is needed, and the SW wasn't the blocker.
+- **Attempt 3 (`"scope": "/"` in manifest):** correct hygiene (the default scope of a manifest in `/static/` would be `/static/`), but the manifest was never the blocker either.
+- Also expected, not a bug: modern Chrome Android no longer shows the automatic mini-infobar; install is menu-only.
 
-A Chart.js plugin with id `"priceDiff"` that:
+Chrome's remaining install criteria: HTTPS (✗ on the phone), manifest fields (all ✅), user engagement (✅ — the site has been used 30s+), not already installed.
 
-**State (closure variables in setupTimeframeChart):**
-- `measureStart` — `{ x, y, dataX, dataY }` or null (the first point)
-- `measureEnd` — `{ x, y, dataX, dataY }` or null (the second point, updated live during drag)
-- `measuring` — boolean flag, true while a measurement is active (suppresses crosshair + tooltip)
+## The plan (approved)
 
-**Hooks:**
-- `beforeEvent(chart, args)` — intercept raw events:
-  - On desktop: listen for `mousedown` → capture `measureStart` (pixel + data coords via `getRelativePosition` + `getValueForPixel`), set `measuring = true`. `mousemove` → update `measureEnd` live, call `chart.draw()` for live preview. `mouseup` → finalize `measureEnd`, set `measuring = false`.
-  - On mobile: listen for `touchstart` on canvas (native, not Chart.js event) → if `e.touches.length >= 2`, grab both touch points, convert to chart coords, set `measureStart` and `measureEnd`, set `measuring = true`. `touchmove` → update both points. `touchend` → if fewer than 2 fingers remain, finalize.
-  - On `click` (desktop, non-drag): clear measurement if `measureStart` is set (dismiss gesture).
-- `afterDatasetsDraw(chart)` — if both points are set, draw the overlay:
-  - Dashed line between the two points (same `setLineDash` pattern as prevCloseLine)
-  - Small filled circles at each endpoint
-  - Background rounded rect at the midpoint containing two lines of text:
-    - Line 1: `±$X.XX` (price difference, formatted with `formatPrice`)
-    - Line 2: `±Y.YY%` (percentage change)
-  - Color: green if positive, red if negative (read `--green-pos` / `--red-neg` from CSS)
-- `beforeTooltipDraw(chart, args)` — if `measuring` is true, cancel the tooltip (set `args.cancel = true` or return early)
+### Phase 1 — Caddy HTTPS sidecar on the server (the real fix)
+- New `Caddyfile` (repo root):
+  ```
+  {$PWA_SITE_ADDRESS:-https://localhost} {
+      tls internal
+      reverse_proxy portfoliarr:5000
+  }
+  ```
+  `tls internal` = Caddy runs its own mini certificate authority. Let's Encrypt cannot work here (no public CA can reach a home LAN), so a locally-issued cert is the LAN answer. Caddy mints an IP-SAN cert for whatever `PWA_SITE_ADDRESS` says.
+- `docker-compose.yml`: add a `caddy` service — pinned image, host port `9968` → 443, Caddyfile mounted read-only, certs persisted in named volumes, `depends_on: portfoliarr`. The existing `9967:5000` HTTP mapping stays for desktop use. The server's LAN IP goes in `PWA_SITE_ADDRESS` (set in a `.env` next to docker-compose.yml on the server), so the repo file stays generic.
+- `tests/test_docker.py`: new meta-tests locking all of the above in both directions. Existing assertions stay untouched.
 
-**Dismiss:**
-- Desktop click (no drag) clears the measurement
-- New `touchstart` with 1 finger clears any existing measurement
-- `refresh()` (period switch) clears the measurement
+### Phase 2 — Code polish (small, tests-first)
+- `app.py`: `/manifest.json` route serving the same file with the proper `application/manifest+json` MIME type (the hygiene item this file's old "investigate next" list floated; Chrome accepts application/json, this is normalization).
+- `base.html`: manifest link → `{{ url_for('manifest') }}`; SW registration gets a `.catch()` so an insecure-origin rejection logs visibly instead of dying silently.
+- `sw.js`: add `/manifest.json` to the shell cache list, bump `CACHE_VERSION` to 2.
 
-### 2. Attach native touch listeners in `setupTimeframeChart()`
+### Phase 3 — Tests first, then implement
+New failing tests in `tests/test_pwa.py` (route status/content-type/body, root link, `.catch`) and `tests/test_docker.py` (Caddy service contracts, Caddyfile contracts). Then implement, then full `python -m pytest` green.
 
-After the Chart is created (line ~995), attach `touchstart`, `touchmove`, `touchend` listeners directly on the canvas element. These listeners feed into the plugin's state (closure variables). The plugin hooks read the state and draw.
+## Verification — CONSTRAINT: user has no desktop access right now
+The planned desktop gate (install icon in desktop Chrome at `http://localhost:5000`) is **deferred**. The phone gate is the GUI gate, and it requires the code to reach the server:
 
-Why native listeners: Chart.js's `beforeEvent` only passes one touch point in the event object. For two-finger gestures, we need the raw `TouchEvent.touches` array.
+1. Tests green → **explicit user yes to commit + push** (phone gate needs it: the server runs the published image, and its checked-out compose files must match).
+2. CI builds the image (first push that actually contains the PWA files — everything so far was uncommitted).
+3. On the server: `git pull`, create `.env` with `PWA_SITE_ADDRESS=https://<server-ip>`, `docker compose pull && docker compose up -d`.
+4. On the phone:
+   - **Delete the old homescreen shortcut first** (old shortcuts stay browser-tab mode forever).
+   - Visit `https://<server-ip>:9968` → one "connection is not private" warning (untrusted self-signed CA — expected) → Advanced → Proceed anyway.
+   - Menu → "Install app" → verify homescreen icon + standalone (no URL bar).
+   - Desktop gate can be re-run later when a desktop is available (same code, nothing server-specific about it).
 
-The listeners are cleaned up when the chart is destroyed (if Chart.js supports `onDestroy` — otherwise they'll be GC'd with the canvas).
+### Known risk + fallback
+Chrome Android normally "mints" real WebAPK installs via a Google server that cannot reach a LAN-only site; when unreachable, Chrome falls back to a locally-created shortcut that should still honor standalone — fairly confident, not certain. If standalone still fails after HTTPS:
+1. `chrome://flags#unsafely-treat-insecure-origin-as-secure` on the phone (30 seconds, also removes the cert warning),
+2. or a real domain via Cloudflare Tunnel / Tailscale for a fully trusted cert.
 
-### 3. Expose `clearMeasurement()` on the returned handle
-
-Add to the return object (line ~1084):
-```js
-clearMeasurement() {
-    measureStart = null;
-    measureEnd = null;
-    measuring = false;
-    chart.draw();
-}
-```
-
-This lets callers programmatically clear the overlay.
-
-### 4. Clear measurement in `refresh()`
-
-At the start of the `refresh()` function (line ~1011), reset measurement state:
-```js
-measureStart = null;
-measureEnd = null;
-measuring = false;
-```
-
-This ensures switching timeframes drops the overlay.
-
-### 5. Suppress crosshair while measuring
-
-In the existing `crosshairPlugin` (line 579), add an early return when `measuring` is true. The crosshair plugin reads from the closure — it can check `measuring` directly since both live in the same `setupTimeframeChart` scope.
-
-### 6. Tests: `tests/test_price_diff.py`
-
-String-check contract tests (same pattern as `test_prev_close.py`):
-
-1. **Plugin exists:** `priceDiffPlugin` or `id: "priceDiff"` is defined in common.js
-2. **Plugin hooks:** `afterDatasetsDraw` hook exists in the priceDiff plugin
-3. **Clear method exposed:** `clearMeasurement` is in the return object of setupTimeframeChart
-4. **Measurement cleared on refresh:** `refresh()` references `measureStart` or resets measurement state
-5. **Crosshair suppressed during measure:** crosshairPlugin checks `measuring` flag
-6. **Touch listeners attached:** `touchstart` listener on canvas in setupTimeframeChart
-7. **formatPrice used in label:** The price-diff label uses `formatPrice` for consistency
-8. **CSS tokens read:** Reads `--green-pos` and `--red-neg` from CSS (not hardcoded colors)
-9. **Dashed line:** Uses `setLineDash` for the measurement line (same pattern as prevCloseLine)
-
-## Data flow
-```
-Desktop:
-  mousedown → measureStart = {pixel, data} → measuring = true
-  mousemove → measureEnd = {pixel, data} → chart.draw() (live preview)
-  mouseup   → measureEnd finalized → measuring = false → chart.draw()
-  click     → clear measurement
-
-Mobile:
-  touchstart(2 fingers) → measureStart + measureEnd from touches[] → measuring = true
-  touchmove              → update both points → chart.draw()
-  touchend(< 2 fingers)  → finalize → measuring = false → chart.draw()
-
-Period switch:
-  refresh() → measureStart = measureEnd = null → measuring = false → chart.update()
-```
-
-## Why this is safe
-- All changes are in `common.js` (shared factory) — no backend changes, no new routes, no DB touches
-- The plugin is chart-local (passed in the `plugins` array at creation) — doesn't leak into other charts
-- Canvas-only drawing — no DOM elements to style or position
-- Follows the exact same pattern as `prevCloseLine` (custom plugin with `afterDraw` + canvas drawing)
-- No new dependencies — just vanilla JS + Chart.js API
+## Tests
+Run: `python -m pytest` from the project root. All existing 301 tests must stay green; new PWA/docker tests added in this feature.

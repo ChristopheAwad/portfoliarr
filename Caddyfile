@@ -1,0 +1,40 @@
+# Caddyfile — HTTPS front door for the Portfoliarr stack.
+# =======================================================
+#
+# WHY CADDY EXISTS HERE:
+# Chrome will only install a site as a PWA from a SECURE CONTEXT — which
+# means https:// or localhost. The home server serves plain HTTP on the
+# LAN, so from the phone's point of view the app can never be installable
+# (no prompt, and "Add to Home screen" creates a browser-tab shortcut).
+# Caddy sits in front of the app and speaks HTTPS, which flips the origin
+# into a secure context.
+#
+# WHY `tls internal` AND NOT LET'S ENCRYPT:
+# A public certificate authority (Let's Encrypt etc.) can only issue
+# certificates it can VERIFY — their challenges require the site to be
+# reachable from the public internet. A home server on a LAN isn't, so a
+# real cert is impossible without buying a domain + tunnel. Instead Caddy
+# runs its OWN tiny certificate authority and issues a locally-signed cert
+# for whatever site address is configured below. Browsers don't trust
+# local CAs, so the phone shows ONE "Your connection is not private"
+# warning on first visit — tap Advanced → Proceed anyway. After that the
+# origin is a secure context and Chrome will offer the real install.
+#
+# THE SITE ADDRESS:
+# {$PWA_SITE_ADDRESS} is read from the container's environment at startup
+# (docker-compose.yml passes it through; the server's .env sets it to the
+# server's LAN IP, e.g. https://192.168.1.50). Caddy then mints the
+# internal certificate for exactly that host — including an IP SAN, which
+# is what makes the phone's address bar warning the ONLY warning (no
+# extra name-mismatch complaint). The :localhost fallback keeps the file
+# valid on machines that never deploy. Give the server a static DHCP
+# lease so its IP (and the cert's SAN) stay stable.
+#
+# Port note: Caddy listens on 443 inside its container; docker-compose.yml
+# maps host 9968 -> container 443. The phone bookmark is therefore
+# https://<server-ip>:9968.
+
+{$PWA_SITE_ADDRESS:-https://localhost} {
+	tls internal
+	reverse_proxy portfoliarr:5000
+}

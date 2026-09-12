@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 # incoming HTTP request's data — we need its JSON body for the add route),
 # and g (per-request scratch storage — the timing hook stashes its start
 # time there).
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request, send_from_directory
 
 # HTTPException is the base class of Flask/werkzeug's OWN errors (404,
 # 405...). The top-level error handler below must let these pass through
@@ -130,6 +130,38 @@ def log_request_duration(response):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/sw.js")
+def service_worker():
+    """Serve the service worker from the root scope. The SW file lives in
+    static/ but must be served from / so its scope covers the whole app —
+    browsers default the SW scope to the directory of the script, and a
+    scope of /static/ can't control pages at /."""
+    return send_from_directory("static", "sw.js",
+                              mimetype="application/javascript")
+
+
+@app.route("/manifest.json")
+def manifest():
+    """Serve the PWA manifest from the root with its spec MIME type.
+
+    The manifest file itself lives in static/manifest.json — this route
+    just republishes it at a cleaner URL. Two reasons the root route is
+    worth having:
+
+      1. The proper Content-Type. send_from_directory would guess
+         application/json from the .json extension; the web app manifest
+         spec (and every PWA checker, like Lighthouse) expects
+         application/manifest+json. Chrome installs either way, but the
+         right type costs nothing and silences the audit warnings.
+      2. A root-level URL removes the last manifest-in-a-subdirectory
+         quirk from the equation: some PWA tooling derives defaults from
+         the manifest's directory, so /manifest.json makes the PWA's
+         "home" unambiguous at the origin root.
+    """
+    return send_from_directory("static", "manifest.json",
+                              mimetype="application/manifest+json")
 
 
 @app.route("/preferences")

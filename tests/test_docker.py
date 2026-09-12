@@ -341,3 +341,126 @@ def test_compose_restarts_on_boot():
     deliberately stopped it (unlike `always`)."""
     compose = _read("docker-compose.yml")
     assert "restart: unless-stopped" in compose
+
+
+# ---------------------------------------------------------------------------
+# Caddyfile + caddy service — the HTTPS front door
+#
+# WHY THIS EXISTS: Chrome only installs PWAs from secure contexts (HTTPS
+# or localhost). The server serves plain HTTP on the LAN, so the phone can
+# never install the app. Caddy sits in front of the app with `tls internal`
+# (its own locally-issued certificate authority — no public CA can reach a
+# home LAN, so Let's Encrypt is impossible here). The phone then gets one
+# "connection is not private" warning (untrusted local CA), taps through
+# once, and the origin becomes a secure context.
+# ---------------------------------------------------------------------------
+
+def test_caddyfile_exists():
+    """The Caddyfile must exist at the repo root (Caddy's convention)."""
+    assert (ROOT / "Caddyfile").exists(), (
+        "Caddyfile is missing — create it at the repo root"
+    )
+
+
+def test_caddyfile_uses_internal_tls():
+    """The cert must come from Caddy's internal CA. A public certificate
+    authority (Let's Encrypt et al.) cannot issue certs for a LAN-only
+    server — the HTTP-01/DNS challenges need public reachability."""
+    caddyfile = _read("Caddyfile")
+    assert "tls internal" in caddyfile, (
+        "Caddyfile must use `tls internal` — no public CA can reach a LAN"
+    )
+
+
+def test_caddyfile_proxies_to_portfoliarr():
+    """Caddy's only job is TLS in front of the app: every request must be
+    reverse-proxied to the portfoliarr service on its in-container port."""
+    caddyfile = _read("Caddyfile")
+    assert "reverse_proxy portfoliarr:5000" in caddyfile, (
+        "Caddyfile must proxy to portfoliarr:5000"
+    )
+
+
+def test_caddyfile_site_address_comes_from_env():
+    """The site address must be an env substitution with a localhost
+    fallback — the server's LAN IP is deployment-specific and must never
+    be hardcoded in the repo. The server sets PWA_SITE_ADDRESS in its own
+    .env (e.g. https://192.168.1.50); the fallback keeps `docker compose
+    config`/lint working on machines that never deploy."""
+    caddyfile = _read("Caddyfile")
+    assert "{$PWA_SITE_ADDRESS" in caddyfile, (
+        "Caddyfile must read the site address from PWA_SITE_ADDRESS"
+    )
+    assert ":-https://localhost}" in caddyfile, (
+        "the env substitution must carry a localhost fallback default"
+    )
+
+
+def test_compose_has_caddy_service():
+    """A caddy service must exist, with a VERSION-PINNED image — the same
+    pinning rule as requirements.txt and the app's base image."""
+    compose = _read("docker-compose.yml")
+    assert "image: caddy:" in compose, (
+        "compose must define a caddy service with a pinned image"
+    )
+
+
+def test_compose_caddy_maps_https_port():
+    """The HTTPS listener must be reachable on the host at 9968 (next to
+    the existing HTTP 9967 mapping, which stays for desktop use)."""
+    compose = _read("docker-compose.yml")
+    assert '"9968:443"' in compose, "compose must map 9968:443 for Caddy"
+
+
+def test_compose_caddy_mounts_caddyfile():
+    """The Caddyfile must be mounted read-only into Caddy's expected
+    location — the config ships with the repo, never baked into an image."""
+    compose = _read("docker-compose.yml")
+    assert "./Caddyfile:/etc/caddy/Caddyfile:ro" in compose, (
+        "compose must mount ./Caddyfile read-only at /etc/caddy/Caddyfile"
+    )
+
+
+def test_compose_caddy_persists_certs():
+    """Caddy's generated certificates must live in named volumes.
+
+    /data holds the internal CA and the certs it issued. Without a volume,
+    every `docker compose up` regenerates them — new cert each boot is
+    churn the phone's trust decisions would have to re-accept."""
+    compose = _read("docker-compose.yml")
+    assert "caddy-data:/data" in compose, (
+        "caddy must persist its cert store in the caddy-data volume"
+    )
+    assert "caddy-config:/config" in compose, (
+        "caddy must persist its saved config in the caddy-config volume"
+    )
+    # Same rule as portfoliarr-data: the volume must be DECLARED at the
+    # top level or Docker never creates it.
+    assert re.search(r"(?m)^  caddy-data:\s*$", compose), (
+        "caddy-data must be declared under the top-level volumes: key"
+    )
+    assert re.search(r"(?m)^  caddy-config:\s*$", compose), (
+        "caddy-config must be declared under the top-level volumes: key"
+    )
+
+
+def test_compose_caddy_sets_site_address_env():
+    """The caddy container must receive PWA_SITE_ADDRESS (with a fallback)
+    so the Caddyfile's env substitution resolves — that variable is what
+    tells Caddy which host to mint the internal cert for."""
+    compose = _read("docker-compose.yml")
+    assert "PWA_SITE_ADDRESS" in compose, (
+        "caddy service must pass PWA_SITE_ADDRESS through to the container"
+    )
+
+
+def test_compose_caddy_depends_on_portfoliarr():
+    """Caddy must not start before the app it proxies — depends_on keeps
+    the compose startup order sane."""
+    compose = _read("docker-compose.yml")
+    assert "depends_on:" in compose, (
+        "the caddy service must declare depends_on"
+    )
+    assert "- portfoliarr" in compose, (
+        "caddy's depends_on must list portfoliarr"
+    )
