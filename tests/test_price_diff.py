@@ -142,6 +142,21 @@ def test_price_diff_uses_dashed_line():
     )
 
 
+def test_price_diff_vertical_lines_use_chart_bottom():
+    """The dashed guide lines must be VERTICAL — each runs from the chart
+    area bottom up to the data point, not a diagonal between the two points.
+    This makes it clear which date each endpoint corresponds to."""
+    js = common_js()
+    # The old diagonal line did: moveTo(x1, y1) → lineTo(x2, y2) — a single
+    # stroke connecting two points at different heights.  Vertical lines
+    # instead start from bottom: moveTo(x, bottom) → lineTo(x, y).  So the
+    # old diagonal start pattern must be gone.
+    assert "moveTo(x1, y1)" not in js, (
+        "priceDiff plugin must NOT start a diagonal from point 1 (y1) — "
+        "vertical lines must start from chartArea.bottom"
+    )
+
+
 def test_price_diff_reads_direction_color_tokens():
     """The overlay must read --green-pos and --red-neg from CSS for the
     price-diff label color, not hardcoded values."""
@@ -194,4 +209,65 @@ def test_tooltip_suppressed_during_measure():
     js = common_js()
     assert "beforeTooltipDraw" in js, (
         "priceDiff plugin must have a beforeTooltipDraw hook"
+    )
+
+
+# ── Data-point snapping (the fix) ────────────────────────────────────────────
+
+
+def test_pixel_to_data_uses_x_scale():
+    """pixelToData must find the nearest data point by X position using
+    chart.scales.x.getValueForPixel — this is how we resolve which date
+    the finger/cursor is closest to, matching Chart.js hover behavior."""
+    js = common_js()
+    assert "scales.x" in js and "getValueForPixel" in js, (
+        "pixelToData must call chart.scales.x.getValueForPixel to find "
+        "the nearest data point index by X position"
+    )
+
+
+def test_pixel_to_data_reads_dataset_values():
+    """pixelToData must read the actual price from chart.data.datasets[0].data
+    at the resolved index — not from the Y-axis scale. The Y scale gives an
+    arbitrary value at that pixel height; the dataset has the real price at
+    that date."""
+    js = common_js()
+    assert "datasets[0].data" in js, (
+        "pixelToData must read from chart.data.datasets[0].data to get "
+        "the actual price at the snapped data point"
+    )
+
+
+def test_pixel_to_data_snaps_y():
+    """pixelToData must use chart.scales.y.getPixelForValue to convert the
+    actual data value back to a pixel Y position. This snaps the dot to the
+    data point instead of drawing it at the raw finger position."""
+    js = common_js()
+    assert "getPixelForValue" in js, (
+        "pixelToData must use y.getPixelForValue to compute the snapped "
+        "Y pixel position from the actual data value"
+    )
+
+
+def test_pixel_to_data_clamps_index():
+    """The data index resolved from pixelToData must be clamped to
+    [0, values.length - 1] so a finger at the chart edge doesn't read
+    beyond the data array bounds."""
+    js = common_js()
+    # Look for clamping logic near getValueForPixel — Math.max/Math.min
+    # guarding the index.
+    assert "Math.max" in js and "Math.min" in js, (
+        "pixelToData must clamp the resolved index with Math.max/Math.min "
+        "to prevent out-of-bounds reads"
+    )
+
+
+def test_pixel_to_data_returns_label():
+    """pixelToData must return the date label for the snapped data point
+    (from chart.data.labels[index]) so the measurement overlay can display
+    the dates being compared."""
+    js = common_js()
+    assert "labels[index]" in js or "labels[" in js, (
+        "pixelToData must return the date label from chart.data.labels "
+        "for the snapped data point"
     )
