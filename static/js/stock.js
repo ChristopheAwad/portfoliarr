@@ -323,12 +323,12 @@ addToWatchlistBtn.addEventListener("click", async () => {
     }
 });
 
-// Log Transaction: the log form lives on the dashboard — ONE form, ONE
+// Log Transaction: the log form lives on the LEDGER page — ONE form, ONE
 // submit handler, the same reuse rule the ledger's edit mode follows. The
-// ?ticker= param is what main.js reads to prefill it, and the #tx-form
+// ?ticker= param is what ledger.js reads to prefill it, and the #tx-form
 // anchor scrolls the browser straight to the form.
 logTxBtn.addEventListener("click", () => {
-    window.location.href = `/?ticker=${encodeURIComponent(symbol)}#tx-form`;
+    window.location.href = `/ledger?ticker=${encodeURIComponent(symbol)}#tx-form`;
 });
 
 // ---------------------------------------------------------------------------

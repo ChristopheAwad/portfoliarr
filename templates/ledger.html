@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+<!-- The ledger page. Everything shared (head, CDN, navbar, search) lives
+     in base.html; only this page's own layout is here. The script include
+     sits in the `scripts` block, which base.html renders AFTER common.js —
+     the shared helpers must exist before this page's code runs.
+
+     Two cards, one story:
+       1. Transactions — every BUY/SELL, with the form that logs/corrects
+          them and the import panel. This whole card MOVED here from the
+          dashboard (it is a records surface, not a live-glance surface);
+          static/js/ledger.js renders it exactly as main.js used to.
+       2. Closed sales — one row per SELL with its realized result in CAD
+          (proceeds vs what the sold shares cost), fed by
+          GET /api/portfolio/realized. -->
+
+{% block title %}Ledger — Portfoliarr{% endblock %}
+
+{% block content %}
+
+        <div class="ledger-page">
+
+            <!-- Transaction Ledger card. Two parts:
+                  1. A form that logs a BUY/SELL — and, in edit mode
+                     (prefilled, ticker locked), corrects an existing
+                     one. The only way rows are born OR changed.
+                  2. A table whose <tbody> ships EMPTY — ledger.js rebuilds
+                     the rows from /api/transactions every cycle, exactly
+                     like the watchlist's <ul>. Facts + live gain/value
+                     are painted by JS; a failed quote gap-fills to "—". -->
+            <div class="card ledger-card">
+                <div class="card-header">
+                    <h3>Transactions</h3>
+                    <div class="card-header-actions">
+                        <!-- Privacy button: click to hide/show ledger
+                             holding values (Qty, Value, Total Gain,
+                             Day Gain). Eye icon swaps to eye-off when
+                             active. Percentage columns stay visible.
+                             State persists in localStorage. -->
+                        <button type="button" class="privacy-btn"
+                                id="hide-ledger-toggle"
+                                title="Hide holding values"
+                                aria-label="Hide holding values"
+                                aria-pressed="false"
+                                data-hidden="false">
+                            <svg class="icon privacy-eye" viewBox="0 0 24 24" width="16" height="16"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" aria-hidden="true">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="icon privacy-eye-off" viewBox="0 0 24 24" width="16" height="16"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" aria-hidden="true">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
+                            </svg>
+                        </button>
+                        <!-- The decorative upload glyph is inline SVG (not a
+                             font or an emoji) so it inherits the button's
+                             color and scales with it; aria-hidden because
+                             the word "Import" already says what it does.
+                             ledger.js only toggles the panel on click — it
+                             never rewrites this button's text, so the icon
+                             survives. (The log form's submit button is
+                             DIFFERENT: ledger.js sets its textContent when
+                             edit mode toggles, which would wipe any child
+                             icon — so that button stays text-only.) -->
+                        <button class="btn-text" id="import-btn" type="button">
+                            <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            Import
+                        </button>
+
+                        <!-- The ledger's display-currency toggle. OFF
+                             (default): the whole ledger reads in CAD.
+                             ON: USD securities flip back to their native
+                             USD (CAD rows are unaffected either way).
+                             ONLY the ledger flips — it sends ?currency=
+                             to /api/transactions and nothing else; the
+                             dashboard's totals and chart are ALWAYS CAD,
+                             computed CAD-always server-side. It lives on
+                             THIS page (not the dashboard's header, where
+                             it used to sit) because the only thing it
+                             controls is the ledger below. Session-only:
+                             every page load starts in CAD again, by
+                             design. -->
+                        <label class="fx-toggle" title="Show USD holdings in their native USD instead of CAD">
+                            <span class="fx-switch">
+                                <input type="checkbox" id="usd-native-toggle">
+                                <span class="fx-knob"></span>
+                            </span>
+                            Show USD in USD
+                        </label>
+
+                    </div>
+                </div>
+
+                <!-- The inline log form. name= attributes are what JS
+                     reads via FormData; required gives free browser-side
+                     validation, while the REAL validation lives in the
+                     backend (400s with named fields) — the browser is
+                     only a first filter. The stock detail page's "Log
+                     Transaction" button deep-links here as
+                     /ledger?ticker=AAPL#tx-form; ledger.js prefills. -->
+                <form id="tx-form" class="tx-form">
+                    <input type="text" name="ticker" placeholder="Ticker"
+                           autocomplete="off" required>
+                    <input type="date" name="date" required>
+                    <input type="number" name="price" placeholder="Price"
+                           step="any" min="0" required>
+                    <input type="number" name="qty" placeholder="Qty"
+                           step="any" min="0" required>
+                    <select name="type">
+                        <option value="BUY">Buy</option>
+                        <option value="SELL">Sell</option>
+                    </select>
+                    <button type="submit">Log</button>
+                </form>
+
+                <!-- Edit-mode notice. The form serves double duty:
+                     log mode (default) and edit mode (prefilled, the
+                     ticker input disabled — identity is not editable).
+                     ledger.js toggles this line, the button text, and a
+                     Cancel click returns to log mode. -->
+                <p class="tx-editing" hidden>
+                    <span class="tx-editing-text"></span>
+                    <button type="button" class="tx-cancel">Cancel</button>
+                </p>
+
+                <!-- Backend error messages (bad date, unknown ticker...)
+                     land here — inline, watchlist-alert style but quiet. -->
+                <p class="tx-error" hidden></p>
+
+                <!-- Import panel. Hidden until the Import button in the
+                     card header toggles it. A textarea, not a file
+                     upload: the paste IS the file at these sizes, and
+                     a textarea needs no multipart handling anywhere.
+                     Format (one per line, tab-separated):
+                         CM<TAB>16 Mar 2026<TAB>132.55<TAB>1.296383
+                     Every row is logged as a BUY — the format has no
+                     side column (documented in the hint below). -->
+                <div id="import-panel" class="import-panel" hidden>
+                    <textarea id="import-text" rows="6"
+                              placeholder="One transaction per line, four tab-separated columns:&#10;CM&#9;16 Mar 2026&#9;132.55&#9;1.296383"></textarea>
+                    <div class="import-actions">
+                        <button type="button" id="import-preview-btn">Preview</button>
+                        <!-- Commit starts hidden: it only appears after
+                             a preview finds at least one valid row —
+                             there is nothing to import otherwise. -->
+                        <button type="button" id="import-commit-btn" hidden>Import</button>
+                        <button type="button" id="import-close-btn" class="btn-quiet">Close</button>
+                    </div>
+                    <p class="import-hint">
+                        Every row is logged as a BUY. Ticker must be Yahoo's form
+                        (CM = NYSE/USD, CM.TO = TSX/CAD). Re-pasting the same rows
+                        creates duplicates — there is no duplicate detection.
+                    </p>
+                    <!-- Preview/commit report lands here: valid rows
+                         listed with their facts, broken rows red with
+                         their reason. Rebuilt by ledger.js every click. -->
+                    <div id="import-report" hidden></div>
+                </div>
+
+                <!-- Responsive scroll wrapper. The ledger has 11
+                     nowrap columns — real readable widths need ~760px,
+                     which no phone has. The CSS gives this div
+                     overflow-x: auto, so the overflow is confined to
+                     HERE: the page never scrolls sideways, the user
+                     swipes within the card instead. The table itself
+                     gets a min-width so its columns squish to mush.
+                     (Pure markup+CSS: ledger.js finds things by class,
+                     so the wrapper changes nothing it does.) -->
+                <div class="table-wrap">
+                    <table class="ledger-table">
+                    <thead>
+                        <tr>
+                            <!-- Every <th> carries a data-col: this row
+                                 is the SINGLE declaration of the
+                                 ledger's columns. ledger.js reads the
+                                 data-cols at boot (that order is what
+                                 both row builders append cells in),
+                                 lets you DRAG a header to reorder the
+                                 columns, and saves the order to
+                                 localStorage. Date/Type/Price are NOT
+                                 sortable: a group (ticker summary row)
+                                 has no single date, type, or price.
+                                 The 7 columns with class sortable ARE
+                                 click-to-sort — ledger.js finds them by
+                                 this hook and reorders the GROUP rows
+                                 only (detail rows stay newest-first).
+                                 tabindex/role make them keyboard
+                                 reachable; aria-sort is set by JS.
+                                 Header text stays PURE TEXT — the sort
+                                 ▲/▼ marker is a separate <span> ledger.js
+                                 adds, and no icons ever go inside a
+                                 <th> (tests read the header text). -->
+                            <th data-col="date">Date</th>
+                            <th data-col="type">Type</th>
+                            <th class="sortable" data-col="ticker"
+                                tabindex="0" role="button"
+                                aria-sort="none">Ticker</th>
+                            <th class="num sortable" data-col="qty"
+                                tabindex="0" role="button"
+                                aria-sort="none">Qty</th>
+                            <th data-col="price">Price</th>
+                            <th class="num sortable" data-col="value"
+                                tabindex="0" role="button"
+                                aria-sort="none">Value</th>
+                            <th class="num sortable" data-col="total_gain"
+                                tabindex="0" role="button"
+                                aria-sort="none">Total Gain</th>
+                            <th class="num sortable"
+                                data-col="total_gain_pct"
+                                tabindex="0" role="button"
+                                aria-sort="none">Total Gain %</th>
+                            <th class="num sortable" data-col="day_gain"
+                                tabindex="0" role="button"
+                                aria-sort="none">Day Gain</th>
+                            <th class="num sortable" data-col="day_gain_pct"
+                                tabindex="0" role="button"
+                                aria-sort="none">Day Gain %</th>
+                            <!-- Blank header over the trailing actions
+                                 column (edit/delete buttons, painted by
+                                 JS on detail rows only). Pinned last by
+                                 the drag logic — never draggable, never
+                                 a drop target. -->
+                            <th class="actions" data-col="actions"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="ledger-body">
+                        <!-- ledger.js fills this: one <tr
+                             class="ledger-group"> per ticker (collapsed
+                             summary — click to expand) followed by that
+                             ticker's hidden <tr class="ledger-row
+                             tx-detail"> transaction rows, each with
+                             edit/delete buttons, or a single empty-state
+                             row. -->
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <!-- Closed sales card. One row per SELL with its realized
+                 result in CAD: proceeds vs what the sold shares actually
+                 cost (average-cost basis), the number the ledger's
+                 per-row gain can never give you — that one compares to
+                 YESTERDAY'S close, which is market noise, not
+                 performance. The header total is the portfolio's
+                 realized-to-date sum; it shows "—" rather than a partial
+                 sum when any row's CAD math is unknowable (a missing
+                 fx_rate anywhere in that position's history — hover the
+                 row's "—" for the reason). Native facts stay native
+                 (Avg cost / Sell price in the security's own currency,
+                 the ledger's price convention); only Realized is CAD. -->
+            <div class="card closed-sales-card">
+                <div class="card-header">
+                    <h3>Closed sales</h3>
+                    <span class="closed-sales-total">
+                        Realized to date:
+                        <span id="realized-total"></span>
+                    </span>
+                </div>
+                <div class="table-wrap">
+                    <table class="closed-sales-table">
+                        <thead>
+                            <tr>
+                                <!-- data-cs-col hooks mirror the ledger's
+                                     data-col pattern: the SINGLE
+                                     declaration of this table's columns,
+                                     which ledger.js appends cells in.
+                                     No sorting here (yet): rows ship
+                                     newest-first from the backend. -->
+                                <th data-cs-col="ticker">Ticker</th>
+                                <th data-cs-col="name">Name</th>
+                                <th data-cs-col="sold">Sold</th>
+                                <th class="num" data-cs-col="qty">Qty</th>
+                                <th class="num" data-cs-col="avg_cost">Avg cost</th>
+                                <th class="num" data-cs-col="sell_price">Sell price</th>
+                                <th class="num" data-cs-col="realized">Realized</th>
+                                <th class="num" data-cs-col="realized_pct">Return %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="closed-sales-body">
+                            <!-- ledger.js fills this: one
+                                 <tr class="closed-sales-row"> per SELL
+                                 transaction (newest first), or a single
+                                 empty-state row. -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/ledger.js') }}"></script>
+{% endblock %}

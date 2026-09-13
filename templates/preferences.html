@@ -46,6 +46,26 @@
                         </select>
                     </div>
                 </div>
+
+                <!-- Show closed positions. OFF (default): tickers you hold
+                     zero shares of (bought out entirely) are hidden from
+                     the ledger's group list, so traded-out positions stop
+                     crowding the "what do I hold" view. ON: they're back.
+                     NOTHING is deleted either way — the stored transactions
+                     are the cost basis the Closed sales math replays, so
+                     this is presentation-only, persisted as
+                     "showClosedPositions" ("true"/"false") and read by
+                     ledger.js on every render (applies within one 60s
+                     poll, no reload needed). -->
+                <div class="pref-row">
+                    <label class="pref-label" for="pref-show-closed">Show closed positions</label>
+                    <label class="fx-toggle" title="Keep fully-sold positions visible in the ledger">
+                        <span class="fx-switch">
+                            <input type="checkbox" id="pref-show-closed">
+                            <span class="fx-knob"></span>
+                        </span>
+                    </label>
+                </div>
             </div>
         </div>
 

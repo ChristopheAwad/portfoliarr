@@ -2,15 +2,18 @@
 # ==============================
 # The ledger column count (11, incl. the actions column) lives in FOUR
 # places that must stay in sync:
-#   1. <th> row in templates/index.html (the source of truth)
-#   2. setLedgerMessage's colSpan in static/js/main.js
-#   3. buildGroupRow's cells object in static/js/main.js
-#   4. buildTxRow's cells object in static/js/main.js
+#   1. <th> row in templates/ledger.html (the source of truth)
+#   2. setLedgerMessage's colSpan in static/js/ledger.js
+#   3. buildGroupRow's cells object in static/js/ledger.js
+#   4. buildTxRow's cells object in static/js/ledger.js
 #
 # If a developer adds or removes a column in the template but forgets
 # one of the other three, cells silently misalign — the eye is the only
 # test. These string-check tests (same pattern as test_price_diff.py and
 # test_prev_close.py) read the source files and enforce the contract.
+#
+# (Paths point at ledger.html/ledger.js since the ledger moved off the
+# dashboard onto its own page — the contract moved with it.)
 
 import re
 from pathlib import Path
@@ -19,8 +22,8 @@ import pytest
 
 # ── Paths ─────────────────────────────────────────────────────────────
 
-JS_PATH = Path("static/js/main.js")
-HTML_PATH = Path("templates/index.html")
+JS_PATH = Path("static/js/ledger.js")
+HTML_PATH = Path("templates/ledger.html")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -89,7 +92,7 @@ def test_build_group_row_has_11_cell_keys():
     <th> column. Fewer = missing cell; more = phantom column."""
     js = _read_js()
     keys = _cell_keys_in_function(js, 'buildGroupRow')
-    assert keys is not None, "buildGroupRow not found in main.js"
+    assert keys is not None, "buildGroupRow not found in ledger.js"
     assert len(keys) == 11
 
 
@@ -98,7 +101,7 @@ def test_build_tx_row_has_11_cell_keys():
     as buildGroupRow. The two builders MUST order cells identically."""
     js = _read_js()
     keys = _cell_keys_in_function(js, 'buildTxRow')
-    assert keys is not None, "buildTxRow not found in main.js"
+    assert keys is not None, "buildTxRow not found in ledger.js"
     assert len(keys) == 11
 
 

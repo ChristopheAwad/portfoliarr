@@ -93,12 +93,20 @@ DASHBOARD_HOOK_IDS = [
     # portfolio header card + chart
     "portfolio-value", "portfolio-day-change", "portfolio-total-return",
     "portfolioChart",
-    # ledger card: form, toggles, import machinery, table body
-    "tx-form", "usd-native-toggle", "hide-portfolio-toggle",
-    "hide-ledger-toggle", "ledger-body",
-    "import-btn", "import-panel", "import-text", "import-report",
+    # privacy eye (the portfolio one — the ledger's moved with the card)
+    "hide-portfolio-toggle",
     # watchlist
     "add-ticker-btn",
+]
+
+LEDGER_HOOK_IDS = [
+    # The ledger card moved to /ledger; its ids moved with it, and
+    # ledger.js's hooks must render there. (The tx form's usd-native
+    # toggle is the ledger's display-currency switch, not the portfolio's.)
+    "tx-form", "usd-native-toggle", "hide-ledger-toggle", "ledger-body",
+    "import-btn", "import-panel", "import-text", "import-report",
+    # the closed-sales table
+    "closed-sales-body", "realized-total",
 ]
 
 STOCK_HOOK_IDS = [
@@ -118,6 +126,14 @@ def test_dashboard_js_hooks_present(client):
     html = client.get("/").get_data(as_text=True)
     missing = [i for i in DASHBOARD_HOOK_IDS if f'id="{i}"' not in html]
     assert missing == [], f"dashboard lost JS hook ids: {missing}"
+
+
+def test_ledger_js_hooks_present(client):
+    """Same hook lock for the ledger page's script (ledger.js) — the
+    ledger's ids must render on /ledger after the move off the dashboard."""
+    html = client.get("/ledger").get_data(as_text=True)
+    missing = [i for i in LEDGER_HOOK_IDS if f'id="{i}"' not in html]
+    assert missing == [], f"ledger page lost JS hook ids: {missing}"
 
 
 def test_stock_js_hooks_present(client):

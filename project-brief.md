@@ -2,7 +2,7 @@
 
 ## What
 
-Personal stock/ETF portfolio tracker. You search for securities by ticker, log buy/sell transactions, and see your holdings' current value, unrealized P/L, a portfolio-value-over-time chart, and an allocation breakdown. Also includes a watchlist for securities you're not holding yet.
+Personal stock/ETF portfolio tracker. You search for securities by ticker, log buy/sell transactions, and see your holdings' current value, unrealized P/L, a portfolio-value-over-time chart, and an allocation breakdown. Selling records the realized result of each sale (a Closed sales table on the ledger page: proceeds vs average-cost basis, in CAD). Also includes a watchlist for securities you're not holding yet.
 
 No news, no AI, no social features.
 
@@ -19,7 +19,7 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 | Database | [SQLite](https://www.sqlite.org/) — transaction ledger + short-lived price cache |
 | Price feed | [yfinance](https://github.com/ranaroussi/yfinance) |
 
-## UI Layout (Two Pages)
+## UI Layout (Three Pages)
 
 ### `/` — Portfolio Dashboard
 
@@ -29,6 +29,12 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - Allocation donut chart (% weight per holding)
 - Watchlist sidebar with add/remove
 - Search bar for ticker lookup
+
+### `/ledger` — Ledger
+
+- Transaction ledger (buy and sell events, grouping, sorting, editing, paste import) — moved off the dashboard, which stays the live-glance view
+- Closed sales table: one row per SELL with its realized result in CAD (avg cost vs sell price, realized $ and %), plus a realized-to-date total
+- The "Show USD in USD" display toggle (it only ever affected the ledger)
 
 ### `/stock/<symbol>` — Stock Detail
 
@@ -62,6 +68,20 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   price, qty, currency, buy/sell type). Anything market-dependent — total
   value, gain $/% — is computed at display time from live quotes, never
   stored: stored copies would freeze stale the moment they were written.
+- **Realized gains are an average-cost replay of stored facts, computed
+  on read.** `GET /api/portfolio/realized` folds the ledger oldest-first
+  per ticker (buys grow the pool, each sell realizes
+  `covered × (sell_price × stored fx − avg CAD cost)`); nothing is
+  stored, so correcting an old buy rewrites realized history honestly.
+  Every rate is a FROZEN FACT (each leg's own `fx_rate`), the endpoint
+  makes zero network calls, and a realized gain can never go stale.
+  Average cost (not FIFO) to match the ledger's Avg Cost column and the
+  Canadian ACB convention. Rows degrade to null CAD fields when a leg's
+  fx is missing or the currency is unsupported — never a fake 1:1 — and
+  `total_realized` goes null if any row degraded. Short-symmetric: an
+  oversell opens a short at the sell price; a covering buy books its
+  gain into the total (no row carries it — rows ⊂ total is documented).
+  Full rationale in the endpoint's comment block in `app.py`.
 - **The portfolio's display currency is CAD.** The summary strip, the
   value chart, and the ledger convert USD amounts at Yahoo's `USDCAD=X`
   rate; the watchlist, index chips, and stock detail page stay native.
