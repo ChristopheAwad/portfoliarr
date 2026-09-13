@@ -105,12 +105,14 @@
                 </svg>
                 <span>Portfoli<span class="logo-accent">arr</span></span>
             </a>
-            <!-- Primary nav. The dashboard is the logo's destination
-                 ("home"); /ledger needs its own link. It lives HERE — in
-                 the shared shell — so every page that extends base.html
-                 gets it for free and there is exactly one place to
-                 change it (the same one-copy rule as the navbar itself). -->
+            <!-- Primary nav. Both destinations live HERE — in the shared
+                 shell — so every page that extends base.html gets them
+                 for free and there is exactly one place to change them
+                 (the same one-copy rule as the navbar itself). The logo
+                 also links home; the explicit "Dashboard" text link makes
+                 the back-navigation obvious from any page. -->
             <nav class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">Dashboard</a>
                 <a href="{{ url_for('ledger_page') }}" class="nav-link">Ledger</a>
             </nav>
         </div>
