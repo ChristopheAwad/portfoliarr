@@ -182,6 +182,7 @@ body {
     display: flex;
     justify-content: space-around;
     height: 56px;
+    padding-bottom: env(safe-area-inset-bottom, 0);
     background: var(--card-bg);
     border-top: 1px solid var(--border-color);
     z-index: 100;
@@ -203,6 +204,12 @@ body {
 }
 
 .bottom-tab:hover { color: var(--text-primary); }
+
+.bottom-tab:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
 
 .bottom-tab.active {
     color: var(--green-pos);
