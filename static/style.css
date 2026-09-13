@@ -667,15 +667,6 @@ a.logo { text-decoration: none; }
     display: none;
 }
 
-.privacy-mask {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 1px;
-}
-
 .stock-price-container {
     margin: 12px 0 20px 0;
 }
@@ -711,14 +702,13 @@ a.logo { text-decoration: none; }
 .price-change.pos { background-color: var(--green-bg); }
 .price-change.neg { background-color: var(--red-bg); }
 
-/* Privacy-masked price change pills: when values are hidden, the **** text
-   replaces real data. This rule preserves the pill's visual height so the
-   row doesn't collapse — matching the 14px font + 2×2px padding. */
-.price-change.privacy-masked {
-    min-height: 22px;
-    display: inline-flex;
-    align-items: center;
-}
+/* NOTE: there is deliberately NO CSS rule for the masked (****) pill.
+   Its box geometry is owned entirely by main.js's inline min-width/
+   min-height locks — inline styles beat any stylesheet rule — and the
+   privacy-masked class is stripped in the same turn the locks release,
+   so a rule here would never apply and would only mislead readers into
+   trusting CSS that does nothing. The class survives in main.js as a
+   semantic marker; the pos/neg rules above handle the unmasked pills. */
 
 /* Chart Canvas Area. A fixed height (so the card layout is stable) and
    position: relative, which gives Chart.js a positioned ancestor to

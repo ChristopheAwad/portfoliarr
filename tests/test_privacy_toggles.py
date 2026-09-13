@@ -93,11 +93,16 @@ def test_privacy_buttons_have_privacy_btn_class():
 
 def test_privacy_buttons_have_data_hidden():
     """Both privacy buttons must start with data-hidden="false" (visible
-    by default), which main.js toggles to "true" on click."""
+    by default), which main.js toggles to "true" on click. Checked
+    per-button: one button drifting to "true" must fail this test, not
+    hide behind the other button's correct attribute."""
     html = _read_html()
-    assert 'id="hide-portfolio-toggle"' in html
-    assert 'data-hidden="false"' in html, \
-        "privacy buttons must start with data-hidden=false"
+    for button_id in ("hide-portfolio-toggle", "hide-ledger-toggle"):
+        start = html.find(f'id="{button_id}"')
+        assert start != -1, f"{button_id} not found in index.html"
+        chunk = html[start:start + 400]
+        assert 'data-hidden="false"' in chunk, \
+            f"{button_id} must start with data-hidden=false"
 
 
 def test_portfolio_button_in_stock_title():
@@ -258,19 +263,32 @@ def test_js_has_apply_portfolio_privacy_function():
 
 
 def test_js_masks_qty_in_ledger_when_hidden():
-    """main.js's buildGroupRow and buildTxRow must mask the Qty cell with
-    asterisks when the ledger privacy button is in hidden state."""
+    """main.js's buildTxRow AND buildGroupRow must BOTH mask the Qty cell
+    with asterisks when the ledger privacy button is hidden. A bare `in`
+    check passes if either builder's mask block is deleted, so this counts
+    the assignment — exactly one per builder."""
     js = _read_js()
-    assert 'qtyCell.textContent = "****"' in js, \
-        "main.js builders must mask qtyCell with asterisks"
+    assert js.count('qtyCell.textContent = "****"') == 2, \
+        "both buildTxRow and buildGroupRow must mask qtyCell with asterisks"
 
 
 def test_js_masks_ledger_values_when_hidden():
-    """main.js's buildGroupRow and buildTxRow must check the ledger privacy
-    button and mask Value, Total Gain, Day Gain cells with asterisks."""
+    """main.js's buildTxRow AND buildGroupRow must BOTH gate their mask
+    block on the ledger toggle state and mask Value, Total Gain and Day
+    Gain cells (plus strip pos/neg). The original version of this test
+    only asserted the string 'hideLedgerToggle' existed anywhere in
+    main.js — it would have passed even if both mask blocks were emptied
+    out."""
     js = _read_js()
-    assert 'hideLedgerToggle' in js, \
-        "main.js builders must reference hideLedgerToggle"
+    for fn in ("function buildTxRow(", "function buildGroupRow("):
+        body = _function_body(js, fn)
+        assert 'hideLedgerToggle.dataset.hidden === "true"' in body, \
+            f"{fn}...) must gate its mask block on the ledger toggle state"
+        for cell in ("qtyCell", "valueCell", "gainCell", "dayGainCell"):
+            assert f'{cell}.textContent = "****"' in body, \
+                f"{fn}...) must mask {cell} with asterisks"
+        assert 'gainCell.classList.remove("pos", "neg")' in body, \
+            f"{fn}...) must strip pos/neg from the masked gain cells"
 
 
 # ── CSS tests ─────────────────────────────────────────────────────────
@@ -352,20 +370,22 @@ def test_css_mobile_flex_wrap():
         "@media (max-width: 600px) must include .card-header-actions flex-wrap: wrap"
 
 
-def test_css_has_privacy_masked_class():
-    """style.css must define .price-change.privacy-masked to preserve the
-    pill's visual height when values are masked with asterisks, preventing
-    layout shift."""
+def test_css_has_no_dead_mask_rules():
+    """style.css must NOT define .privacy-mask or .price-change.privacy-masked.
+    Both were dead code: the JS only ever applies `privacy-masked`, and the
+    mask's box geometry is owned by main.js's inline min-width/min-height
+    locks (inline styles beat any stylesheet rule, and the class is
+    stripped in the same turn the locks release) — so those rules never
+    visually applied and only misled readers into trusting CSS that does
+    nothing. The privacy-masked CLASS survives in main.js as a semantic
+    marker and the **** strings live in the JS masked branches."""
     css = _read_css()
-    assert '.price-change.privacy-masked' in css, \
-        "style.css must define .price-change.privacy-masked rule"
-    # Find the rule and check it has min-height to prevent collapse
-    start = css.find('.price-change.privacy-masked')
-    assert start != -1
-    end = css.find('}', start)
-    rule = css[start:end]
-    assert 'min-height' in rule, \
-        ".price-change.privacy-masked must set min-height to prevent collapse"
+    assert '.privacy-mask {' not in css, \
+        ".privacy-mask applies to nothing (JS uses privacy-masked) — dead rule"
+    assert '.price-change.privacy-masked' not in css, \
+        "the masked pill's geometry is owned by main.js's inline locks, not CSS"
+    assert 'privacy-masked' in _read_js(), \
+        "main.js must keep setting/stripping privacy-masked as a marker"
 
 
 def test_js_uses_privacy_masked_class():
@@ -376,14 +396,15 @@ def test_js_uses_privacy_masked_class():
         "main.js must reference privacy-masked class"
 
 
-def test_css_has_asterisk_mask_style():
-    """style.css must define the asterisk masking display for hidden values."""
-    css = _read_css()
-    has_mask = ('privacy-masked' in css or
-                '****' in css or
-                'privacy-mask' in css)
-    assert has_mask, \
-        "style.css must define asterisk masking for hidden values"
+def test_asterisk_masks_painted_in_js():
+    """The **** mask itself lives in main.js — textContent assignments in
+    the masked branches — not in CSS. This locks that the asterisk strings
+    exist where the masking actually happens (the ledger cells are covered
+    per-builder by test_js_masks_ledger_values_when_hidden; this is the
+    portfolio-header counterpart)."""
+    js = _read_js()
+    assert '"****"' in js, \
+        "main.js must paint asterisk masks in the masked branches"
 
 
 # ── Bugfix locks (GUI-verified 2026-09-13) ────────────────────────────

@@ -371,12 +371,17 @@ if (hidePortfolioToggle) {
     hidePortfolioToggle.dataset.hidden = hidden;
     hidePortfolioToggle.title = hidden
         ? "Show portfolio values" : "Hide portfolio values";
+    // Keep screen-reader state in sync with the persisted toggle state.
+    hidePortfolioToggle.setAttribute("aria-label", hidePortfolioToggle.title);
+    hidePortfolioToggle.setAttribute("aria-pressed", String(hidden));
 }
 if (hideLedgerToggle) {
     const hidden = localStorage.getItem("hideLedger") === "true";
     hideLedgerToggle.dataset.hidden = hidden;
     hideLedgerToggle.title = hidden
         ? "Show holding values" : "Hide holding values";
+    hideLedgerToggle.setAttribute("aria-label", hideLedgerToggle.title);
+    hideLedgerToggle.setAttribute("aria-pressed", String(hidden));
 }
 
 function ledgerCurrencyParam() {
@@ -1861,6 +1866,11 @@ if (hidePortfolioToggle) {
         hidePortfolioToggle.dataset.hidden = !hidden;
         hidePortfolioToggle.title = hidden
             ? "Hide portfolio values" : "Show portfolio values";
+        // Screen-reader state: aria-label mirrors the title (icon-only
+        // button — the accessible name IS the button), aria-pressed
+        // reports the toggle state ("pressed" = values are hidden).
+        hidePortfolioToggle.setAttribute("aria-label", hidePortfolioToggle.title);
+        hidePortfolioToggle.setAttribute("aria-pressed", String(!hidden));
         localStorage.setItem("hidePortfolio", !hidden);
         applyPortfolioPrivacy();
     });
@@ -1871,9 +1881,19 @@ if (hideLedgerToggle) {
         hideLedgerToggle.dataset.hidden = !hidden;
         hideLedgerToggle.title = hidden
             ? "Hide holding values" : "Show holding values";
+        // Same screen-reader state sync as the portfolio button.
+        hideLedgerToggle.setAttribute("aria-label", hideLedgerToggle.title);
+        hideLedgerToggle.setAttribute("aria-pressed", String(!hidden));
         localStorage.setItem("hideLedger", !hidden);
         // Re-render the ledger with current data to apply/remove masks.
-        renderLedger(lastTransactions);
+        // Only when data exists: a failed ledger fetch leaves
+        // lastTransactions empty, and re-rendering would overwrite the
+        // honest "Ledger unavailable" message with "No transactions yet"
+        // — a lie about WHY the table is empty. Either state self-
+        // corrects on the next poll.
+        if (lastTransactions.length) {
+            renderLedger(lastTransactions);
+        }
     });
 }
 

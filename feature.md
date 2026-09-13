@@ -48,7 +48,7 @@ Revert the commit. Touches only `templates/index.html`, `static/style.css`,
 `tests/test_privacy_toggles.py`, `tests/test_ui_revamp.py`, `feature.md`.
 
 ## Verification
-- 34 string-check locks in `tests/test_privacy_toggles.py`; full suite
+- 33 string-check locks in `tests/test_privacy_toggles.py`; full suite
   **340 passed**.
 - GUI confirmed by user: eye visible both themes × both states; no layout
   shift on mask; mask survives the poll; instant, jump-free unmask.
