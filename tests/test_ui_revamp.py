@@ -93,8 +93,9 @@ DASHBOARD_HOOK_IDS = [
     # portfolio header card + chart
     "portfolio-value", "portfolio-day-change", "portfolio-total-return",
     "portfolioChart",
-    # ledger card: form, toggle, import machinery, table body
-    "tx-form", "usd-native-toggle", "ledger-body",
+    # ledger card: form, toggles, import machinery, table body
+    "tx-form", "usd-native-toggle", "hide-portfolio-toggle",
+    "hide-ledger-toggle", "ledger-body",
     "import-btn", "import-panel", "import-text", "import-report",
     # watchlist
     "add-ticker-btn",
