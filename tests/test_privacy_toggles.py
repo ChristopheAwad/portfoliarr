@@ -17,10 +17,19 @@ from pathlib import Path
 import pytest
 
 # ── Paths ─────────────────────────────────────────────────────────────
+#
+# TWO HTML FILES, TWO JS FILES since the ledger moved to /ledger: the
+# portfolio eye lives on the dashboard (index.html + main.js), the
+# ledger eye lives on the ledger page (ledger.html + ledger.js). Every
+# assertion below checks the file that OWNS the button — an assertion
+# against the wrong file would pass vacuously (the button is simply
+# absent there) or fail spuriously.
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 HTML_PATH = PROJECT_ROOT / "templates" / "index.html"
+LEDGER_HTML_PATH = PROJECT_ROOT / "templates" / "ledger.html"
 JS_PATH = PROJECT_ROOT / "static" / "js" / "main.js"
+LEDGER_JS_PATH = PROJECT_ROOT / "static" / "js" / "ledger.js"
 CSS_PATH = PROJECT_ROOT / "static" / "style.css"
 
 
@@ -29,8 +38,14 @@ CSS_PATH = PROJECT_ROOT / "static" / "style.css"
 def _read_html():
     return HTML_PATH.read_text()
 
+def _read_ledger_html():
+    return LEDGER_HTML_PATH.read_text()
+
 def _read_js():
     return JS_PATH.read_text()
+
+def _read_ledger_js():
+    return LEDGER_JS_PATH.read_text()
 
 def _read_css():
     return CSS_PATH.read_text()
@@ -47,55 +62,58 @@ def test_hide_portfolio_button_exists():
 
 
 def test_hide_ledger_button_exists():
-    """The ledger privacy button must exist in the dashboard HTML with
-    the correct ID so main.js can find it and wire up the click handler."""
-    html = _read_html()
+    """The ledger privacy button must exist in the LEDGER PAGE's HTML
+    with the correct ID so ledger.js can find it and wire up the click
+    handler. (It moved off the dashboard with the ledger card.)"""
+    html = _read_ledger_html()
     assert 'id="hide-ledger-toggle"' in html, \
-        "hide-ledger-toggle button not found in index.html"
+        "hide-ledger-toggle button not found in ledger.html"
 
 
 def test_privacy_buttons_are_button_elements():
     """Both privacy controls must be <button> elements (not <label> or
-    <input>), matching the show-password eye button pattern."""
-    html = _read_html()
-    # Find the portfolio button
+    <input>), matching the show-password eye button pattern — each in
+    the file that ships it."""
+    portfolio_html = _read_html()
+    ledger_html = _read_ledger_html()
     portfolio_match = re.search(
         r'<button[^>]*id="hide-portfolio-toggle"[^>]*>',
-        html
+        portfolio_html
     )
     assert portfolio_match, "hide-portfolio-toggle must be a <button> element"
-    # Find the ledger button
     ledger_match = re.search(
         r'<button[^>]*id="hide-ledger-toggle"[^>]*>',
-        html
+        ledger_html
     )
     assert ledger_match, "hide-ledger-toggle must be a <button> element"
 
 
 def test_privacy_buttons_have_privacy_btn_class():
     """Both privacy buttons must have the .privacy-btn class for styling."""
-    html = _read_html()
     portfolio_match = re.search(
         r'<button[^>]*class="[^"]*privacy-btn[^"]*"[^>]*id="hide-portfolio-toggle"',
-        html
+        _read_html()
     )
     assert portfolio_match, "portfolio button must have .privacy-btn class"
     ledger_match = re.search(
         r'<button[^>]*class="[^"]*privacy-btn[^"]*"[^>]*id="hide-ledger-toggle"',
-        html
+        _read_ledger_html()
     )
     assert ledger_match, "ledger button must have .privacy-btn class"
 
 
 def test_privacy_buttons_have_data_hidden():
     """Both privacy buttons must start with data-hidden="false" (visible
-    by default), which main.js toggles to "true" on click. Checked
-    per-button: one button drifting to "true" must fail this test, not
-    hide behind the other button's correct attribute."""
-    html = _read_html()
-    for button_id in ("hide-portfolio-toggle", "hide-ledger-toggle"):
+    by default), which the page's JS toggles to "true" on click. Checked
+    per-button, per-file: one button drifting to "true" must fail this
+    test, not hide behind the other button's correct attribute."""
+    for read_html, button_id in (
+        (_read_html, "hide-portfolio-toggle"),
+        (_read_ledger_html, "hide-ledger-toggle"),
+    ):
+        html = read_html()
         start = html.find(f'id="{button_id}"')
-        assert start != -1, f"{button_id} not found in index.html"
+        assert start != -1, f"{button_id} not found"
         chunk = html[start:start + 400]
         assert 'data-hidden="false"' in chunk, \
             f"{button_id} must start with data-hidden=false"
@@ -117,8 +135,9 @@ def test_portfolio_button_in_stock_title():
 
 def test_ledger_button_in_card_header_actions():
     """The ledger privacy button must sit inside the .card-header-actions
-    div (the ledger header area), next to the Import button."""
-    html = _read_html()
+    div (the ledger header area), next to the Import button — checked in
+    the LEDGER PAGE's HTML, where the card now lives."""
+    html = _read_ledger_html()
     ledger_card_start = html.find('class="card ledger-card"')
     assert ledger_card_start != -1, "ledger card not found"
     card_header_start = html.find('class="card-header-actions"', ledger_card_start)
@@ -144,22 +163,23 @@ def test_ledger_button_in_card_header_actions():
 
 def test_privacy_buttons_use_eye_icon():
     """Both privacy buttons must display an eye icon (inline SVG) as their
-    default visible state, plus an eye-off icon for the hidden state."""
-    html = _read_html()
+    default visible state, plus an eye-off icon for the hidden state —
+    each read from the file that ships the button."""
     eye_path = "M1 12s4-8 11-8"
     eye_off_path = "M17.94 17.94"
-    # Portfolio button
-    portfolio_start = html.find('id="hide-portfolio-toggle"')
+    # Portfolio button (dashboard HTML)
+    portfolio_start = _read_html().find('id="hide-portfolio-toggle"')
     assert portfolio_start != -1, "portfolio button not found"
-    portfolio_chunk = html[portfolio_start:portfolio_start + 1200]
+    portfolio_chunk = _read_html()[portfolio_start:portfolio_start + 1200]
     assert eye_path in portfolio_chunk, \
         "portfolio button must contain eye icon SVG"
     assert eye_off_path in portfolio_chunk, \
         "portfolio button must contain eye-off icon SVG"
-    # Ledger button
-    ledger_start = html.find('id="hide-ledger-toggle"')
+    # Ledger button (ledger page HTML)
+    ledger_html = _read_ledger_html()
+    ledger_start = ledger_html.find('id="hide-ledger-toggle"')
     assert ledger_start != -1, "ledger button not found"
-    ledger_chunk = html[ledger_start:ledger_start + 1200]
+    ledger_chunk = ledger_html[ledger_start:ledger_start + 1200]
     assert eye_path in ledger_chunk, \
         "ledger button must contain eye icon SVG"
     assert eye_off_path in ledger_chunk, \
@@ -169,10 +189,10 @@ def test_privacy_buttons_use_eye_icon():
 # ── JS tests ──────────────────────────────────────────────────────────
 
 # (No common.js ICONS tests here: the privacy buttons draw their eye icons
-# as inline SVGs in index.html — locked by test_privacy_buttons_use_eye_icon.
-# ICONS.eye / ICONS["eye-off"] briefly existed in common.js but had no call
-# site — dead code with misleading comments, removed in the same review
-# round that caught it.)
+# as inline SVGs in their pages' HTML — locked by
+# test_privacy_buttons_use_eye_icon. ICONS.eye / ICONS["eye-off"] briefly
+# existed in common.js but had no call site — dead code with misleading
+# comments, removed in the same review round that caught it.)
 
 
 def test_js_references_hide_portfolio_toggle():
@@ -183,62 +203,76 @@ def test_js_references_hide_portfolio_toggle():
 
 
 def test_js_references_hide_ledger_toggle():
-    """main.js must reference the hide-ledger-toggle element by ID."""
-    js = _read_js()
+    """ledger.js must reference the hide-ledger-toggle element by ID —
+    the ledger eye's wiring moved to the ledger page's script."""
+    js = _read_ledger_js()
     assert 'hide-ledger-toggle' in js, \
-        "main.js must reference hide-ledger-toggle"
+        "ledger.js must reference hide-ledger-toggle"
 
 
 def test_js_reads_localStorage_for_privacy_state():
-    """main.js must read from localStorage to restore privacy button state
-    across page refreshes — the feature's core persistence contract."""
+    """Each page's script must read from localStorage to restore privacy
+    button state across page refreshes — the feature's core persistence
+    contract, checked per file: main.js owns hidePortfolio, ledger.js
+    owns hideLedger."""
     js = _read_js()
     assert 'localStorage.getItem("hidePortfolio")' in js or \
            "localStorage.getItem('hidePortfolio')" in js, \
         "main.js must read hidePortfolio from localStorage"
-    assert 'localStorage.getItem("hideLedger")' in js or \
-           "localStorage.getItem('hideLedger')" in js, \
-        "main.js must read hideLedger from localStorage"
+    ledger_js = _read_ledger_js()
+    assert 'localStorage.getItem("hideLedger")' in ledger_js or \
+           "localStorage.getItem('hideLedger')" in ledger_js, \
+        "ledger.js must read hideLedger from localStorage"
 
 
 def test_js_saves_localStorage_on_click():
-    """main.js must save state to localStorage when the user clicks a
-    privacy button — the write side of the persistence contract."""
+    """Each page's script must save state to localStorage when the user
+    clicks its privacy button — the write side of the persistence
+    contract, split the same way as the read side."""
     js = _read_js()
     assert 'localStorage.setItem("hidePortfolio"' in js or \
            "localStorage.setItem('hidePortfolio'" in js, \
         "main.js must save hidePortfolio to localStorage"
-    assert 'localStorage.setItem("hideLedger"' in js or \
-           "localStorage.setItem('hideLedger'" in js, \
-        "main.js must save hideLedger to localStorage"
+    ledger_js = _read_ledger_js()
+    assert 'localStorage.setItem("hideLedger"' in ledger_js or \
+           "localStorage.setItem('hideLedger'" in ledger_js, \
+        "ledger.js must save hideLedger to localStorage"
 
 
 def test_js_uses_click_event_not_change():
     """Privacy buttons must use 'click' event listeners (not 'change'),
     since they are <button> elements, not checkboxes. Registered
-    per-toggle via regex: the original version sliced from the portfolio
-    listener to end-of-file, so a portfolio regression to 'change' still
-    passed via the ledger's 'click' further down — the same half-hollow
-    trap this fix round closed for the ledger mask test."""
+    per-toggle via regex, each checked in the script that wires it: the
+    original version sliced from the portfolio listener to end-of-file,
+    so a portfolio regression to 'change' still passed via the ledger's
+    'click' further down — the same half-hollow trap this fix round
+    closed for the ledger mask test."""
     js = _read_js()
-    for toggle in ("hidePortfolioToggle", "hideLedgerToggle"):
-        assert re.search(rf'{toggle}\.addEventListener\("click"', js), \
+    ledger_js = _read_ledger_js()
+    for toggle, source in (("hidePortfolioToggle", js),
+                           ("hideLedgerToggle", ledger_js)):
+        assert re.search(rf'{toggle}\.addEventListener\("click"', source), \
             f"{toggle} must register a click event listener"
-        assert re.search(rf'{toggle}\.addEventListener\("change"', js) is None, \
+        assert re.search(rf'{toggle}\.addEventListener\("change"', source) is None, \
             f"{toggle} must NOT register a change event listener"
 
 
 def test_js_uses_data_hidden_not_checked():
     """Privacy state must be read from data-hidden attribute, not .checked,
-    since these are <button> elements, not checkboxes."""
+    since these are <button> elements, not checkboxes — in BOTH scripts."""
     js = _read_js()
     assert 'dataset.hidden' in js, \
         "main.js must use dataset.hidden to read privacy state"
+    ledger_js = _read_ledger_js()
+    assert 'dataset.hidden' in ledger_js, \
+        "ledger.js must use dataset.hidden to read privacy state"
     # Ensure no references to .checked for privacy toggles
     assert 'hidePortfolioToggle.checked' not in js, \
         "main.js must not use .checked on portfolio toggle (it's a button)"
     assert 'hideLedgerToggle.checked' not in js, \
         "main.js must not use .checked on ledger toggle (it's a button)"
+    assert 'hideLedgerToggle.checked' not in ledger_js, \
+        "ledger.js must not use .checked on ledger toggle (it's a button)"
 
 
 def test_js_has_apply_portfolio_privacy_function():
@@ -250,23 +284,24 @@ def test_js_has_apply_portfolio_privacy_function():
 
 
 def test_js_masks_qty_in_ledger_when_hidden():
-    """main.js's buildTxRow AND buildGroupRow must BOTH mask the Qty cell
+    """ledger.js's buildTxRow AND buildGroupRow must BOTH mask the Qty cell
     with asterisks when the ledger privacy button is hidden. A bare `in`
     check passes if either builder's mask block is deleted, so this counts
-    the assignment — exactly one per builder."""
-    js = _read_js()
+    the assignment — exactly one per builder. (The builders live in
+    ledger.js since the ledger moved to its own page.)"""
+    js = _read_ledger_js()
     assert js.count('qtyCell.textContent = "****"') == 2, \
         "both buildTxRow and buildGroupRow must mask qtyCell with asterisks"
 
 
 def test_js_masks_ledger_values_when_hidden():
-    """main.js's buildTxRow AND buildGroupRow must BOTH gate their mask
+    """ledger.js's buildTxRow AND buildGroupRow must BOTH gate their mask
     block on the ledger toggle state and mask Value, Total Gain and Day
     Gain cells (plus strip pos/neg). The original version of this test
-    only asserted the string 'hideLedgerToggle' existed anywhere in
-    main.js — it would have passed even if both mask blocks were emptied
+    only asserted the string 'hideLedgerToggle' existed anywhere in the
+    file — it would have passed even if both mask blocks were emptied
     out."""
-    js = _read_js()
+    js = _read_ledger_js()
     for fn in ("function buildTxRow(", "function buildGroupRow("):
         body = _function_body(js, fn)
         assert 'hideLedgerToggle.dataset.hidden === "true"' in body, \
@@ -437,14 +472,16 @@ def test_html_eye_off_has_no_inline_display():
     swap rule (`.privacy-btn[data-hidden="true"] .privacy-eye-off
     { display: block }`) could never override it. Result: privacy ON hid
     the eye AND left the eye-off hidden — an empty, invisible button.
-    Default-hiding is the CSS's job now (base rule + data-hidden rules)."""
-    html = _read_html()
-    portfolio_start = html.find('id="hide-portfolio-toggle"')
-    ledger_start = html.find('id="hide-ledger-toggle"')
+    Default-hiding is the CSS's job now (base rule + data-hidden rules).
+    Each button checked in the file that ships it."""
+    portfolio_html = _read_html()
+    portfolio_start = portfolio_html.find('id="hide-portfolio-toggle"')
+    ledger_html = _read_ledger_html()
+    ledger_start = ledger_html.find('id="hide-ledger-toggle"')
     assert portfolio_start != -1 and ledger_start != -1, \
-        "privacy buttons not found in index.html"
-    portfolio_chunk = html[portfolio_start:portfolio_start + 1200]
-    ledger_chunk = html[ledger_start:ledger_start + 1200]
+        "privacy buttons not found in their pages"
+    portfolio_chunk = portfolio_html[portfolio_start:portfolio_start + 1200]
+    ledger_chunk = ledger_html[ledger_start:ledger_start + 1200]
     assert 'style="display:none"' not in portfolio_chunk, \
         "portfolio eye-off SVG must not hide itself with an inline style " \
         "(inline beats the CSS swap rule, so the icon vanishes when ON)"

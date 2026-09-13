@@ -87,4 +87,22 @@
             syncUI();
         });
     }
+
+    // --- Show closed positions ---
+    // OFF (default): the ledger hides tickers you hold zero shares of.
+    // Stored as the STRING "true"/"false" — the privacy-eye convention:
+    // compared with === "true", so an absent key cleanly means OFF and a
+    // corrupt value can never mean ON. ledger.js re-reads this key on
+    // every render, so a flip here reaches the ledger page (even open in
+    // another tab) within one 60s poll — no storage events, no reload.
+    const showClosedToggle = document.getElementById("pref-show-closed");
+    if (showClosedToggle) {
+        showClosedToggle.checked =
+            localStorage.getItem("showClosedPositions") === "true";
+
+        showClosedToggle.addEventListener("change", () => {
+            localStorage.setItem(
+                "showClosedPositions", String(showClosedToggle.checked));
+        });
+    }
 })();

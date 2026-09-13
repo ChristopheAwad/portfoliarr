@@ -170,6 +170,28 @@ body {
 .logo-mark { color: var(--green-pos); flex: 0 0 auto; }
 .logo-accent { color: var(--green-pos); }
 
+/* Primary nav links (the "Ledger" link beside the logo). Quiet by
+   default — text-secondary, like the profile icon — brightening to
+   text-primary on hover. The same affordance ladder every navbar
+   control uses; no fake "active page" state to keep in sync (the logo
+   already says where home is, and one link needs no breadcrumb). */
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-left: 24px;
+}
+
+.nav-link {
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 150ms ease;
+}
+
+.nav-link:hover { color: var(--text-primary); }
+
 /* Right side of navbar: profile/preferences button + dropdown. */
 .nav-right {
     position: relative;
@@ -1687,6 +1709,78 @@ input[type="date"]::-moz-placeholder {
    (phones/tablets; desktops with a mouse report hover: hover) and pins
    the buttons visible for good. Touch users get the same controls, just
    always-on instead of hover-revealed. */
+/* ── Ledger page (/ledger) ──────────────────────────────────────────
+   The transaction ledger + Closed sales table moved off the dashboard
+   onto their own page. The dashboard's grid (1fr 340px: content +
+   watchlist rail) has no sidebar here, so one column carries both
+   cards — same card language (.card / .card-header / .table-wrap),
+   just stacked. */
+
+.ledger-page {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* Closed sales table: the ledger's little sibling — 8 columns instead
+   of 11, so its readable floor is lower. Shares .table-wrap's scroll
+   behavior (overflow swipes inside the card, never the page). */
+.closed-sales-table {
+    width: 100%;
+    min-width: 640px;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.closed-sales-table th {
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.closed-sales-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-variant-numeric: tabular-nums;
+}
+
+/* .num right-aligns numeric columns — the same decimal-point lining
+   the ledger's number cells use. */
+.closed-sales-table .num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.closed-sales-table tbody tr:hover {
+    background-color: var(--bg-hover);
+}
+
+/* Name cells are the one place long text is welcome — clip with an
+   ellipsis instead of stretching the table. */
+.closed-sales-name {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+/* The "Realized to date" figure in the card header. The number itself
+   gets .pos/.neg coloring from ledger.js (the same green/red the
+   ledger's gain cells use); the label stays quiet. */
+.closed-sales-total {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.closed-sales-total #realized-total {
+    font-weight: 600;
+}
+
 @media (hover: none) {
     .tx-action-btn,
     .remove-btn {
@@ -1937,6 +2031,104 @@ input[type="date"]::-moz-placeholder {
         padding: 8px 0;
         color: var(--text-secondary);
     }
+
+    /* ── Closed sales: same stacked-cards treatment ──────────────
+       The shared `.table-wrap { overflow: visible }` above kills the
+       swipe for EVERY table at this width — so the closed-sales table
+       MUST card-ify too, or its 640px min-width survives with no scroll
+       and drags the whole page sideways (the mobile bug this section
+       fixes). Same transformation as the ledger: blocks, no thead,
+       each cell a caption/value line using the data-label ledger.js
+       stamps on it; each sale becomes its own mini-card. */
+
+    .closed-sales-table { min-width: 0; }
+    .closed-sales-table thead { display: none; }
+
+    .closed-sales-table,
+    .closed-sales-table tbody,
+    .closed-sales-table tr,
+    .closed-sales-table td {
+        display: block;
+        width: 100%;
+    }
+
+    /* One sale = one mini-card (the ledger group-card's chrome:
+       border, radius, padding, card background), its cells stacked
+       as labeled fact lines. */
+    .closed-sales-table tr {
+        margin-bottom: 12px;
+        padding: 12px;
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+    }
+
+    .closed-sales-table td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        padding: 0 0 10px;
+        border-bottom: none;
+        white-space: normal;
+    }
+
+    /* The desktop .num nowrap must not survive into card mode — a
+       long value wraps inside its line instead of overflowing the
+       card (same equal-strength re-assert as the ledger's). */
+    .closed-sales-table td.num { white-space: normal; }
+
+    /* The caption: the header's own text (stamped at boot), small and
+       muted on the LEFT while the value sits RIGHT. */
+    .closed-sales-table td::before {
+        content: attr(data-label);
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+
+    /* Ticker = the card's title: no caption (structure, not a fact),
+       first and larger. It's the first cell in DOM order already, so
+       unlike the ledger group card there's no reordering needed. */
+    .closed-sales-table td[data-cs-col="ticker"] {
+        font-size: 16px;
+        font-weight: 600;
+        padding-bottom: 8px;
+    }
+    .closed-sales-table td[data-cs-col="ticker"]::before { content: none; }
+
+    /* The card's headline number, a touch above line-item weight —
+       the .pos/.neg coloring ledger.js applies stays visible. */
+    .closed-sales-table td[data-cs-col="realized"] {
+        font-size: 15px;
+        font-weight: 500;
+    }
+
+    /* Name repeats context the ticker link already gives — but unlike
+       the ledger's duplicate-ticker cell it's a real fact; keep it,
+       just quieter and free to wrap. */
+    .closed-sales-table td.closed-sales-name {
+        max-width: none;
+        overflow: visible;
+        text-overflow: unset;
+        white-space: normal;
+    }
+
+    /* Message/empty-state row: no data-label stamp → no caption; make
+       the line quiet and skip the card chrome the real rows get. */
+    .closed-sales-table td.empty-state {
+        padding: 8px 0;
+        color: var(--text-secondary);
+        background: none;
+        border: none;
+    }
+
+    /* Belt-and-braces for the page shell: a flex item must always be
+       ALLOWED to shrink narrower than its content — without this, any
+       future wide child could push the cards (and the page) wide again.
+       The card-mode tables above are the real fix; this is the guard. */
+    .ledger-page > .card { min-width: 0; }
 }
 
 /* Reduced motion: users who ask the OS for less movement get none of our

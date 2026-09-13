@@ -139,6 +139,19 @@ def preferences_page():
     return render_template("preferences.html")
 
 
+@app.route("/ledger")
+def ledger_page():
+    """Render the ledger page — the transaction ledger (table, log/edit
+    form, import panel, privacy eye) plus the Closed sales table. All
+    three used to live on the dashboard; the ledger is a records/history
+    surface, not a live-glance surface, so it moved here and the
+    dashboard kept the live view. Rendering only: every number comes
+    from /api/transactions and /api/portfolio/realized, fetched and
+    painted by static/js/ledger.js (the same no-server-render rule as
+    the dashboard)."""
+    return render_template("ledger.html")
+
+
 # JSON endpoint that powers the live indices bar. The browser's JavaScript
 # fetches this URL. Returns a JSON *list* of quote dicts.
 @app.route("/api/indices")
@@ -683,6 +696,290 @@ def portfolio_summary():
         "cost_basis": cost_basis,
         "unpriced": unpriced,
         "currency": "CAD",
+    })
+
+
+# ---------------------------------------------------------------------------
+# GET /api/portfolio/realized — the "Closed sales" table's data source.
+#
+# Every SELL transaction becomes one row carrying the REALIZED result of
+# that sale in CAD: proceeds vs what the sold shares actually cost. This
+# is the number the ledger's per-row gain can never give you — that gain
+# compares the sell price to YESTERDAY'S close (market noise), while this
+# compares it to the position's cost basis (performance).
+#
+# AVERAGE-COST REPLAY (the one formula that answers "what did I make?"):
+#   The ledger is folded oldest-first (date, then id — db.get_transactions
+#   returns newest-first, so it's reversed). Per ticker, three running
+#   figures: qty, native cost pool, CAD cost pool.
+#     BUY  → pool grows:  qty += q;  pools += q × price (+ × fx_rate)
+#     SELL → cover min(q, qty) shares at the pool's AVERAGE:
+#              realized = covered × (sell_price × fx − avg_cad_cost)
+#            pools shrink by the covered shares' average — the leftover
+#            shares keep the SAME average for the next sell.
+#   Average cost (not FIFO) because it matches the ledger's Avg Cost
+#   column and the Canadian ACB convention — one method, everywhere.
+#
+# NO QUOTE OR FX CALLS: every rate is a STORED FACT (fx_rate captured
+# at log time; CAD rows store 1.0). A realized gain is history — it
+# cannot go stale, so the money math never waits on Yahoo and never
+# needs refreshing. (Names are the one courtesy fetch: get_name
+# consults the process-lifetime name cache — one .info per sold ticker
+# after a restart; a ticker Yahoo can't name retries each poll until it
+# can. Only the name can degrade; the money never waits on it.)
+#
+# SHORTS ARE SYMMETRIC, not special-cased (nothing stops a SELL bigger
+# than the position — the summary's net_qty already goes negative):
+#   - The covered part realizes normally.
+#   - The excess opens a SHORT whose basis is the sell price (the pools
+#     go negative with the qty — one uniform "average = pool ÷ qty").
+#   - A later BUY covering the short realizes (short basis − buy price).
+#     That gain is earned on a BUY event, so NO row carries it — but
+#     total_realized (the fold's full sum) must. Rows ⊂ total is the
+#     documented divergence, locked by test_realized.py.
+#
+# RECOMPUTE-ON-READ (same philosophy as /api/portfolio/summary): nothing
+# is stored, so editing an old BUY through the PUT route retroactively
+# rewrites realized history — the honest consequence of an editable
+# ledger. Replay cost is a few hundred in-memory operations.
+#
+# DEGRADATION, NEVER FABRICATION: a row's CAD math needs every leg of its
+# position to carry a known rate. A NULL fx_rate (pre-feature rows, or
+# Yahoo couldn't answer at log time) or an unsupported currency (only
+# USD↔CAD is supported, permanent rule) makes the pool's CAD value
+# unknowable: the row keeps its FACTS (native prices, qty, dates) but
+# realized/pct go null with a reason, and one degraded row poisons
+# total_realized to null — a partial sum that looks complete is a lie.
+# The flag follows the POSITION LIFECYCLE: it clears when the pool
+# returns to flat, so a fresh position after a degraded one computes
+# normally. Native math (avg cost in the security's own currency) never
+# degrades — currency purity means fx plays no part in it.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/portfolio/realized")
+def portfolio_realized():
+    """Return one row per SELL with its realized CAD result, newest first.
+
+    Shape of the reply:
+        currency        "CAD" — declared so the frontend can label it
+        total_realized  the fold's full realized sum in CAD — including
+                        short-cover gains no row carries. null when ANY
+                        row is degraded (never a partial sum).
+        rows[]          newest-first, one per SELL transaction:
+            id               the SELL transaction's id
+            ticker / name    identity (name null when Yahoo can't say)
+            transaction_date the SELL's date
+            qty              shares sold (the FULL sell, even when only
+                             part was covered)
+            currency         the security's native currency
+            price            native sell price
+            avg_cost         native average cost of the covered shares
+            avg_cost_fx      fx-weighted average CAD rate of those shares
+            realized         CAD gain (proceeds − basis); null = degraded
+            realized_pct     realized ÷ basis × 100; null when basis ≤ 0
+            degraded         null, or a human-readable reason
+    """
+    transactions = db.get_transactions()
+    transactions.reverse()  # the replay runs oldest-first
+
+    def stored_rate(tx):
+        """The transaction's STORED CAD conversion fact, or None when it
+        is genuinely unknowable. CAD rows carry fx_rate 1.0 by convention;
+        USD rows carry the USDCAD close of their day (or NULL for legacy
+        rows); anything else was never supported — None, not a fake 1:1."""
+        if tx["currency"] == "CAD":
+            return 1.0
+        if tx["currency"] == "USD":
+            return tx["fx_rate"]
+        return None
+
+    def unrated_reason(tx):
+        """Why a leg's CAD rate is unknowable — surfaced verbatim in the
+        degraded row's tooltip, so the ledger can be fixed at the source."""
+        if tx["currency"] == "USD":
+            return (f"missing fx_rate on {tx['transaction_date']} "
+                    f"{tx['transaction_type']}")
+        return f"unsupported currency: {tx['currency']}"
+
+    # Per-ticker replay state. rated/reason: whether the CAD pool's value
+    # is exactly known (an unrated leg entering the pool flips it False
+    # until the position goes flat — degradation follows the lifecycle).
+    positions = {}
+    rows = []
+    fold_total = 0.0
+    # An unrated leg whose gain is unknowable even in principle (an
+    # unrated BUY covering a short) can't degrade any row — it books no
+    # row at all — but it makes the TOTAL unverifiable. This flag nulls it.
+    total_uncertain = False
+
+    for tx in transactions:
+        pos = positions.setdefault(tx["ticker"], {
+            "qty": 0.0, "cost_native": 0.0, "cost_cad": 0.0,
+            "rated": True, "reason": None,
+        })
+        q = tx["qty"]
+        price = tx["price"]
+        rate = stored_rate(tx)
+        is_buy = tx["transaction_type"] == "BUY"
+        qty_before = pos["qty"]
+
+        if is_buy:
+            # Covering an existing short first: the covered shares realize
+            # (short basis − buy price). Buys emit no row, so this gain
+            # lives only in fold_total — or, when the rate is unknown,
+            # nowhere we can vouch for.
+            if qty_before < 0:
+                covered = min(q, -qty_before)
+                if rate is not None and pos["rated"]:
+                    fold_total += covered * (
+                        pos["cost_cad"] / qty_before - price * rate
+                    )
+                elif rate is None:
+                    total_uncertain = True
+                if pos["rated"]:
+                    # The CAD side of the short shrinks only when its
+                    # basis is exactly known — an unrated pool's CAD
+                    # value is garbage and stays untouched until the
+                    # flat wipe.
+                    pos["cost_cad"] += covered * (
+                        pos["cost_cad"] / qty_before
+                    )
+                # The NATIVE side shrinks UNCONDITIONALLY: currency
+                # purity makes it exact even when the CAD pool is not.
+                # Gating it on rated let an unrated short's stale basis
+                # leak into later rows' avg_cost — a corrupted "fact"
+                # (regression locked by
+                # test_covering_buy_shrinks_unrated_short_native_pool).
+                ps_native = pos["cost_native"] / qty_before
+                pos["cost_native"] += covered * ps_native
+                pos["qty"] = qty_before + covered
+                q -= covered
+            # Any remainder (or the whole buy, when no short existed)
+            # joins — or opens — the long pool.
+            if q > 0:
+                pos["qty"] += q
+                pos["cost_native"] += q * price
+                if rate is not None:
+                    pos["cost_cad"] += q * price * rate
+                else:
+                    # Unrated cost entering the pool: the pool's CAD value
+                    # is no longer exactly known until it goes flat.
+                    pos["rated"] = False
+                    pos["reason"] = unrated_reason(tx)
+        else:
+            # ---- SELL: emit one row (this IS the closed sale) ----
+            row = {
+                "id": tx["id"],
+                "ticker": tx["ticker"],
+                "name": None,          # attached after the fold
+                "transaction_date": tx["transaction_date"],
+                "qty": q,
+                "currency": tx["currency"],
+                "price": price,
+                "avg_cost": price,     # short-opening fallback, replaced below
+                "avg_cost_fx": rate,
+                "realized": None,
+                "realized_pct": None,
+                "degraded": None,
+            }
+            if qty_before > 0:
+                covered = min(q, qty_before)
+                ps_native = pos["cost_native"] / qty_before
+                ps_cad = (
+                    pos["cost_cad"] / qty_before if pos["rated"] else None
+                )
+                row["avg_cost"] = ps_native
+                row["avg_cost_fx"] = (
+                    pos["cost_cad"] / pos["cost_native"]
+                    if pos["rated"] else None
+                )
+                if pos["rated"] and rate is not None:
+                    basis_cad = covered * ps_cad
+                    realized = covered * price * rate - basis_cad
+                    fold_total += realized
+                    row["realized"] = realized
+                    # A percentage needs a meaningful base to divide by
+                    # (same rule as the summary route's gain pcts).
+                    row["realized_pct"] = (
+                        realized / basis_cad * 100 if basis_cad > 0 else None
+                    )
+                else:
+                    row["degraded"] = (
+                        pos["reason"] if not pos["rated"]
+                        else unrated_reason(tx)
+                    )
+                # Pool bookkeeping is independent of the row's degradation:
+                # the covered shares leave at their KNOWN average, so the
+                # remaining pool stays exactly known (rated pools stay
+                # rated even when THIS sell's proceeds were unrated).
+                pos["qty"] = qty_before - covered
+                pos["cost_native"] -= covered * ps_native
+                if pos["rated"]:
+                    pos["cost_cad"] -= covered * ps_cad
+                q -= covered
+            else:
+                # Nothing held: the whole sell opens/extends a short. It
+                # realizes NOTHING at this moment (the short's basis is
+                # its own price) — zero is an exact answer, not a gap.
+                if pos["rated"] and rate is not None:
+                    row["realized"] = 0.0
+                else:
+                    row["degraded"] = (
+                        pos["reason"] if not pos["rated"]
+                        else unrated_reason(tx)
+                    )
+            # Everything beyond the held shares (or the whole sell, when
+            # nothing was held) opens/extends a short: basis = sell price.
+            # The pools go negative with the qty — the uniform
+            # "average = pool ÷ qty" identity keeps working.
+            if q > 0:
+                pos["qty"] -= q
+                pos["cost_native"] -= q * price
+                if rate is not None:
+                    pos["cost_cad"] -= q * price * rate
+                else:
+                    pos["rated"] = False
+                    pos["reason"] = unrated_reason(tx)
+            rows.append(row)
+
+        # Going flat wipes the ancestry: a fresh position is judged fresh
+        # (locked by test_degradation_follows_position_lifecycle). The
+        # check is a TOLERANCE, not == 0: fractional qtys (the importer's
+        # 6-decimal flagship input) leave binary residue — 0.1 + 0.2 − 0.3
+        # is 5.55e-17 — and an exact check would glue an unrated ancestry
+        # to the ticker forever, poisoning every later row and the total
+        # (regression locked by test_fractional_positions_still_go_flat).
+        if abs(pos["qty"]) < 1e-9:
+            pos["cost_native"] = 0.0
+            pos["cost_cad"] = 0.0
+            pos["rated"] = True
+            pos["reason"] = None
+
+    # Names come from the process-lifetime name cache (market_data caches
+    # successes; one .info per sold ticker after a restart, retried per
+    # poll while Yahoo can't answer — the ONLY network this endpoint can
+    # touch, and it never gates the money math). A ticker Yahoo can't
+    # name keeps its full row: name null is cosmetic, not a gap in the
+    # numbers.
+    for ticker in {row["ticker"] for row in rows}:
+        try:
+            name = get_name(ticker)
+        except Exception:
+            name = None
+        for row in rows:
+            if row["ticker"] == ticker:
+                row["name"] = name
+
+    rows.reverse()  # replay was oldest-first; display newest-first
+
+    return jsonify({
+        "currency": "CAD",
+        "total_realized": (
+            None if total_uncertain
+            or any(row["degraded"] for row in rows)
+            else fold_total
+        ),
+        "rows": rows,
     })
 
 

@@ -246,12 +246,12 @@ def th_attr(tag, attr):
 def test_ledger_header_renders_expected_columns_in_default_order(client):
     """The ledger <thead> declares exactly 11 columns, each carrying a
     UNIQUE data-col key, in the default order — the order every consumer
-    assumes: main.js reads it at boot, both row builders append cells in
+    assumes: ledger.js reads it at boot, both row builders append cells in
     it, and setLedgerMessage's colSpan=11 assumes the count. This is the
     reordered-columns feature's foundation test: without it, a template
     edit that added a column without its data-col (or duplicated one)
     would misplace cells in ways only the eye could catch."""
-    tags = ledger_header_tags(client.get("/").get_data(as_text=True))
+    tags = ledger_header_tags(client.get("/ledger").get_data(as_text=True))
     assert len(tags) == 11  # the colSpan=11 contract, counted for real
     assert [th_attr(t, "data-col") for t in tags] == [
         "date", "type", "ticker", "qty", "price", "value",
@@ -262,13 +262,13 @@ def test_ledger_header_renders_expected_columns_in_default_order(client):
 
 def test_ledger_sortable_headers_match_sort_vocabulary(client):
     """Exactly 7 headers are sortable, and their data-col values are
-    precisely the keys SORT_COLS (main.js) knows how to sort by — the
+    precisely the keys SORT_COLS (ledger.js) knows how to sort by — the
     HTML↔JS contract. A sortable header whose data-col isn't in SORT_COLS
     would click with no effect; a SORT_COLS key with no header would be
     dead code. date/type/price/actions stay non-sortable by design (a
     group summary has no single date/type/price; actions is a button
     column)."""
-    tags = ledger_header_tags(client.get("/").get_data(as_text=True))
+    tags = ledger_header_tags(client.get("/ledger").get_data(as_text=True))
     sortable = {th_attr(t, "data-col") for t in tags
                 if "sortable" in (th_attr(t, "class") or "").split()}
     assert sortable == {"ticker", "qty", "value", "total_gain",
@@ -291,9 +291,10 @@ def test_ledger_table_sits_in_scroll_wrapper(client):
     shape, chips-test style, comments stripped first. Assert-first: no
     wrapper at all fails LOUDLY rather than passing vacuously. The lazy
     .*?</table></div> tail is safe because a table contains no nested
-    <div>s — the first </table> is the ledger's own."""
+    <div>s — the first </table> is the ledger's own. (Checked on /ledger —
+    the ledger table moved off the dashboard onto its own page.)"""
     html = re.sub(r"<!--.*?-->", "",
-                  client.get("/").get_data(as_text=True), flags=re.S)
+                  client.get("/ledger").get_data(as_text=True), flags=re.S)
     wrapper = re.search(
         r'<div class="table-wrap">\s*<table class="ledger-table">'
         r'.*?<thead>.*?</thead>.*?</table>\s*</div>', html, re.S)
