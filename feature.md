@@ -1,51 +1,54 @@
-# Feature: Android WebView Wrapper
+# Feature: Privacy eye toggles (portfolio header + ledger header)
 
-## Problem
-Want a native Android app experience (launcher icon, full-screen, back button) for Portfoliarr without maintaining a separate native frontend. PWAs require HTTPS, which this project doesn't use.
+## What
+Two eye-icon buttons let the user hide sensitive financial values for screen
+sharing, like a show-password toggle:
 
-## Solution
-A thin WebView wrapper that loads the existing web app from a user-configurable server URL. All UI logic stays in Flask + vanilla JS. The wrapper adds: app icon, native back button, status bar theming, and a settings screen for URL entry.
+- **Portfolio header** — masks the total value, the day-change pill and the
+  total-return pill with `****`
+- **Ledger header** — masks Qty, Value, Total Gain and Day Gain in every
+  transaction and group row (percentage columns stay visible)
+
+State persists in `localStorage`; the eye icon swaps to eye-off while active.
+All UI logic stays in Flask + vanilla JS per the stack rules.
+
+## GUI-verified bug history (why the first implementation was reworked)
+String tests can't run a browser, so the user's GUI check surfaced three
+deeper bugs after the first round — each root cause now locked by a test:
+
+1. **Icon vanished when ON** — the eye-off SVGs carried inline
+   `style="display:none"`; inline styles beat any CSS selector, so the
+   `data-hidden="true"` swap rule could never un-hide them. Fix: CSS owns
+   visibility (base `.privacy-btn .privacy-eye-off { display: none }` rule,
+   no inline styles). Locked by `test_html_eye_off_has_no_inline_display` +
+   `test_css_eye_off_hidden_by_default`.
+2. **Layout shift when masking** — masked text is far narrower than real
+   numbers, and the value row is plain wrapping inline content, so masking
+   changed the wrap point (pills jumped inline with the value). Fix:
+   geometry locks — measure each span's box and freeze as inline
+   `min-width`/`min-height` before overwriting with `****` (value span
+   flipped to inline-block: `min-width` is ignored on plain inline).
+   Locked by `test_js_locks_masked_geometry`.
+3. **Mask self-lifted** — `refreshPortfolioSummary` painted unconditionally
+   and the `setInterval` poll kept calling it, overwriting `****` within one
+   cycle. Fix: `portfolioMasked()` guard in both paint paths
+   (`refreshPortfolioSummary`, `setPortfolioUnavailable`); masked-at-load
+   paints the masks at boot. Locked by `test_js_mask_persists_across_refresh`.
+4. **Unmask lagged ~1s, then jumped** — locks released before the repaint
+   let `****` collapse narrow until the fetch landed. Fix: locks release
+   only after real content is painted (`clearPortfolioGeometryLocks`, same
+   JS turn as the paint — one layout pass), and a mask-time snapshot
+   (`lastPortfolioPaint`) is repainted instantly on unmask so the wait is
+   invisible. Locked by `test_js_locks_masked_geometry` +
+   `test_js_unmask_restores_cached_values_instantly`.
 
 ## Rollback
-Delete the `android/` folder. Zero changes to the existing codebase.
+Revert the commit. Touches only `templates/index.html`, `static/style.css`,
+`static/js/main.js`, `static/js/common.js` (eye/eye-off icons in `ICONS`),
+`tests/test_privacy_toggles.py`, `tests/test_ui_revamp.py`, `feature.md`.
 
-## Files to create (all inside `android/`)
-
-| File | ~LoC | Notes |
-|---|---|---|
-| `settings.gradle.kts` | ~20 | Project settings |
-| `gradle/libs.versions.toml` | ~15 | Version catalog |
-| `build.gradle.kts` | ~10 | Root build |
-| `gradle.properties` | ~5 | JVM args |
-| `gradlew` + `gradlew.bat` | ~201 | Wrapper scripts |
-| `gradle/wrapper/gradle-wrapper.properties` | ~3 | Gradle 8.11.1 |
-| `app/build.gradle.kts` | ~30 | compileSdk 34, minSdk 24 |
-| `app/src/main/AndroidManifest.xml` | ~20 | INTERNET perm, cleartext |
-| `app/src/main/java/.../MainActivity.kt` | ~80 | WebView, back button, settings menu |
-| `app/src/main/java/.../SettingsActivity.kt` | ~65 | URL input, save to SharedPreferences |
-| `app/src/main/res/layout/activity_main.xml` | ~10 | Fullscreen WebView |
-| `app/src/main/res/layout/activity_settings.xml` | ~30 | EditText + Save button |
-| `app/src/main/res/menu/main_menu.xml` | ~12 | Settings gear icon |
-| `app/src/main/res/values/themes.xml` | ~12 | Dark status bar |
-| `app/src/main/res/values/colors.xml` | ~5 | #1a1a2e status bar |
-| `app/src/main/res/values/strings.xml` | ~6 | App name "Portfoliarr" |
-| `app/src/main/res/mipmap-*/ic_launcher.png` | binary | 5 densities from assets/logo |
-| `README.md` | ~40 | Build instructions |
-
-**Real code: ~220 LoC**
-
-## Flow
-```
-First launch → no URL in SharedPreferences → SettingsActivity → save → load WebView
-Return launch → URL exists → load WebView
-Menu gear icon → open SettingsActivity to change URL
-```
-
-## Test plan
-- Build the APK in Android Studio
-- Install on device/emulator
-- First launch shows settings screen, enter server URL
-- WebView loads the web app
-- Back button navigates WebView history, then exits
-- Gear icon opens settings to change URL
-- Status bar matches dark theme
+## Verification
+- 34 string-check locks in `tests/test_privacy_toggles.py`; full suite
+  **340 passed**.
+- GUI confirmed by user: eye visible both themes × both states; no layout
+  shift on mask; mask survives the poll; instant, jump-free unmask.

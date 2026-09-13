@@ -356,6 +356,29 @@ const txDateInput = txForm.elements.date;
 // unchecked on every page load (session-only, by design).
 const usdNativeToggle = document.querySelector("#usd-native-toggle");
 
+// Privacy toggles — hide sensitive values for screen sharing. State
+// persists in localStorage so the user's preference survives refreshes.
+//   hidePortfolioToggle: masks portfolio total, day change, total return
+//   hideLedgerToggle: masks Qty, Value, Total Gain, Day Gain in ledger rows
+// Both are <button> elements with data-hidden="true"|"false".
+const hidePortfolioToggle = document.getElementById("hide-portfolio-toggle");
+const hideLedgerToggle = document.getElementById("hide-ledger-toggle");
+
+// Restore persisted privacy state from localStorage. Strings "true"/"false"
+// — same pattern as the column order persistence.
+if (hidePortfolioToggle) {
+    const hidden = localStorage.getItem("hidePortfolio") === "true";
+    hidePortfolioToggle.dataset.hidden = hidden;
+    hidePortfolioToggle.title = hidden
+        ? "Show portfolio values" : "Hide portfolio values";
+}
+if (hideLedgerToggle) {
+    const hidden = localStorage.getItem("hideLedger") === "true";
+    hideLedgerToggle.dataset.hidden = hidden;
+    hideLedgerToggle.title = hidden
+        ? "Show holding values" : "Hide holding values";
+}
+
 function ledgerCurrencyParam() {
     return usdNativeToggle && usdNativeToggle.checked
         ? "currency=native"
@@ -642,6 +665,20 @@ function buildTxRow(tx) {
         dayPctCell.textContent = "—";
     }
 
+    // Privacy masking: when the ledger privacy toggle is active, replace
+    // Qty, Value, Total Gain, and Day Gain with asterisks. Percentage
+    // columns (Total Gain %, Day Gain %) stay visible — they show relative
+    // performance without revealing absolute amounts.
+    if (hideLedgerToggle && hideLedgerToggle.dataset.hidden === "true") {
+        qtyCell.textContent = "****";
+        valueCell.textContent = "****";
+        gainCell.textContent = "****";
+        dayGainCell.textContent = "****";
+        // Remove pos/neg coloring from masked cells
+        gainCell.classList.remove("pos", "neg");
+        dayGainCell.classList.remove("pos", "neg");
+    }
+
     // --- Actions: edit + delete. They live ONLY on detail rows — a group
     // summary is an aggregate, not a record. Each button carries data-id;
     // the delegated listener looks the transaction up by id in
@@ -837,6 +874,20 @@ function buildGroupRow(ticker, txs) {
         gainPctCell.textContent = "—";
         dayGainCell.textContent = "—";
         dayPctCell.textContent = "—";
+    }
+
+    // Privacy masking: when the ledger privacy toggle is active, replace
+    // Qty, Value, Total Gain, and Day Gain with asterisks. Percentage
+    // columns (Total Gain %, Day Gain %) stay visible — they show relative
+    // performance without revealing absolute amounts.
+    if (hideLedgerToggle && hideLedgerToggle.dataset.hidden === "true") {
+        qtyCell.textContent = "****";
+        valueCell.textContent = "****";
+        gainCell.textContent = "****";
+        dayGainCell.textContent = "****";
+        // Remove pos/neg coloring from masked cells
+        gainCell.classList.remove("pos", "neg");
+        dayGainCell.classList.remove("pos", "neg");
     }
 
     // The actions column's 11th cell. A group is an aggregate, not a
@@ -1669,16 +1720,162 @@ const portfolioTotalReturnEl =
 // holdings are worthless, when the truth is "we couldn't price them".
 // tooltipText (optional) explains WHY on hover.
 function setPortfolioUnavailable(tooltipText = "") {
+    // Privacy guard: a failed refresh cycle must not paint the degraded
+    // "—" over the **** masks either — same reasoning as the guard in
+    // refreshPortfolioSummary. While masked, keep the masks.
+    if (portfolioMasked()) return;
     portfolioValueEl.textContent = "—";
     portfolioValueEl.title = tooltipText;
     for (const el of [portfolioDayChangeEl, portfolioTotalReturnEl]) {
         el.textContent = "";
         el.classList.remove("pos", "neg");
     }
+    // Degraded content is painted — release the geometry locks here too,
+    // same one-layout-pass reasoning as in refreshPortfolioSummary.
+    clearPortfolioGeometryLocks();
 }
 
 // (The change-pill painter itself is common.js's paintChange — the stock
 // detail page paints the exact same shape, so the helper moved there.)
+
+// Is the portfolio header currently privacy-masked? The masking code and
+// the refresh cycle consult this ONE helper, so both read the same source
+// of truth (data-hidden on the button).
+function portfolioMasked() {
+    return !!(hidePortfolioToggle &&
+              hidePortfolioToggle.dataset.hidden === "true");
+}
+
+// Snapshot of the three header spans as they were last painted with REAL
+// values, captured at mask time. While masked the refresh cycle is
+// guard-skipped, so the server is the only place the live numbers exist —
+// without this cache, unmasking had to wait for a fetch before anything
+// new could appear (hide was instant, show lagged a second). The cache
+// makes unmask instant: repaint from memory, then let the background
+// fetch swap in fresh numbers. Null when there's nothing restorable.
+let lastPortfolioPaint = null;
+
+// Release the privacy geometry locks (the inline display/min-width/
+// min-height set while masked) and strip the privacy-masked class. ONLY
+// call this AFTER real content has been painted back over the masks:
+// the locks ride along during the unmask fetch so the row keeps its box,
+// and releasing them in the same JS turn as the repaint means the
+// browser computes layout exactly once — **** swaps to live values with
+// no narrow intermediate frame. (paintChange only toggles pos/neg, it
+// never removes privacy-masked — that's stripped here too.)
+function clearPortfolioGeometryLocks() {
+    for (const el of [portfolioValueEl, portfolioDayChangeEl,
+                      portfolioTotalReturnEl]) {
+        el.style.display = "";
+        el.style.minWidth = "";
+        el.style.minHeight = "";
+        el.classList.remove("privacy-masked");
+    }
+}
+
+// Apply or remove privacy masking on the portfolio header. When the button
+// is in hidden state (data-hidden="true"), all three value spans show "****"
+// instead of real numbers. When shown, a fresh refreshPortfolioSummary
+// repaints live data.
+//
+// GEOMETRY LOCK (why the min-width/min-height dance): masked text is much
+// narrower than the real numbers, and the value row is plain wrapping
+// inline content. Real values are wide enough to push the two change
+// pills onto their own wrapped line; **** values are so small that
+// everything fits beside the value — so masking CHANGED THE WRAP POINT:
+// the pills jumped up inline with the value and everything below shifted.
+// The fix: measure each span's live box (offsetWidth/offsetHeight) and
+// re-freeze it as inline min-width/min-height BEFORE overwriting the
+// text. min-width is ignored on plain inline elements, so each span is
+// also flipped to inline-block for the mask's duration. Unmasking clears
+// every inline style so the browser reflows at natural size before the
+// fresh paint.
+function applyPortfolioPrivacy() {
+    if (!hidePortfolioToggle) return;
+    const masked = portfolioMasked();
+    const targets = [portfolioValueEl, portfolioDayChangeEl,
+                     portfolioTotalReturnEl];
+    if (masked) {
+        // Snapshot the values on screen NOW, while they're still real —
+        // the unmask branch repaints them from memory so the wait for the
+        // fresh fetch is invisible. Empty spans (masked before any fetch
+        // ever landed) mean there's nothing worth restoring: keep the old
+        // cache, if any.
+        if (portfolioValueEl.textContent) {
+            lastPortfolioPaint = {
+                value: portfolioValueEl.textContent,
+                day: portfolioDayChangeEl.textContent,
+                dayClass: portfolioDayChangeEl.className,
+                total: portfolioTotalReturnEl.textContent,
+                totalClass: portfolioTotalReturnEl.className,
+            };
+        }
+        // Freeze geometry FIRST, while the real values are still painted —
+        // once textContent becomes "****" the original widths are gone.
+        for (const el of targets) {
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+            el.style.display = "inline-block";
+            el.style.minWidth = `${w}px`;
+            el.style.minHeight = `${h}px`;
+        }
+        portfolioValueEl.textContent = "****";
+        portfolioValueEl.title = "Portfolio value hidden for privacy";
+        portfolioDayChangeEl.textContent = "****";
+        portfolioDayChangeEl.className = "price-change privacy-masked";
+        portfolioTotalReturnEl.textContent = "****";
+        portfolioTotalReturnEl.className = "price-change privacy-masked";
+    } else {
+        // Unmask. The geometry locks stay on for now — releasing early
+        // would let the still-painted **** collapse to natural (tiny)
+        // width, the transition jump the GUI check caught. If the mask-
+        // time snapshot holds real values, repaint them from memory in
+        // the SAME JS turn as the lock release: instant values, exactly
+        // one layout pass, no intermediate frame.
+        if (lastPortfolioPaint && lastPortfolioPaint.value) {
+            portfolioValueEl.textContent = lastPortfolioPaint.value;
+            portfolioDayChangeEl.textContent = lastPortfolioPaint.day;
+            portfolioDayChangeEl.className = lastPortfolioPaint.dayClass;
+            portfolioTotalReturnEl.textContent = lastPortfolioPaint.total;
+            portfolioTotalReturnEl.className = lastPortfolioPaint.totalClass;
+            clearPortfolioGeometryLocks();
+        }
+        // No cache (masked before the first fetch ever landed): nothing
+        // to restore instantly — the masked look holds via the locks
+        // until the repaint below arrives, and that path releases the
+        // locks itself.
+        portfolioValueEl.title = "";
+        // Fresh values always come from the server; the cache was only a
+        // stopgap so the wait is invisible. Consume it either way.
+        lastPortfolioPaint = null;
+        refreshPortfolioSummary();
+    }
+}
+
+// Wire up the privacy button event listeners. Each click toggles the
+// data-hidden attribute, persists the state to localStorage, and
+// immediately applies or removes the mask.
+if (hidePortfolioToggle) {
+    hidePortfolioToggle.addEventListener("click", () => {
+        const hidden = hidePortfolioToggle.dataset.hidden === "true";
+        hidePortfolioToggle.dataset.hidden = !hidden;
+        hidePortfolioToggle.title = hidden
+            ? "Hide portfolio values" : "Show portfolio values";
+        localStorage.setItem("hidePortfolio", !hidden);
+        applyPortfolioPrivacy();
+    });
+}
+if (hideLedgerToggle) {
+    hideLedgerToggle.addEventListener("click", () => {
+        const hidden = hideLedgerToggle.dataset.hidden === "true";
+        hideLedgerToggle.dataset.hidden = !hidden;
+        hideLedgerToggle.title = hidden
+            ? "Hide holding values" : "Show holding values";
+        localStorage.setItem("hideLedger", !hidden);
+        // Re-render the ledger with current data to apply/remove masks.
+        renderLedger(lastTransactions);
+    });
+}
 
 // One summary refresh cycle: GET -> paint the three spans.
 async function refreshPortfolioSummary() {
@@ -1687,6 +1884,15 @@ async function refreshPortfolioSummary() {
         // fetch does NOT throw on 4xx/5xx — only on network failure.
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
+
+        // Privacy guard: the setInterval poll keeps calling this function
+        // even while the header is masked — without this check it would
+        // repaint live numbers over the **** masks and silently lift the
+        // mask within one refresh cycle. Skip ALL painting (success and
+        // degraded alike); unmasking calls back in for a fresh paint.
+        if (portfolioMasked()) {
+            return;
+        }
 
         // "unpriced" lists the tickers the backend couldn't quote this
         // cycle. They were excluded from EVERY sum, so if the sums are
@@ -1719,6 +1925,9 @@ async function refreshPortfolioSummary() {
                     "Today");
         paintChange(portfolioTotalReturnEl, data.total_gain,
                     data.total_gain_pct, "Total");
+        // Real content is back over the masks — release the geometry locks
+        // in the same JS turn so there's exactly one layout pass (no jump).
+        clearPortfolioGeometryLocks();
 
         // Feed yesterday's portfolio value into the chart handle so the
         // 1D view can draw a horizontal reference line at yesterday's close.
@@ -1809,6 +2018,13 @@ refreshIndices();
 refreshWatchlist();
 refreshLedger();
 refreshPortfolioSummary();
+// If the persisted privacy state is masked, paint the **** now — the
+// refresh above is guarded and will NOT paint over the mask, so without
+// this the header would sit on its empty skeletons until the user clicks
+// the eye off. Unmasked at load: a no-op is skipped entirely.
+if (portfolioMasked()) {
+    applyPortfolioPrivacy();
+}
 // The portfolio chart is fetched once at load (its default 5D view) and
 // again only when a timeframe button is clicked — unlike the quote-driven
 // sections, price history doesn't change on a 60s cadence, so it would be

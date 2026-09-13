@@ -616,6 +616,66 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
+/* Privacy eye button — a simple icon button (no checkbox switch/pill).
+   Sits next to the heading or card title. Uses --text-secondary at full
+   opacity for visibility in both light and dark modes. data-hidden="true"
+   swaps the icon to eye-off via CSS. */
+.privacy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.15s ease;
+    flex-shrink: 0;
+}
+
+.privacy-btn:hover {
+    color: var(--text-primary);
+}
+
+.privacy-btn:focus-visible {
+    box-shadow: var(--focus-ring);
+    outline: none;
+}
+
+/* Icon swap: hide/show the eye vs eye-off icons based on data-hidden.
+   Default (data-hidden="false"): eye visible, eye-off hidden.
+   Active (data-hidden="true"): eye hidden, eye-off visible. */
+.privacy-btn[data-hidden="false"] .privacy-eye-off {
+    display: none;
+}
+.privacy-btn[data-hidden="true"] .privacy-eye {
+    display: none;
+}
+.privacy-btn[data-hidden="true"] .privacy-eye-off {
+    display: block;
+}
+
+/* Default-hide the eye-off icon independent of data-hidden. The HTML used
+   to do this with an inline style="display:none" on the SVG — but an
+   inline style beats ANY stylesheet rule, so the data-hidden="true" swap
+   rule above could never un-hide it: privacy ON left the button empty.
+   CSS owns visibility alone now. */
+.privacy-btn .privacy-eye-off {
+    display: none;
+}
+
+.privacy-mask {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+}
+
 .stock-price-container {
     margin: 12px 0 20px 0;
 }
@@ -650,6 +710,15 @@ a.logo { text-decoration: none; }
 
 .price-change.pos { background-color: var(--green-bg); }
 .price-change.neg { background-color: var(--red-bg); }
+
+/* Privacy-masked price change pills: when values are hidden, the **** text
+   replaces real data. This rule preserves the pill's visual height so the
+   row doesn't collapse — matching the 14px font + 2×2px padding. */
+.price-change.privacy-masked {
+    min-height: 22px;
+    display: inline-flex;
+    align-items: center;
+}
 
 /* Chart Canvas Area. A fixed height (so the card layout is stable) and
    position: relative, which gives Chart.js a positioned ancestor to
@@ -1677,6 +1746,18 @@ input[type="date"]::-moz-placeholder {
     .container {
         padding: 0 12px;
         margin-top: 14px;
+    }
+
+    /* Portfolio header wraps on narrow screens: the heading, badge, and
+       two toggle icons need room to breathe. */
+    .stock-title {
+        flex-wrap: wrap;
+    }
+
+    /* Ledger header wraps too: the eye icon toggle and Import button
+       share a tight row on phones. */
+    .card-header-actions {
+        flex-wrap: wrap;
     }
 
     .current-price {
