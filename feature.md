@@ -44,12 +44,30 @@ group list by default, so a traded-out position stops crowding the
   switch is on) are untouched.
 
 ## Verification
-- **Implemented, tests green:** full suite **370 passed** (5 new locks
-  in `tests/test_show_closed_pref.py`).
-- Implementation notes: the keep-condition is `netQty !== 0` feeding a
-  ternary filter (`showClosed ? all : filtered`) — the test pins that
-  exact keep-condition, because a `> 0` variant would read the same to
-  the eye while silently hiding shorts.
+- **Implemented, tests green:** full suite **372 passed** (5 locks in
+  `tests/test_show_closed_pref.py`, 15 in `tests/test_realized.py`
+  including 2 review-driven regressions).
+- **Review round 1 (pr-reviewer) — request-changes, all fixed:**
+  1. BUY-covers-short gated the NATIVE pool shrink on `rated` — an
+     unrated short's stale basis leaked into later rows' `avg_cost`
+     (-160.0 instead of 90.0). Native now shrinks unconditionally;
+     CAD stays gated. Locked by
+     `test_covering_buy_shrinks_unrated_short_native_pool`.
+  2. Exact-zero flat-wipe broke on fractional qtys (0.1+0.2−0.3 =
+     5.55e-17): unrated ancestry stuck forever and the hide filter
+     resurrected phantom "0.0000" rows. Wipe + filter now use a 1e-9
+     tolerance. Locked by `test_fractional_positions_still_go_flat`
+     + the updated string pin in `test_show_closed_pref.py`.
+  3. "Zero network calls" wording corrected everywhere (app.py ×2,
+     AGENTS.md, project-brief.md): the money math makes no quote/FX
+     calls; the one network touch is `get_name` (process-lifetime
+     cache, one .info per sold ticker after restart, retried per poll
+     while Yahoo can't answer).
+- Implementation notes: the keep-condition is the 1e-9 tolerance
+  feeding a ternary filter (`showClosed ? all : filtered`) — the test
+  pins that exact keep-condition, because a `> 0` variant would read
+  the same to the eye while silently hiding shorts, and an exact
+  `!== 0` would resurrect float-residue tickers.
 - **GUI check pending:** user flips the switch on /preferences and
   confirms /ledger hides/shows sold-out tickers within a poll cycle,
   shorts stay, and the all-closed empty message points at Preferences.

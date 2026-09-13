@@ -74,7 +74,8 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   `covered × (sell_price × stored fx − avg CAD cost)`); nothing is
   stored, so correcting an old buy rewrites realized history honestly.
   Every rate is a FROZEN FACT (each leg's own `fx_rate`), the endpoint
-  makes zero network calls, and a realized gain can never go stale.
+  makes no quote or FX calls (the one network touch is the Name
+  column's process-lifetime cache), and a realized gain can never go stale.
   Average cost (not FIFO) to match the ledger's Avg Cost column and the
   Canadian ACB convention. Rows degrade to null CAD fields when a leg's
   fx is missing or the currency is unsupported — never a fake 1:1 — and

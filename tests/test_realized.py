@@ -280,6 +280,79 @@ def test_unsupported_currency_degrades(client, fake_names):
     assert payload["total_realized"] is None
 
 
+def test_covering_buy_shrinks_unrated_short_native_pool(client, fake_names):
+    """REGRESSION (review blocking #1): the BUY-covers-short branch used
+    to gate BOTH pool adjustments on pos["rated"] — but the native pool
+    is always exact (currency purity), unlike the CAD pool. Trace: SELL
+    10 @100 fx=NULL opens an unrated short; BUY 14 @90 fx=1.35 covers it
+    and opens a 4-share long; the next SELL must show avg_cost 90.0 —
+    the old code left the native pool unshrunk and displayed -160.0, a
+    corrupted "fact" in exactly the legacy-NULL-fx scenario degradation
+    exists for. The rows still DEGRADE (the pool's CAD ancestry is
+    unknowable) and the total stays null — withholding, never
+    fabricating."""
+    seed(date="2026-08-01", price=100.0, qty=10, tx_type="SELL",
+         currency="USD", fx_rate=None)                   # opens the short
+    seed(date="2026-08-02", price=90.0, qty=14, tx_type="BUY",
+         currency="USD", fx_rate=1.35)                   # cover + long
+    seed(date="2026-08-03", price=120.0, qty=4, tx_type="SELL",
+         currency="USD", fx_rate=1.40)                   # sells the long
+
+    payload = get_payload(client)
+    rows = sell_rows(payload)          # newest first: 08-03, 08-01
+    assert len(rows) == 2
+    # THE REGRESSION: the surviving long's native basis must be exact.
+    assert rows[0]["avg_cost"] == pytest.approx(90.0)
+    # The ancestry is still unrated: degraded rows, null total.
+    assert rows[0]["degraded"] is not None
+    assert rows[0]["realized"] is None
+    assert rows[1]["degraded"] is not None
+    assert payload["total_realized"] is None
+
+
+def test_fractional_positions_still_go_flat(client, fake_names):
+    """REGRESSION (review blocking #2): binary float residue — buy 0.1 +
+    0.2, sell 0.3 → net 5.55e-17, not 0 — used to defeat the exact-zero
+    flat-wipe, so an unrated ancestry stuck to the ticker FOREVER (round
+    3 degraded, total poisoned for life). The wipe now uses a 1e-9
+    tolerance, so a fractional position that sold out counts as flat and
+    the NEXT position is judged fresh — the integer lifecycle contract,
+    extended to the importer's 6-decimal flagship input."""
+    # Round 1 — rated, computes (0.3 × (110×1.4 − 100×1.3) = 7.2)
+    seed(date="2026-08-01", price=100.0, qty=0.1, currency="USD",
+         fx_rate=1.3)
+    seed(date="2026-08-02", price=100.0, qty=0.2, currency="USD",
+         fx_rate=1.3)
+    seed(date="2026-08-03", price=110.0, qty=0.3, tx_type="SELL",
+         currency="USD", fx_rate=1.4)
+    # Round 2 — one NULL-fx leg poisons the pool; its sell degrades
+    seed(date="2026-08-04", price=100.0, qty=0.1, currency="USD",
+         fx_rate=None)
+    seed(date="2026-08-05", price=100.0, qty=0.2, currency="USD",
+         fx_rate=1.3)
+    seed(date="2026-08-06", price=110.0, qty=0.3, tx_type="SELL",
+         currency="USD", fx_rate=1.4)
+    # Round 3 — fresh pool after going flat: must compute again
+    seed(date="2026-08-07", price=100.0, qty=0.1, currency="USD",
+         fx_rate=1.3)
+    seed(date="2026-08-08", price=100.0, qty=0.2, currency="USD",
+         fx_rate=1.3)
+    seed(date="2026-08-09", price=110.0, qty=0.3, tx_type="SELL",
+         currency="USD", fx_rate=1.4)
+
+    payload = get_payload(client)
+    rows = sell_rows(payload)          # newest first: 08-09, 08-06, 08-03
+    assert len(rows) == 3
+    assert rows[0]["degraded"] is None, \
+        "round 3 must be judged fresh — float residue must not glue the " \
+        "unrated ancestry to the ticker forever"
+    assert rows[0]["realized"] == pytest.approx(7.2)
+    assert rows[0]["avg_cost"] == pytest.approx(100.0)
+    assert rows[1]["degraded"] is not None
+    assert rows[2]["degraded"] is None
+    assert payload["total_realized"] is None   # round 2 poisons the total
+
+
 # ── Shape, ordering, names, recompute-on-read ─────────────────────────
 
 def test_empty_ledger_returns_zero_total_and_no_rows(client, fake_names):

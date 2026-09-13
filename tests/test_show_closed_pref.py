@@ -95,20 +95,23 @@ def test_ledger_js_filters_closed_groups_per_render():
     """renderLedger must read the preference INSIDE its own body — every
     render (boot + each 60s poll) re-applies it, so the filter can never
     go stale against a fresh preference flip. The KEEP condition must be
-    netQty !== 0: that pins the semantics both ways — exact zero drops
-    out, and every non-zero group (including a NEGATIVE netQty, i.e. a
-    short) stays. A '> 0' keep-condition would pass the eye but hide
-    shorts — this string check fails it. netQty is the same fact-
-    arithmetic sum (groupSortKeys) the group row's Qty cell shows, so
-    the filter always matches what the row would display, unquoted
-    tickers included. The read result must actually gate something (the
-    showClosed flag feeding the filter), not just be computed."""
+    TOLERANCE-BASED (Math.abs(netQty) > 1e-9): that pins the semantics
+    both ways — exact zero AND binary-float dust (0.1 + 0.2 − 0.3 =
+    5.55e-17; fractional qtys are the importer's flagship input) drop
+    out, while every real position — including a NEGATIVE netQty, i.e. a
+    short — stays. A '> 0' keep-condition would pass the eye but hide
+    shorts; an exact '!== 0' would resurrect dust tickers as phantom
+    "0.0000" rows. netQty is the same fact-arithmetic sum (groupSortKeys)
+    the group row's Qty cell shows, so the filter always matches what
+    the row would display, unquoted tickers included. The read result
+    must actually gate something (the showClosed flag feeding the
+    filter), not just be computed."""
     js = LEDGER_JS.read_text()
     body = _function_body(js, "function renderLedger(")
     assert 'localStorage.getItem("showClosedPositions")' in body, \
         "renderLedger must read the preference per render, not at boot"
-    assert "netQty !== 0" in body, \
-        "the keep condition must be !== 0 (exact zero hides, shorts stay)"
+    assert "Math.abs(groupSortKeys(txs).netQty) > 1e-9" in body, \
+        "the keep condition must be tolerance-based (dust hides, shorts stay)"
     assert "showClosed" in body, \
         "the read result must gate the filter"
 

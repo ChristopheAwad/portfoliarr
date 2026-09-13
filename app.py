@@ -720,10 +720,13 @@ def portfolio_summary():
 #   Average cost (not FIFO) because it matches the ledger's Avg Cost
 #   column and the Canadian ACB convention — one method, everywhere.
 #
-# ZERO NETWORK, by design: every rate is a STORED FACT (fx_rate captured
-# at log time; CAD rows store 1.0). No quotes, no live FX calls — a
-# realized gain is history, it cannot go stale, so this endpoint never
-# needs refreshing and never waits on Yahoo.
+# NO QUOTE OR FX CALLS: every rate is a STORED FACT (fx_rate captured
+# at log time; CAD rows store 1.0). A realized gain is history — it
+# cannot go stale, so the money math never waits on Yahoo and never
+# needs refreshing. (Names are the one courtesy fetch: get_name
+# consults the process-lifetime name cache — one .info per sold ticker
+# after a restart; a ticker Yahoo can't name retries each poll until it
+# can. Only the name can degrade; the money never waits on it.)
 #
 # SHORTS ARE SYMMETRIC, not special-cased (nothing stops a SELL bigger
 # than the position — the summary's net_qty already goes negative):
@@ -834,13 +837,21 @@ def portfolio_realized():
                 elif rate is None:
                     total_uncertain = True
                 if pos["rated"]:
-                    # Shrink the short by the covered shares' KNOWN basis
-                    # (per-share = pool ÷ qty; both are negative, so the
-                    # per-share basis is positive).
-                    ps_native = pos["cost_native"] / qty_before
-                    ps_cad = pos["cost_cad"] / qty_before
-                    pos["cost_native"] += covered * ps_native
-                    pos["cost_cad"] += covered * ps_cad
+                    # The CAD side of the short shrinks only when its
+                    # basis is exactly known — an unrated pool's CAD
+                    # value is garbage and stays untouched until the
+                    # flat wipe.
+                    pos["cost_cad"] += covered * (
+                        pos["cost_cad"] / qty_before
+                    )
+                # The NATIVE side shrinks UNCONDITIONALLY: currency
+                # purity makes it exact even when the CAD pool is not.
+                # Gating it on rated let an unrated short's stale basis
+                # leak into later rows' avg_cost — a corrupted "fact"
+                # (regression locked by
+                # test_covering_buy_shrinks_unrated_short_native_pool).
+                ps_native = pos["cost_native"] / qty_before
+                pos["cost_native"] += covered * ps_native
                 pos["qty"] = qty_before + covered
                 q -= covered
             # Any remainder (or the whole buy, when no short existed)
@@ -932,16 +943,24 @@ def portfolio_realized():
             rows.append(row)
 
         # Going flat wipes the ancestry: a fresh position is judged fresh
-        # (locked by test_degradation_follows_position_lifecycle).
-        if pos["qty"] == 0:
+        # (locked by test_degradation_follows_position_lifecycle). The
+        # check is a TOLERANCE, not == 0: fractional qtys (the importer's
+        # 6-decimal flagship input) leave binary residue — 0.1 + 0.2 − 0.3
+        # is 5.55e-17 — and an exact check would glue an unrated ancestry
+        # to the ticker forever, poisoning every later row and the total
+        # (regression locked by test_fractional_positions_still_go_flat).
+        if abs(pos["qty"]) < 1e-9:
             pos["cost_native"] = 0.0
             pos["cost_cad"] = 0.0
             pos["rated"] = True
             pos["reason"] = None
 
-    # Names come from the same cache the ledger uses; a ticker Yahoo
-    # can't name keeps its full row (name null is cosmetic, not a gap in
-    # the money math).
+    # Names come from the process-lifetime name cache (market_data caches
+    # successes; one .info per sold ticker after a restart, retried per
+    # poll while Yahoo can't answer — the ONLY network this endpoint can
+    # touch, and it never gates the money math). A ticker Yahoo can't
+    # name keeps its full row: name null is cosmetic, not a gap in the
+    # numbers.
     for ticker in {row["ticker"] for row in rows}:
         try:
             name = get_name(ticker)

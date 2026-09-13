@@ -706,14 +706,20 @@ function renderLedger(transactions) {
     // within one cycle, no event wiring needed. netQty is the SAME fact-
     // arithmetic sum (Σ buys − sells, groupSortKeys) the group row's Qty
     // cell shows — it needs no price, so it works for unquoted and
-    // delisted tickers too, whose live group fields are absent. EXACT
-    // zero hides; a negative netQty is a short — an active position.
+    // delisted tickers too, whose live group fields are absent. The keep
+    // condition is a TOLERANCE, not !== 0: fractional qtys (the
+    // importer's 6-decimal flagship) leave binary residue — 0.1 + 0.2 −
+    // 0.3 is 5.55e-17 — and an exact check would resurrect sold-out
+    // fractional tickers as phantom "0.0000" rows. A real short
+    // (negative netQty) is an active position and stays.
     // Presentation only: the stored transactions (the Closed sales cost
     // basis) are never touched.
     const showClosed =
         localStorage.getItem("showClosedPositions") === "true";
-    const visibleGroups = showClosed ? groupRows : groupRows.filter(
-        ({ txs }) => groupSortKeys(txs).netQty !== 0);
+    const visibleGroups = showClosed
+        ? groupRows
+        : groupRows.filter(({ txs }) =>
+              Math.abs(groupSortKeys(txs).netQty) > 1e-9);
 
     if (visibleGroups.length === 0) {
         // Transactions exist (the early return above handled a truly
