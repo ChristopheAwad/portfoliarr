@@ -21,7 +21,6 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 HTML_PATH = PROJECT_ROOT / "templates" / "index.html"
 JS_PATH = PROJECT_ROOT / "static" / "js" / "main.js"
-COMMON_JS_PATH = PROJECT_ROOT / "static" / "js" / "common.js"
 CSS_PATH = PROJECT_ROOT / "static" / "style.css"
 
 
@@ -32,9 +31,6 @@ def _read_html():
 
 def _read_js():
     return JS_PATH.read_text()
-
-def _read_common_js():
-    return COMMON_JS_PATH.read_text()
 
 def _read_css():
     return CSS_PATH.read_text()
@@ -172,22 +168,11 @@ def test_privacy_buttons_use_eye_icon():
 
 # ── JS tests ──────────────────────────────────────────────────────────
 
-def test_common_js_has_eye_icon():
-    """common.js must define an 'eye' icon in the ICONS dictionary."""
-    common_js = _read_common_js()
-    # ICONS dictionary uses unquoted keys (eye: not "eye":)
-    assert re.search(r'\beye\s*:', common_js), \
-        "common.js ICONS dictionary must contain an 'eye' entry"
-    assert 'M1 12s4-8 11-8' in common_js, \
-        "eye icon must contain the Feather-style eye path data"
-
-
-def test_common_js_has_eye_off_icon():
-    """common.js must define an 'eye-off' icon for the hidden state."""
-    common_js = _read_common_js()
-    # ICONS dictionary uses quoted keys for multi-word entries ("eye-off":)
-    assert '"eye-off":' in common_js or "'eye-off':" in common_js, \
-        "common.js ICONS dictionary must contain an 'eye-off' entry"
+# (No common.js ICONS tests here: the privacy buttons draw their eye icons
+# as inline SVGs in index.html — locked by test_privacy_buttons_use_eye_icon.
+# ICONS.eye / ICONS["eye-off"] briefly existed in common.js but had no call
+# site — dead code with misleading comments, removed in the same review
+# round that caught it.)
 
 
 def test_js_references_hide_portfolio_toggle():
@@ -230,15 +215,17 @@ def test_js_saves_localStorage_on_click():
 
 def test_js_uses_click_event_not_change():
     """Privacy buttons must use 'click' event listeners (not 'change'),
-    since they are <button> elements, not checkboxes."""
+    since they are <button> elements, not checkboxes. Registered
+    per-toggle via regex: the original version sliced from the portfolio
+    listener to end-of-file, so a portfolio regression to 'change' still
+    passed via the ledger's 'click' further down — the same half-hollow
+    trap this fix round closed for the ledger mask test."""
     js = _read_js()
-    # Find the event listener blocks for the privacy buttons
-    portfolio_section = js[js.find('hidePortfolioToggle.addEventListener'):]
-    assert '"click"' in portfolio_section or "'click'" in portfolio_section, \
-        "portfolio button must use click event listener"
-    ledger_section = js[js.find('hideLedgerToggle.addEventListener'):]
-    assert '"click"' in ledger_section or "'click'" in ledger_section, \
-        "ledger button must use click event listener"
+    for toggle in ("hidePortfolioToggle", "hideLedgerToggle"):
+        assert re.search(rf'{toggle}\.addEventListener\("click"', js), \
+            f"{toggle} must register a click event listener"
+        assert re.search(rf'{toggle}\.addEventListener\("change"', js) is None, \
+            f"{toggle} must NOT register a change event listener"
 
 
 def test_js_uses_data_hidden_not_checked():
@@ -397,14 +384,18 @@ def test_js_uses_privacy_masked_class():
 
 
 def test_asterisk_masks_painted_in_js():
-    """The **** mask itself lives in main.js — textContent assignments in
-    the masked branches — not in CSS. This locks that the asterisk strings
-    exist where the masking actually happens (the ledger cells are covered
-    per-builder by test_js_masks_ledger_values_when_hidden; this is the
-    portfolio-header counterpart)."""
+    """applyPortfolioPrivacy must paint the **** masks on the portfolio
+    header spans themselves — checked INSIDE the function body, because a
+    file-wide '"****"' check passes on the eight ledger-builder
+    occurrences alone and would stay green even if all three portfolio
+    mask assignments were deleted. (The ledger cells are covered
+    per-builder by test_js_masks_ledger_values_when_hidden.)"""
     js = _read_js()
-    assert '"****"' in js, \
-        "main.js must paint asterisk masks in the masked branches"
+    body = _function_body(js, "function applyPortfolioPrivacy()")
+    for el in ("portfolioValueEl", "portfolioDayChangeEl",
+               "portfolioTotalReturnEl"):
+        assert f'{el}.textContent = "****"' in body, \
+            f"applyPortfolioPrivacy must mask {el} with asterisks"
 
 
 # ── Bugfix locks (GUI-verified 2026-09-13) ────────────────────────────

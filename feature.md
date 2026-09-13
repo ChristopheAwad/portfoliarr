@@ -44,11 +44,11 @@ deeper bugs after the first round — each root cause now locked by a test:
 
 ## Rollback
 Revert the commit. Touches only `templates/index.html`, `static/style.css`,
-`static/js/main.js`, `static/js/common.js` (eye/eye-off icons in `ICONS`),
-`tests/test_privacy_toggles.py`, `tests/test_ui_revamp.py`, `feature.md`.
+`static/js/main.js`, `tests/test_privacy_toggles.py`, `tests/test_ui_revamp.py`,
+`feature.md`.
 
 ## Verification
-- 33 string-check locks in `tests/test_privacy_toggles.py`; full suite
-  **340 passed**.
+- 31 string-check locks in `tests/test_privacy_toggles.py`; full suite
+  **338 passed**.
 - GUI confirmed by user: eye visible both themes × both states; no layout
   shift on mask; mask survives the poll; instant, jump-free unmask.
