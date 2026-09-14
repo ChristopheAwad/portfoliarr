@@ -7,6 +7,7 @@
      code runs. -->
 
 {% block title %}Portfoliarr{% endblock %}
+{% block body_attrs %}class="has-bottom-tabs"{% endblock %}
 
 {% block content %}
 
@@ -177,4 +178,9 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% endblock %}
+
+{% block bottom_tabs %}
+{% set tab_active = 'dashboard' %}
+{% include '_bottom_tabs.html' %}
 {% endblock %}

@@ -170,27 +170,58 @@ body {
 .logo-mark { color: var(--green-pos); flex: 0 0 auto; }
 .logo-accent { color: var(--green-pos); }
 
-/* Primary nav links (the "Ledger" link beside the logo). Quiet by
-   default — text-secondary, like the profile icon — brightening to
-   text-primary on hover. The same affordance ladder every navbar
-   control uses; no fake "active page" state to keep in sync (the logo
-   already says where home is, and one link needs no breadcrumb). */
-.nav-links {
+/* Bottom tab bar — fixed to the viewport bottom, opt-in per page via
+   base.html's bottom_tabs block. Dashboard and Ledger use it; stock
+   detail and preferences don't. The has-bottom-tabs body class adds
+   padding so content isn't hidden behind the bar. */
+.bottom-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
     display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-left: 24px;
+    justify-content: space-around;
+    height: 56px;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    background: var(--card-bg);
+    border-top: 1px solid var(--border-color);
+    z-index: 100;
 }
 
-.nav-link {
+.bottom-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    flex: 1;
+    padding: 6px 0;
     color: var(--text-secondary);
-    font-size: 14px;
-    font-weight: 500;
     text-decoration: none;
+    font-size: 11px;
+    font-weight: 500;
     transition: color 150ms ease;
 }
 
-.nav-link:hover { color: var(--text-primary); }
+.bottom-tab:hover { color: var(--text-primary); }
+
+.bottom-tab:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
+
+.bottom-tab.active {
+    color: var(--green-pos);
+}
+
+.has-bottom-tabs .container {
+    padding-bottom: 72px;
+}
+
+.has-bottom-tabs #toast-container {
+    bottom: 72px;
+}
 
 /* Right side of navbar: profile/preferences button + dropdown. */
 .nav-right {
