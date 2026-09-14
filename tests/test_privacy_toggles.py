@@ -419,18 +419,29 @@ def test_js_uses_privacy_masked_class():
 
 
 def test_asterisk_masks_painted_in_js():
-    """applyPortfolioPrivacy must paint the **** masks on the portfolio
-    header spans themselves — checked INSIDE the function body, because a
-    file-wide '"****"' check passes on the eight ledger-builder
-    occurrences alone and would stay green even if all three portfolio
-    mask assignments were deleted. (The ledger cells are covered
-    per-builder by test_js_masks_ledger_values_when_hidden.)"""
+    """applyPortfolioPrivacy must paint the **** mask on the portfolio
+    value span and show percentage-only change pills via paintChange with
+    hideValue=true — checked INSIDE the function body, because a file-wide
+    '"****"' check passes on the eight ledger-builder occurrences alone
+    and would stay green even if all portfolio mask logic were deleted.
+    (The ledger cells are covered per-builder by
+    test_js_masks_ledger_values_when_hidden.)"""
     js = _read_js()
     body = _function_body(js, "function applyPortfolioPrivacy()")
-    for el in ("portfolioValueEl", "portfolioDayChangeEl",
-               "portfolioTotalReturnEl"):
+    # Total value and cost basis are pure dollar amounts → **** masks
+    for el in ("portfolioValueEl",):
         assert f'{el}.textContent = "****"' in body, \
             f"applyPortfolioPrivacy must mask {el} with asterisks"
+    # Day/total change pills now show percentages only via paintChange
+    assert "paintChange(portfolioDayChangeEl," in body, \
+        "applyPortfolioPrivacy must call paintChange for day change pill"
+    assert "paintChange(portfolioTotalReturnEl," in body, \
+        "applyPortfolioPrivacy must call paintChange for total return pill"
+    # The hideValue flag (5th arg = true) must be present
+    day_idx = body.index("paintChange(portfolioDayChangeEl,")
+    day_call = body[day_idx:day_idx + 200]
+    assert "true)" in day_call or "true," in day_call, \
+        "paintChange for day change must pass hideValue=true"
 
 
 # ── Bugfix locks (GUI-verified 2026-09-13) ────────────────────────────
