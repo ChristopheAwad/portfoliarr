@@ -897,6 +897,9 @@ a.logo { text-decoration: none; }
 
 .watchlist-item:hover { background-color: var(--bg-hover); }
 
+/* Volume leader rows are clickable (link to detail page) — show pointer cursor. */
+#volume-leaders .watchlist-item { cursor: pointer; }
+
 /* Ledger group tickers are links too — inherit the row's colour so the
    collapsed table reads as before, and only hint blue on hover. */
 .ticker-link {
@@ -920,6 +923,34 @@ a.logo { text-decoration: none; }
     justify-content: space-between;
     align-items: center;
     margin-bottom: 12px;
+}
+
+/* Tab bar inside card headers (watchlist sidebar: Watchlist / Volume Leaders).
+   Two buttons styled as tabs — the active one gets an underline accent. */
+.tab-bar {
+    display: flex;
+    gap: 0;
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 150ms ease, border-color 150ms ease;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    color: var(--blue-accent);
+    border-bottom-color: var(--blue-accent);
 }
 
 /* The quiet text button (Import, + Add). inline-flex + gap lets a

@@ -160,7 +160,7 @@ function renderWatchlistRows(symbols) {
 
 // Fill one row from one quote dict (a parsed piece of the JSON "quotes" list).
 function updateWatchRow(quote) {
-    const row = document.querySelector(
+    const row = watchlistTab.querySelector(
         `.watchlist-item[data-symbol="${quote.symbol}"]`
     );
     if (!row) return; // row was removed between cycles; harmless
@@ -635,6 +635,124 @@ document.addEventListener("themechange", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TABS — watchlist sidebar tab switcher (Watchlist / Volume Leaders).
+// Clicking a tab shows its content and hides the other. The "+ Add" button
+// is only visible on the Watchlist tab (volume leaders aren't user-managed).
+// ---------------------------------------------------------------------------
+
+const tabBar = document.querySelector(".tab-bar");
+const tabBtns = document.querySelectorAll(".tab-btn");
+const watchlistTab = document.querySelector("#watchlist-tab");
+const volumeLeadersTab = document.querySelector("#volume-leaders-tab");
+const addTickerBtnEl = document.querySelector("#add-ticker-btn");
+
+tabBar.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+
+    // Toggle active class on buttons
+    tabBtns.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    // Show/hide the corresponding tab content
+    const tab = btn.dataset.tab;
+    if (tab === "watchlist") {
+        watchlistTab.style.display = "";
+        volumeLeadersTab.style.display = "none";
+        addTickerBtnEl.style.display = "";
+    } else {
+        watchlistTab.style.display = "none";
+        volumeLeadersTab.style.display = "";
+        addTickerBtnEl.style.display = "none";
+    }
+});
+
+// ---------------------------------------------------------------------------
+// VOLUME LEADERS — top 10 highest-volume stocks today, top 1 per sector.
+// Same refresh rhythm as the watchlist (60s polling). Rows use the same
+// watchlist-item structure so the same CSS applies.
+// ---------------------------------------------------------------------------
+
+const volumeLeadersEl = document.querySelector("#volume-leaders");
+
+function setVolumeLeadersMessage(text) {
+    volumeLeadersEl.textContent = "";
+    const row = document.createElement("li");
+    row.className = "empty-state";
+    row.textContent = text;
+    volumeLeadersEl.append(row);
+}
+
+function buildVolumeLeaderRow(leader) {
+    const row = document.createElement("li");
+    row.className = "watchlist-item";
+    row.dataset.symbol = leader.symbol;
+
+    // Left side: ticker and name (same structure as watchlist rows)
+    const left = document.createElement("div");
+    const tickerEl = document.createElement("strong");
+    tickerEl.textContent = leader.symbol;
+    const nameEl = document.createElement("div");
+    nameEl.className = "sub-text";
+    nameEl.textContent = leader.name || "";
+    left.append(tickerEl, nameEl);
+
+    // Right side: price and change (same structure as watchlist rows)
+    const right = document.createElement("div");
+    right.className = "text-right";
+    const priceEl = document.createElement("div");
+    priceEl.className = "watch-price";
+    priceEl.textContent = `${formatPrice(leader.price)}`;
+    const changeEl = document.createElement("span");
+    changeEl.className = "change-tag";
+    const positive = leader.change_pct >= 0;
+    const sign = positive ? "+" : "";
+    changeEl.textContent = `${sign}${leader.change_pct.toFixed(2)}%`;
+    changeEl.classList.toggle("pos", positive);
+    changeEl.classList.toggle("neg", !positive);
+    right.append(priceEl, changeEl);
+
+    // Volume badge — shows the volume in a readable format
+    const volEl = document.createElement("div");
+    volEl.className = "sub-text";
+    volEl.textContent = `${formatNumber(leader.volume)} shares`;
+
+    row.append(left, right, volEl);
+    return row;
+}
+
+async function refreshVolumeLeaders() {
+    try {
+        const response = await fetch("/api/market/volume-leaders");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const leaders = data.leaders;
+
+        volumeLeadersEl.textContent = "";
+        if (leaders.length === 0) {
+            setVolumeLeadersMessage("No volume data available");
+            return;
+        }
+
+        for (const leader of leaders) {
+            volumeLeadersEl.append(buildVolumeLeaderRow(leader));
+        }
+    } catch (err) {
+        console.error("volume leaders refresh failed:", err);
+        setVolumeLeadersMessage("Volume leaders unavailable");
+    }
+}
+
+// Navigate: a volume leader ROW is a link to the detail page, same as the
+// watchlist rows. Delegated listener on the <ul> — rows are rebuilt every
+// cycle, so delegation is the only sane approach.
+volumeLeadersEl.addEventListener("click", (event) => {
+    const row = event.target.closest(".watchlist-item");
+    if (!row) return;
+    window.location.href = `/stock/${encodeURIComponent(row.dataset.symbol)}`;
+});
+
+// ---------------------------------------------------------------------------
 // BOOT — the script's entry point. This block runs top-to-bottom the moment
 // the browser reaches it, and only now are all the functions above defined.
 // ---------------------------------------------------------------------------
@@ -646,11 +764,11 @@ document.addEventListener("themechange", () => {
 //    second.
 setChipState("");
 
-// 2. Fetch all three quote-driven sections immediately — no waiting for the
-//    first interval. (The fourth, the ledger, now lives on /ledger with
-//    its own timer in ledger.js.)
+// 2. Fetch all quote-driven sections immediately — no waiting for the
+//    first interval. (The ledger lives on /ledger with its own timer.)
 refreshIndices();
 refreshWatchlist();
+refreshVolumeLeaders();
 refreshPortfolioSummary();
 // If the persisted privacy state is masked, paint the **** now — the
 // refresh above is guarded and will NOT paint over the mask, so without
@@ -679,15 +797,11 @@ chartReady?.then?.(() => {
     }
 });
 
-// 3. Poll. ONE timer drives all cycles: the three sections' data changes at
-//    the same rate (the summary is quote-driven too — prices move, totals
-//    follow), so polling them together keeps them in lockstep and doubles
-//    as the change-detector for anything added through other windows or
-//    tabs (add/remove shows up within a minute even without its own
-//    trigger; logging a transaction happens on /ledger, which has its own
-//    poll).
+// 3. Poll. ONE timer drives all quote-driven cycles: indices, watchlist,
+//    volume leaders, and portfolio summary all change at the same rate.
 setInterval(() => {
     refreshIndices();
     refreshWatchlist();
+    refreshVolumeLeaders();
     refreshPortfolioSummary();
 }, REFRESH_MS);

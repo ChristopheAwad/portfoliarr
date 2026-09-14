@@ -467,3 +467,125 @@ def search_tickers(query, limit=8):
             "type": hit.get("typeDisp"),
         })
     return results
+
+
+# ── Volume leaders — "what's hot today" sidebar tab ───────────────────
+#
+# Hardcoded sector leaders: 2-3 highly liquid tickers per market sector.
+# We scan these (not the whole market) to keep API calls fast — the goal
+# is top-1-per-sector, then top-10-by-volume, not a full market scan.
+# One Ticker.info call per candidate, parallelized with ThreadPoolExecutor.
+#
+# Volume changes slowly during the day, so the result cache has a longer
+# TTL than quotes (5 minutes vs. 2 minutes).
+
+SECTOR_LEADERS = {
+    "Technology":       ["AAPL", "MSFT", "NVDA"],
+    "Healthcare":       ["UNH", "JNJ", "LLY"],
+    "Financials":       ["JPM", "BAC", "GS"],
+    "Consumer Cyclical":["AMZN", "TSLA", "HD"],
+    "Communication":    ["GOOGL", "META", "NFLX"],
+    "Industrials":      ["GE", "CAT", "RTX"],
+    "Consumer Staples": ["PG", "KO", "COST"],
+    "Energy":           ["XOM", "CVX", "COP"],
+    "Real Estate":      ["AMT", "PLD", "CCI"],
+    "Utilities":        ["NEE", "DUK", "SO"],
+    "Basic Materials":  ["LIN", "APD", "SHW"],
+}
+
+_VOLUME_TTL = 300  # 5 minutes — volume changes slowly during the day
+_volume_cache = {}  # {"data": [...], "fetched_at": epoch}
+
+
+def get_volume_leaders():
+    """Return today's highest-volume stocks, top 1 per sector, capped at 10.
+
+    Scans SECTOR_LEADERS candidates in parallel via Ticker.info (the heavy
+    endpoint that includes volume). Picks the highest-volume ticker per
+    sector, sorts all sector leaders by volume descending, returns top 10.
+
+    Caches the full result for _VOLUME_TTL seconds — volume data is
+    quote-like (changes during the session) but not as volatile as price,
+    so 5 minutes is a reasonable freshness/cost tradeoff.
+
+    Returns a list of dicts:
+        [{symbol, name, price, change, change_pct, volume}, ...]
+
+    Raises on total failure — the route layer translates to HTTP.
+    Partial failures (some sectors fail) are handled gracefully: failed
+    sectors are simply absent from the result.
+    """
+    # Cache check
+    now = time.time()
+    entry = _volume_cache.get("data")
+    if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
+        return entry["leaders"]
+
+    # Flatten all candidate symbols (deduplicated — a ticker might appear
+    # in multiple sectors, though our list avoids that).
+    all_candidates = []
+    seen = set()
+    for sector, tickers in SECTOR_LEADERS.items():
+        for t in tickers:
+            if t not in seen:
+                all_candidates.append((sector, t))
+                seen.add(t)
+
+    # Fetch info for all candidates in parallel
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results = {}  # {symbol: {info_dict, sector}}
+
+    def _fetch(sector, symbol):
+        try:
+            info = yf.Ticker(symbol).info
+            volume = info.get("volume")
+            if not volume:
+                return None  # skip tickers with no volume data
+            return (symbol, sector, info)
+        except Exception:
+            return None  # skip failed tickers (per-symbol resilience)
+
+    with ThreadPoolExecutor(max_workers=min(len(all_candidates), 8)) as pool:
+        futures = {
+            pool.submit(_fetch, sector, sym): (sector, sym)
+            for sector, sym in all_candidates
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            symbol, sector, info = result
+            # If we already have a leader for this sector, keep the one
+            # with higher volume.
+            if sector in results:
+                existing_vol = results[sector]["info"].get("volume", 0)
+                if (info.get("volume", 0)) <= existing_vol:
+                    continue
+            results[sector] = {"symbol": symbol, "info": info}
+
+    # Build leader dicts, sorted by volume descending, capped at 10
+    leaders = []
+    for sector, data in results.items():
+        info = data["info"]
+        price = info.get("regularMarketPrice") or info.get("currentPrice")
+        prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose")
+        if not price or not prev_close:
+            continue  # skip if we can't compute change
+        change = price - prev_close
+        change_pct = change / prev_close * 100 if prev_close else 0
+        leaders.append({
+            "symbol": data["symbol"],
+            "name": info.get("shortName") or info.get("longName"),
+            "price": price,
+            "change": change,
+            "change_pct": change_pct,
+            "volume": info.get("volume", 0),
+        })
+
+    leaders.sort(key=lambda x: x["volume"], reverse=True)
+    leaders = leaders[:10]
+
+    # Cache the result
+    _volume_cache["data"] = {"leaders": leaders, "fetched_at": now}
+    return leaders
