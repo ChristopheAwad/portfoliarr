@@ -494,7 +494,10 @@ SECTOR_LEADERS = {
 }
 
 _VOLUME_TTL = 300  # 5 minutes — volume changes slowly during the day
-_volume_cache = {}  # {"data": [...], "fetched_at": epoch}
+# Single-entry cache: _volume_cache["data"] = {"leaders": [...], "fetched_at": epoch}
+# One composite result (per-sector winners, sorted, capped) instead of
+# per-symbol entries — every consumer of this endpoint wants the same list.
+_volume_cache = {}
 
 
 def get_volume_leaders():
@@ -511,9 +514,11 @@ def get_volume_leaders():
     Returns a list of dicts:
         [{symbol, name, price, change, change_pct, volume}, ...]
 
-    Raises on total failure — the route layer translates to HTTP.
-    Partial failures (some sectors fail) are handled gracefully: failed
-    sectors are simply absent from the result.
+    Raises ValueError when NO usable leader resolves — a total failure is
+    never cached, so the next poll retries (same successes-only rule as
+    the history cache; a transient Yahoo hiccup can't pose as "no volume
+    anywhere" for a TTL window). Partial failures are graceful: sectors
+    that couldn't answer are simply absent from the result.
     """
     # Cache check
     now = time.time()
@@ -534,9 +539,14 @@ def get_volume_leaders():
     # Fetch info for all candidates in parallel
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    results = {}  # {symbol: {info_dict, sector}}
+    results = {}  # {sector: {"symbol": ..., "info": <info dict>}}
 
     def _fetch(sector, symbol):
+        # The one deliberate except-Exception in the data layer: a 33-ticker
+        # parallel scan needs PER-SYMBOL resilience (one dead ticker must not
+        # sink the scan, same rule as the indices route). The boundary rule
+        # still holds at the function level — get_volume_leaders raises when
+        # NOTHING survives, and never caches that failure.
         try:
             info = yf.Ticker(symbol).info
             volume = info.get("volume")
@@ -544,7 +554,7 @@ def get_volume_leaders():
                 return None  # skip tickers with no volume data
             return (symbol, sector, info)
         except Exception:
-            return None  # skip failed tickers (per-symbol resilience)
+            return None  # skip failed tickers; counted as "sector didn't answer"
 
     with ThreadPoolExecutor(max_workers=min(len(all_candidates), 8)) as pool:
         futures = {
@@ -585,6 +595,14 @@ def get_volume_leaders():
 
     leaders.sort(key=lambda x: x["volume"], reverse=True)
     leaders = leaders[:10]
+
+    # Successes-only cache rule: an EMPTY result means Yahoo answered for
+    # nobody (or nobody had usable prices) — that's a failed fetch, so
+    # raise instead of caching it. The route's wide catch degrades the
+    # raise to 200 + {"leaders": []}, and the next poll retries rather
+    # than reading "no volume anywhere" out of the cache for 5 minutes.
+    if not leaders:
+        raise ValueError("no volume leaders resolved from any sector")
 
     # Cache the result
     _volume_cache["data"] = {"leaders": leaders, "fetched_at": now}

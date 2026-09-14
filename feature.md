@@ -86,11 +86,25 @@ Added tab bar styles:
 - `tests/test_volume_leaders.py` — new test file (13 tests)
 
 ## Verification
-- **Implemented, tests green:** full suite **385 passed** (13 new tests
-  in `tests/test_volume_leaders.py`).
-- **GUI check pending:** user confirms the sidebar shows two tabs
-  ("Watchlist" / "Volume Leaders"), volume leaders load with correct
-  data, rows are clickable, and 60s refresh updates the feed.
+- **Implemented, tests green:** full suite **386 passed** (14 tests in
+  `tests/test_volume_leaders.py`).
+- **Review round 1 (pr-reviewer) — request-changes, all fixed:**
+  1. Total failure was cached for 5 min (violated the successes-only
+     rule). Now: zero usable leaders raises `ValueError`, never cached;
+     route degrades to 200 + `{"leaders": []}`. Locked by
+     `test_all_sectors_fail_raises_value_error` +
+     `test_failed_fetch_is_not_cached`.
+  2. Sort test was vacuous (single-sector fill → 1-element list). Now
+     fills 3 sectors with distinct volumes and pins exact order
+     `["NVDA", "XOM", "JPM"]`; per-sector test pins `symbols == ["NVDA"]`.
+  3. Nits fixed: watchlist `<ul>` got `id="watchlist"` (identity by
+     meaning, not DOM order), `_volume_cache` documented in
+     `project-brief.md` + AGENTS.md cache inventory, route tests moved
+     to the `monkeypatch` fixture, two cache-shape comments corrected,
+     volume badge integer-formatted (stock.js's Intl pattern), cap test
+     bites (`== 10`), partial-failure test fills two sectors and kills one.
+- **GUI confirmed by user** (round 1): tabs flip, leaders render, rows
+  navigate to `/stock/<symbol>`.
 
 ## Rollback
 Revert the commit. Touches `market_data.py`, `app.py`,

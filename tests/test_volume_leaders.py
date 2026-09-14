@@ -76,8 +76,9 @@ def fake_yf_for_volume(monkeypatch):
 
 def test_top_one_per_sector(fake_yf_for_volume):
     """Each sector's highest-volume ticker is picked, even when a lower-
-    volume ticker appears first in the candidates list."""
-    # Technology sector: NVDA (500M) beats AAPL (100M)
+    volume ticker appears first in the candidates list — and exactly ONE
+    winner per sector (a bug emitting two would fail the equality)."""
+    # Technology sector: NVDA (500M) beats AAPL (100M) and MSFT (30M)
     fake_yf_for_volume.info_data.update({
         "AAPL": _make_info("Apple", 190.0, 188.0, 100_000_000),
         "NVDA": _make_info("NVIDIA", 120.0, 118.0, 500_000_000),
@@ -85,36 +86,43 @@ def test_top_one_per_sector(fake_yf_for_volume):
     })
     leaders = market_data.get_volume_leaders()
 
-    # Only Technology is defined in SECTOR_LEADERS with these tickers,
-    # so we should get exactly 1 leader from that sector.
+    # Only Technology resolves with this data, so exactly 1 leader — NVDA.
     symbols = [l["symbol"] for l in leaders]
-    assert "NVDA" in symbols
-    assert "AAPL" not in symbols  # lower volume in same sector
+    assert symbols == ["NVDA"]
 
 
 def test_sorted_by_volume_descending(fake_yf_for_volume):
-    """The final list is sorted by volume, highest first."""
+    """The final list is sorted by volume, highest first. Needs THREE
+    different sectors — same-sector tickers collapse to one winner, so a
+    single-sector fill would make the order assertion vacuous (a list of
+    one is always 'sorted')."""
     fake_yf_for_volume.info_data.update({
+        # Technology's winner: NVDA 500M
         "AAPL": _make_info("Apple", 190.0, 188.0, 100_000_000),
         "NVDA": _make_info("NVIDIA", 120.0, 118.0, 500_000_000),
-        "MSFT": _make_info("Microsoft", 420.0, 415.0, 300_000_000),
+        "MSFT": _make_info("Microsoft", 420.0, 415.0, 30_000_000),
+        # Energy's winner: XOM 300M
+        "XOM": _make_info("Exxon", 110.0, 108.0, 300_000_000),
+        "CVX": _make_info("Chevron", 160.0, 158.0, 90_000_000),
+        # Financials' winner: JPM 100M
+        "JPM": _make_info("JPMorgan", 240.0, 238.0, 100_000_000),
+        "BAC": _make_info("Bank of America", 45.0, 44.0, 80_000_000),
     })
     leaders = market_data.get_volume_leaders()
-    volumes = [l["volume"] for l in leaders]
-    assert volumes == sorted(volumes, reverse=True)
+    # Exact order: 500M, then 300M, then 100M — not just "sorted-ish".
+    assert [l["symbol"] for l in leaders] == ["NVDA", "XOM", "JPM"]
 
 
 def test_capped_at_ten(fake_yf_for_volume):
-    """At most 10 leaders returned, even if more sectors resolve."""
-    # Fill ALL sector leaders with valid data to get more than 10 sectors
-    # The SECTOR_LEADERS dict has ~11 sectors, so we fill them all
+    """The cap BITES, not just 'is not exceeded': all 11 sectors resolve,
+    exactly 10 come back (an off-by-one [:9] or a missing cap would fail)."""
     for sector_tickers in market_data.SECTOR_LEADERS.values():
         for sym in sector_tickers:
             fake_yf_for_volume.info_data[sym] = _make_info(
                 sym, 100.0, 99.0, 50_000_000
             )
     leaders = market_data.get_volume_leaders()
-    assert len(leaders) <= 10
+    assert len(leaders) == 10
 
 
 def test_leader_payload_has_required_fields(fake_yf_for_volume):
@@ -175,44 +183,68 @@ def test_cache_expires_after_ttl(fake_yf_for_volume):
 # ── get_volume_leaders: failure handling ───────────────────────────────
 
 def test_one_sector_fails_others_still_returned(fake_yf_for_volume):
-    """If one sector's tickers all fail, other sectors still appear."""
-    # Only provide AAPL (Technology) — other sectors will fail
+    """Per-sector resilience: TWO sectors start alive, one dies mid-scan
+    (its tickers raise) — the survivor's leader still comes back. Filling
+    both then deleting one's data is what makes 'others still returned'
+    real: with only one sector filled there'd be nothing to survive."""
+    fake_yf_for_volume.info_data.update({
+        "AAPL": _make_info("Apple", 190.0, 188.0, 100_000_000),
+        "XOM": _make_info("Exxon", 110.0, 108.0, 300_000_000),
+    })
+    del fake_yf_for_volume.info_data["XOM"]  # Energy just went dark
+    leaders = market_data.get_volume_leaders()
+    assert [l["symbol"] for l in leaders] == ["AAPL"]
+
+
+def test_all_sectors_fail_raises_value_error(fake_yf_for_volume):
+    """Total failure raises the named ValueError — it must NOT return an
+    empty list, because an empty result would be cached for 5 minutes
+    (the successes-only rule the history cache already lives by)."""
+    # info_data is empty → every ticker raises inside _fetch → nothing resolves
+    with pytest.raises(ValueError):
+        market_data.get_volume_leaders()
+
+
+def test_failed_fetch_is_not_cached(fake_yf_for_volume):
+    """The regression lock for the successes-only rule: a total failure
+    leaves NO cache entry behind, so Yahoo recovering is visible on the
+    very next call (fresh constructions), not 5 minutes later."""
+    # 1. Everything fails → raise, and the cache stays empty.
+    with pytest.raises(ValueError):
+        market_data.get_volume_leaders()
+    assert market_data._volume_cache == {}
+
+    # 2. Yahoo "recovers" — the next call fetches for real and succeeds.
     fake_yf_for_volume.info_data.update({
         "AAPL": _make_info("Apple", 190.0, 188.0, 100_000_000),
     })
     leaders = market_data.get_volume_leaders()
-    # Should still get Technology's leader
-    assert any(l["symbol"] == "AAPL" for l in leaders)
-
-
-def test_all_sectors_fail_returns_empty_list(fake_yf_for_volume):
-    """When every ticker fails, return empty — no crash, no 500."""
-    # info_data is empty → all tickers raise ValueError
-    leaders = market_data.get_volume_leaders()
-    assert leaders == []
+    assert [l["symbol"] for l in leaders] == ["AAPL"]
+    assert len(fake_yf_for_volume.calls) > 0  # a genuine fetch happened
 
 
 def test_missing_volume_field_skips_ticker(fake_yf_for_volume):
-    """A ticker with no volume data is skipped (not a crash)."""
+    """A ticker whose info lacks `volume` is skipped — not a crash, and
+    not a zero-volume winner. Its sector still resolves via a sibling."""
     fake_yf_for_volume.info_data.update({
         "AAPL": {
             "shortName": "Apple",
             "regularMarketPrice": 190.0,
             "regularMarketPreviousClose": 188.0,
-            # volume key missing
+            # volume key missing → skipped
         },
+        "NVDA": _make_info("NVIDIA", 120.0, 118.0, 500_000_000),
     })
     leaders = market_data.get_volume_leaders()
-    # AAPL should be skipped, no leaders returned
-    assert leaders == []
+    assert [l["symbol"] for l in leaders] == ["NVDA"]
 
 
 # ── Route tests ────────────────────────────────────────────────────────
 
-def test_volume_leaders_route_returns_200(client, fake_market):
+def test_volume_leaders_route_returns_200(client, fake_market, monkeypatch):
     """The API endpoint returns 200 with a leaders list."""
-    # Patch get_volume_leaders on the module where it's used (app.py)
-    monkeypatch = pytest.MonkeyPatch()
+    # Patch get_volume_leaders on the module where it's used (app.py —
+    # the same "patch where it's USED" rule as the fake_market fixture).
     monkeypatch.setattr(
         app_module, "get_volume_leaders",
         lambda: [
@@ -223,40 +255,31 @@ def test_volume_leaders_route_returns_200(client, fake_market):
             }
         ],
     )
-    try:
-        res = client.get("/api/market/volume-leaders")
-        assert res.status_code == 200
-        body = res.get_json()
-        assert "leaders" in body
-        assert len(body["leaders"]) == 1
-        assert body["leaders"][0]["symbol"] == "AAPL"
-    finally:
-        monkeypatch.undo()
+    res = client.get("/api/market/volume-leaders")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert "leaders" in body
+    assert len(body["leaders"]) == 1
+    assert body["leaders"][0]["symbol"] == "AAPL"
 
 
-def test_volume_leaders_route_empty_list(client, fake_market):
-    """Even an empty leaders list returns 200 (graceful degradation)."""
-    monkeypatch = pytest.MonkeyPatch()
+def test_volume_leaders_route_empty_list(client, fake_market, monkeypatch):
+    """Even an empty leaders list returns 200 (graceful degradation) —
+    e.g. the data layer answered but every row lacked a usable price."""
     monkeypatch.setattr(app_module, "get_volume_leaders", lambda: [])
-    try:
-        res = client.get("/api/market/volume-leaders")
-        assert res.status_code == 200
-        assert res.get_json()["leaders"] == []
-    finally:
-        monkeypatch.undo()
+    res = client.get("/api/market/volume-leaders")
+    assert res.status_code == 200
+    assert res.get_json()["leaders"] == []
 
 
-def test_volume_leaders_route_exception_returns_200(client, fake_market):
-    """If get_volume_leaders raises, the route catches and returns 200
-    with empty leaders — never a 500."""
+def test_volume_leaders_route_exception_returns_200(
+        client, fake_market, monkeypatch):
+    """If get_volume_leaders raises (e.g. the total-failure ValueError),
+    the route catches and returns 200 with empty leaders — never a 500."""
     def _raise():
-        raise ConnectionError("yahoo down")
+        raise ValueError("no volume leaders resolved from any sector")
 
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(app_module, "get_volume_leaders", _raise)
-    try:
-        res = client.get("/api/market/volume-leaders")
-        assert res.status_code == 200
-        assert res.get_json()["leaders"] == []
-    finally:
-        monkeypatch.undo()
+    res = client.get("/api/market/volume-leaders")
+    assert res.status_code == 200
+    assert res.get_json()["leaders"] == []

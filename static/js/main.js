@@ -88,7 +88,10 @@ async function refreshIndices() {
 // ---------------------------------------------------------------------------
 
 // Grab the pieces this section manages, once, at load time.
-const watchlistEl = document.querySelector(".watchlist");
+// The id (not the .watchlist class) is the hook: the sidebar now holds TWO
+// .watchlist lists (this one and #volume-leaders), and identity by meaning
+// beats DOM-order luck.
+const watchlistEl = document.querySelector("#watchlist");
 const addTickerBtn = document.querySelector("#add-ticker-btn");
 
 // Replace the list's contents with one message row (used for the empty
@@ -675,6 +678,12 @@ tabBar.addEventListener("click", (e) => {
 
 const volumeLeadersEl = document.querySelector("#volume-leaders");
 
+// Volume is a share COUNT (whole units) — formatNumber's fixed two decimals
+// would render "100,000,000.00 shares". Integer grouping instead, the same
+// dedicated Intl formatter pattern stock.js uses for its stats grid.
+const integerFormat = new Intl.NumberFormat("en-US",
+    { maximumFractionDigits: 0 });
+
 function setVolumeLeadersMessage(text) {
     volumeLeadersEl.textContent = "";
     const row = document.createElement("li");
@@ -715,7 +724,7 @@ function buildVolumeLeaderRow(leader) {
     // Volume badge — shows the volume in a readable format
     const volEl = document.createElement("div");
     volEl.className = "sub-text";
-    volEl.textContent = `${formatNumber(leader.volume)} shares`;
+    volEl.textContent = `${integerFormat.format(leader.volume)} shares`;
 
     row.append(left, right, volEl);
     return row;
