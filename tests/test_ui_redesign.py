@@ -28,6 +28,7 @@
 # breaks the chart silently — this test makes it break loudly instead.
 
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +36,82 @@ import pytest
 import app as app_module
 import db
 from app import app
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def css() -> str:
+    """style.css as one string — the same read-the-file pattern the CSS
+    contract tests (test_ledger_css.py, test_docker.py) use. pytest can't
+    run a browser, so layout contracts are locked as string checks."""
+    return (ROOT / "static" / "style.css").read_text()
+
+
+def rule_body(needle: str) -> str:
+    """Return the declaration body of the first rule whose SELECTOR (or
+    any text inside the rule before its '{') contains `needle`.
+
+    Walk FORWARD from the needle to the rule's own '{' and take text up
+    to its matching '}'. (Walking BACK, as test_ledger_css.py's helper
+    does, works only when the needle sits inside a declaration body or a
+    shared selector list; for a selector needle the nearest preceding
+    '{' belongs to the PREVIOUS rule, and everything between — including
+    that rule's body and this rule's lead comment — pollutes the span.)
+    Comments INSIDE the body still count, so keep teaching comments free
+    of strings these tests forbid."""
+    text = css()
+    i = text.find(needle)
+    assert i != -1, f"needle not found in style.css: {needle!r}"
+    start = text.find("{", i)
+    end = text.find("}", start)
+    assert start != -1 and end != -1, "malformed rule around needle"
+    return text[start : end + 1]
+
+
+# ── Layout-contract locks (the phone-overflow fix) ────────────────────
+
+def test_dashboard_grid_items_release_the_auto_minimum():
+    """The dashboard's grid tracks must never grow from content. `1fr`
+    means `minmax(auto, 1fr)` — the auto minimum honors the item's
+    min-content width, and the non-wrapping timeframe tray's ~450px
+    intrinsic width would ride it up through the chart card and OUT to
+    the page, widening a 390px phone viewport to ~443px (measured live).
+    This rule is the release valve; the tray then scrolls INSIDE its
+    card. Both grid items must be named — a future third column would
+    need the same treatment."""
+    # The selector list sits BEFORE the '{' (rule_body returns only the
+    # declarations), so the sidebar check reads the selector span.
+    text = css()
+    i = text.find(".main-content,")
+    assert i != -1, "grid-item min-width rule missing from style.css"
+    selector_span = text[i : text.find("{", i)]
+    assert ".sidebar" in selector_span, (
+        "grid-item release must cover the sidebar too"
+    )
+    body = rule_body(".main-content,")
+    assert "min-width" in body and "0" in body
+
+
+def test_phone_tray_is_a_plain_overflow_scroll():
+    """The phone tray's inner scroll must stay a PLAIN overflow scroll.
+    -webkit-overflow-scrolling: touch (the legacy momentum hint) made
+    the fixed bottom tab bar vanish while scrolling and return when the
+    direction reversed — a composited-scroll-layer artifact. scroll-snap
+    had the same jitter on Android. Both are absent-by-contract here:
+    if either string reappears inside the ≤600px tray rule, the tab-bar
+    disappearing bug ships again."""
+    # Find the PHONE override (inside a media query), not the base rule:
+    # walk forward from the base rule to the next tray rule.
+    text = css()
+    second = text.find(".chart-timeframe-selectors",
+                       text.find(".chart-timeframe-selectors") + 1)
+    assert second != -1, "phone tray override missing from style.css"
+    start = text.find("{", second)
+    end = text.find("}", start)
+    phone_rule = text[start : end + 1]
+    assert "-webkit-overflow-scrolling" not in phone_rule
+    assert "scroll-snap" not in phone_rule
+    assert "overflow-x" in phone_rule and "auto" in phone_rule
 
 
 # ── The rendered-page contracts ───────────────────────────────────────

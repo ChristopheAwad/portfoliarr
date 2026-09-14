@@ -569,6 +569,21 @@ a.logo { text-decoration: none; }
     gap: 20px;
 }
 
+/* Grid tracks never shrink below their content's intrinsic width by
+   default: `1fr` means `minmax(auto, 1fr)`, and that auto minimum
+   honors the item's min-content size. The timeframe tray is a
+   non-wrapping fit-content row (~454px intrinsic), so without this
+   rule its width would propagate through the chart card, the track,
+   and out to the PAGE — a phone viewport (390px) would grow to ~443px
+   and everything would pan sideways. min-width: 0 releases the auto
+   minimum: the track becomes exactly the container's width and the
+   tray scrolls INSIDE its card instead (the same belt-and-braces the
+   ledger page's cards carry). */
+.main-content,
+.sidebar {
+    min-width: 0;
+}
+
 /* Cards & Generic Components */
 .card {
     background: var(--card-bg);
@@ -2010,20 +2025,24 @@ input[type="date"]::-moz-placeholder {
     }
 
     /* Timeframe tray: nine segments don't fit a portrait phone, so the
-       tray scrolls sideways. scroll-snap makes each segment settle to
-       a clean stop (proximity = only nudge near a segment edge, so
-       free scrolling still feels free). min-width: 0 + max-width keeps
-       the fit-content tray from overflowing its card. */
+       tray scrolls sideways. Deliberately a PLAIN overflow scroll — no
+       -webkit-overflow-scrolling: touch (the legacy momentum hint; on
+       iOS its composited scroll layer made position:fixed elements —
+       the bottom tab bar — vanish while scrolling and return when the
+       direction reversed) and no scroll-snap (the snap re-layout had
+       the same jitter on Android). Modern mobile browsers scroll touch
+       layers smoothly without either; the tray's inner scroll only
+       exists because the grid's min-width: 0 fix (above) contains it. */
     .chart-timeframe-selectors {
         max-width: 100%;
         overflow-x: auto;
         scrollbar-width: thin;
-        scroll-snap-type: x proximity;
-        -webkit-overflow-scrolling: touch;
     }
 
+    /* Keep each segment at its natural width: a flex child shrinks by
+       default, and squished "1D…MAX" buttons would be unreadable — the
+       tray must scroll, not squeeze. */
     .time-btn {
-        scroll-snap-align: start;
         flex: 0 0 auto;
     }
 
