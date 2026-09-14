@@ -110,9 +110,12 @@ function setWatchlistMessage(text) {
 // carrying a data-symbol hook (same "find by meaning, not position" contract
 // as the chips) and starting blank until a quote fills it in.
 function renderWatchlistRows(symbols) {
-    // Empty watchlist is a normal state, not an error — say so nicely.
+    // Empty watchlist is a normal state, not an error — say so AND say
+    // what to do about it: actionable copy beats a shrug.
     if (symbols.length === 0) {
-        setWatchlistMessage("Nothing here yet — click + Add");
+        setWatchlistMessage(
+            "Your watchlist is empty — search a ticker above and press Add."
+        );
         return;
     }
 
@@ -342,13 +345,14 @@ if (hidePortfolioToggle) {
 }
 
 // ---------------------------------------------------------------------------
-// PORTFOLIO HEADER — the "Your Portfolio" card's three live numbers: total
-// value, today's move, and total return. Rendering only, like every section
-// above: GET /api/portfolio/summary computes the raw floats from the ledger
-// + live quotes; this code formats and paints them.
+// PORTFOLIO HEADER — the "Your Portfolio" card's live numbers: total value,
+// today's move, total return, and the cost basis they're measured against.
+// Rendering only, like every section above: GET /api/portfolio/summary
+// computes the raw floats from the ledger + live quotes; this code formats
+// and paints them.
 //
-// The three spans ship blank in index.html ("…") so the old mockup numbers
-// can never masquerade as live data — same rule as the indices chips.
+// The spans ship blank in index.html so the old mockup numbers can never
+// masquerade as live data — same rule as the indices chips.
 // ---------------------------------------------------------------------------
 
 // Grab the pieces this section manages, once, at load time.
@@ -356,6 +360,11 @@ const portfolioValueEl = document.getElementById("portfolio-value");
 const portfolioDayChangeEl = document.getElementById("portfolio-day-change");
 const portfolioTotalReturnEl =
     document.getElementById("portfolio-total-return");
+// The cost-basis caption's value span — the strip's fourth fact, sitting in
+// its own quiet <p> under the big number. Same paint/mask lifecycle as the
+// three above: it ships empty, the summary poll fills it, the privacy eye
+// hides it.
+const portfolioCostBasisEl = document.getElementById("portfolio-cost-basis");
 
 // Degraded state: value "—", change lines blank. Used when the fetch fails
 // entirely AND when the backend reports that nothing priced is contributing
@@ -408,7 +417,7 @@ let lastPortfolioPaint = null;
 // never removes privacy-masked — that's stripped here too.)
 function clearPortfolioGeometryLocks() {
     for (const el of [portfolioValueEl, portfolioDayChangeEl,
-                      portfolioTotalReturnEl]) {
+                      portfolioTotalReturnEl, portfolioCostBasisEl]) {
         el.style.display = "";
         el.style.minWidth = "";
         el.style.minHeight = "";
@@ -437,7 +446,7 @@ function applyPortfolioPrivacy() {
     if (!hidePortfolioToggle) return;
     const masked = portfolioMasked();
     const targets = [portfolioValueEl, portfolioDayChangeEl,
-                     portfolioTotalReturnEl];
+                     portfolioTotalReturnEl, portfolioCostBasisEl];
     if (masked) {
         // Snapshot the values on screen NOW, while they're still real —
         // the unmask branch repaints them from memory so the wait for the
@@ -451,6 +460,7 @@ function applyPortfolioPrivacy() {
                 dayClass: portfolioDayChangeEl.className,
                 total: portfolioTotalReturnEl.textContent,
                 totalClass: portfolioTotalReturnEl.className,
+                basis: portfolioCostBasisEl.textContent,
             };
         }
         // Freeze geometry FIRST, while the real values are still painted —
@@ -468,6 +478,11 @@ function applyPortfolioPrivacy() {
         portfolioDayChangeEl.className = "price-change privacy-masked";
         portfolioTotalReturnEl.textContent = "****";
         portfolioTotalReturnEl.className = "price-change privacy-masked";
+        // The cost-basis span keeps its own (class-less) identity — the
+        // mask rides on inline geometry locks plus the semantic
+        // privacy-masked marker, not a className overwrite.
+        portfolioCostBasisEl.textContent = "****";
+        portfolioCostBasisEl.classList.add("privacy-masked");
     } else {
         // Unmask. The geometry locks stay on for now — releasing early
         // would let the still-painted **** collapse to natural (tiny)
@@ -481,6 +496,7 @@ function applyPortfolioPrivacy() {
             portfolioDayChangeEl.className = lastPortfolioPaint.dayClass;
             portfolioTotalReturnEl.textContent = lastPortfolioPaint.total;
             portfolioTotalReturnEl.className = lastPortfolioPaint.totalClass;
+            portfolioCostBasisEl.textContent = lastPortfolioPaint.basis || "";
             clearPortfolioGeometryLocks();
         }
         // No cache (masked before the first fetch ever landed): nothing
@@ -562,9 +578,21 @@ async function refreshPortfolioSummary() {
                     "Today");
         paintChange(portfolioTotalReturnEl, data.total_gain,
                     data.total_gain_pct, "Total");
+        // The strip's fourth fact: what the position(s) cost. Raw float
+        // from the backend — same formatter, same CAD label as the total
+        // above (the cost basis is a CAD figure: stored per-transaction
+        // rates make it so). The caption's "Cost basis" wording lives in
+        // index.html; only the number is painted here.
+        portfolioCostBasisEl.textContent =
+            `${formatNumber(data.cost_basis)} ${data.currency || "CAD"}`;
         // Real content is back over the masks — release the geometry locks
         // in the same JS turn so there's exactly one layout pass (no jump).
         clearPortfolioGeometryLocks();
+
+        // The donut eats the same reply: the holdings slice arrives
+        // already priced-only, CAD, and value-sorted — the backend's math,
+        // painted verbatim.
+        paintAllocation(data.holdings);
 
         // Feed yesterday's portfolio value into the chart handle so the
         // 1D view can draw a horizontal reference line at yesterday's close.
@@ -632,10 +660,190 @@ function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD, opts) {
 // When the theme toggles, repaint the chart so grid/line colors pick up
 // the new CSS variable values (the crosshair and gradient already read
 // CSS on every draw, but grid color and line border are set at creation /
-// refresh time and need an explicit update).
+// refresh time and need an explicit update). The donut's palette is also
+// build-time state (see paintAllocation) and needs the same refresh.
 document.addEventListener("themechange", () => {
     if (portfolioChartHandle) portfolioChartHandle.chart.update();
+    // Re-read BOTH pieces of donut color from the new theme: the wedge
+    // palette and the card-paper border between wedges. update("none")
+    // repaints instantly — a theme flip is not the moment for a 600ms
+    // spin. Empty portfolio → no chart yet; the next poll builds one with
+    // fresh colors anyway.
+    if (allocationChart) {
+        const dataset = allocationChart.data.datasets[0];
+        dataset.backgroundColor = getAllocationColors();
+        dataset.borderColor = donutBorderColor();
+        allocationChart.update("none");
+    }
 });
+
+// ---------------------------------------------------------------------------
+// ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
+// OF. Data comes from the summary reply's `holdings` slice: already CAD,
+// already value-descending, already priced-only (an unpriced ticker is in
+// NO wedge — the backend excludes it from the weights' denominator too).
+// This code paints; it never re-derives the math.
+// ---------------------------------------------------------------------------
+
+// The canvas from the HTML, plus the card/box around it (found by walking
+// UP from the canvas with closest() — the donut is where the canvas is,
+// no matter how the card markup shifts).
+const allocationCanvas = document.getElementById("allocationChart");
+const donutCardEl = allocationCanvas
+    ? allocationCanvas.closest(".donut-card") : null;
+const donutBoxEl = allocationCanvas
+    ? allocationCanvas.closest(".donut-box") : null;
+
+// The holdings slice the donut currently plots. The tooltip callbacks need
+// each wedge's CAD value, but Chart.js hands a tooltip only the parsed
+// weight — this is the bridge from weight back to the value it came from.
+// Kept in module state (not chart config) so a poll refresh can swap it
+// in one place.
+let currentHoldings = [];
+
+// The chart object. Built LAZILY on the first non-empty payload — an
+// empty portfolio has no wedges, and building a zero-wedge chart just to
+// destroy it on the next poll is waste.
+let allocationChart = null;
+
+// The empty-state line. Created ONCE and shown/hidden by moving it in and
+// out of the card (the watchlist rebuilds its rows every cycle because the
+// rows ARE the data; here only the presence of a message toggles, so one
+// persistent element is simpler).
+const donutEmptyState = document.createElement("p");
+donutEmptyState.className = "empty-state";
+donutEmptyState.textContent =
+    "No priced holdings yet — log a buy and your allocation appears here.";
+
+// Respect the OS "reduce motion" accessibility setting: users who opted
+// out of animation get none — Chart.js accepts `false` to disable its
+// build animation entirely (a bare duration object would still animate).
+const REDUCED_MOTION = window.matchMedia(
+    "(prefers-reduced-motion: reduce)"
+).matches;
+
+// The wedge border must match the card's paper so the 2px gaps read as
+// cuts between wedges, not drawn lines. CSS variables can't live inside a
+// canvas — read the live computed value instead (the same technique as
+// CHART_COLORS in common.js), so both themes are covered.
+function donutBorderColor() {
+    return getComputedStyle(document.documentElement)
+        .getPropertyValue("--card-bg").trim();
+}
+
+// Show exactly one of: the donut box, the empty-state line.
+function setDonutEmpty(empty) {
+    if (!donutBoxEl || !donutCardEl) return;
+    donutBoxEl.style.display = empty ? "none" : "";
+    if (empty && !donutEmptyState.parentNode) {
+        donutCardEl.append(donutEmptyState);
+    } else if (!empty && donutEmptyState.parentNode) {
+        donutEmptyState.remove();
+    }
+}
+
+// Paint (build OR update) the donut from one summary reply's holdings.
+// Called from refreshPortfolioSummary on every poll cycle.
+function paintAllocation(holdings) {
+    // No canvas (defensive — index.html ships one) or no Chart.js (the
+    // CDN script failed to load): degrade to the empty-state text rather
+    // than throwing — same spirit as the chart handle's null guard.
+    if (!allocationCanvas || typeof Chart === "undefined") {
+        setDonutEmpty(true);
+        return;
+    }
+    currentHoldings = holdings;
+
+    if (holdings.length === 0) {
+        // Empty reply: no wedges. DESTROY any chart a previous cycle
+        // built — a stale donut beside an "empty" message would
+        // contradict the data it claims to show.
+        if (allocationChart) {
+            allocationChart.destroy();
+            allocationChart = null;
+        }
+        setDonutEmpty(true);
+        return;
+    }
+    setDonutEmpty(false);
+
+    const labels = holdings.map((h) => h.ticker);
+    const weights = holdings.map((h) => h.weight);
+
+    if (allocationChart) {
+        // POLL REFRESH: swap the arrays in place and redraw WITHOUT
+        // animation (update("none")) — a 600ms spin every 60s reads as
+        // glitch, not life. Mutating chart.data + update() beats tearing
+        // the Chart down and rebuilding it: no canvas flash, no dropped
+        // hover state, no re-reading the theme on every cycle.
+        allocationChart.data.labels = labels;
+        allocationChart.data.datasets[0].data = weights;
+        allocationChart.update("none");
+        return;
+    }
+
+    // FIRST BUILD: colors are read at build time (getAllocationColors is
+    // common.js's theme-aware palette — a theme flip rebuilds the donut
+    // through the themechange listener above, so no stale light-mode
+    // wedge survives into dark mode).
+    allocationChart = new Chart(allocationCanvas, {
+        type: "doughnut",
+        data: {
+            labels: labels,
+            datasets: [{
+                // The plotted values are the WEIGHTS (they sum to 1, so
+                // the wedges close the circle by construction).
+                data: weights,
+                backgroundColor: getAllocationColors(),
+                borderWidth: 2,
+                borderColor: donutBorderColor(),
+                hoverOffset: 4,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            // ~600ms on first build — enough to feel alive, short enough
+            // not to delay the reading. Disabled entirely under
+            // prefers-reduced-motion.
+            animation: REDUCED_MOTION ? false : { duration: 600 },
+            plugins: {
+                legend: {
+                    // Bottom: the sidebar is narrow — a right-side legend
+                    // would squeeze the donut to a sliver.
+                    position: "bottom",
+                    labels: {
+                        pointStyle: "circle",
+                        usePointStyle: true,
+                        boxWidth: 8,
+                        boxHeight: 8,
+                    },
+                },
+                tooltip: {
+                    callbacks: {
+                        label(item) {
+                            const holding = currentHoldings[item.dataIndex];
+                            // PRIVACY: the CAD value masks while the eye
+                            // is active, but the weight stays visible —
+                            // the same rule as the ledger's privacy
+                            // (percentages stay). Read LIVE at hover
+                            // time, so toggling flips the very next
+                            // tooltip with no rebuild.
+                            const amount = portfolioMasked()
+                                ? "****"
+                                : `${formatNumber(holding.value)} CAD`;
+                            return `${holding.ticker}: ${amount} ` +
+                                `(${(item.parsed * 100).toFixed(1)}%)`;
+                        },
+                    },
+                },
+            },
+            // Donut, not pie: the hollow center reads lighter on the
+            // narrow sidebar than a full disc.
+            cutout: "62%",
+        },
+    });
+}
 
 // ---------------------------------------------------------------------------
 // TABS — watchlist sidebar tab switcher (Watchlist / Volume Leaders).

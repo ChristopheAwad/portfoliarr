@@ -89,7 +89,12 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
 def test_empty_ledger_returns_zeros_and_null_pcts(client, fake_market):
     """An empty ledger is a normal state, not an error: all-zero sums,
     null percentages (no base to divide by), nothing unpriced. The reply
-    declares its display currency — always CAD."""
+    declares its display currency — always CAD — and carries the
+    `holdings` slice (the allocation donut's data): no priced positions
+    means no wedges, so an empty list. (The `holdings` key was added by
+    the UI-redesign feature; this exact-shape lock was updated to the
+    new payload, the same rewrite the CAD-conversion rework made when
+    IT changed the payload.)"""
     res = client.get("/api/portfolio/summary")
     assert res.status_code == 200
     assert res.get_json() == {
@@ -101,6 +106,7 @@ def test_empty_ledger_returns_zeros_and_null_pcts(client, fake_market):
         "cost_basis": 0.0,
         "unpriced": [],
         "currency": "CAD",
+        "holdings": [],
     }
 
 

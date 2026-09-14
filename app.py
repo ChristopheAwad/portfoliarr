@@ -529,6 +529,14 @@ def portfolio_summary():
                         unavailable for a USD holding, or a currency the
                         CAD display doesn't support
         currency        "CAD" — declared so the frontend can label it
+        holdings        the allocation donut's per-ticker slice: one
+                        {ticker, value, weight} per PRICED ticker with a
+                        NET-LONG position, sorted value-DESCENDING; weight
+                        is value ÷ (sum of the long values), so the wedges
+                        close the circle; a short (net qty < 0) counts in
+                        total_value but gets NO wedge (it's a bet against,
+                        not an allocation); [] when nothing is priced,
+                        held long, or held at all
     """
     # The ledger is the source of truth for what is held. Order doesn't
     # matter here — everything below is sums, not a forward walk.
@@ -639,6 +647,7 @@ def portfolio_summary():
     day_gain = 0.0
     cost_basis = 0.0
     unpriced = []
+    holdings = []
     for symbol, held in net_qty.items():
         quote = quotes[symbol]
         if quote is None:
@@ -659,8 +668,21 @@ def portfolio_summary():
             unpriced.append(symbol)   # no FX → no honest CAD number
             continue
         value_rate = live_rate if currency == "USD" else 1.0
-        total_value += held * quote["price"] * value_rate
+        # One value per ticker, computed ONCE: the headline total and the
+        # donut's wedge must come from the same number, or a wedge could
+        # disagree with the total it claims to be a fraction of.
+        position_value = held * quote["price"] * value_rate
+        total_value += position_value
         day_gain += held * quote["change"] * value_rate
+        # The donut's per-ticker slice, accumulated in the SAME pass (same
+        # quotes, same rate — no refetch). LONG positions only: the donut
+        # plots what you HOLD, and a short (net qty < 0 — the ledger's
+        # oversell fold opens one deliberately) is a bet AGAINST, not an
+        # allocation. A fully-sold ticker (net qty 0) gets NO entry either:
+        # a zero-value wedge is invisible clutter at best and a 0/0 weight
+        # NaN at worst.
+        if held > 0:
+            holdings.append({"ticker": symbol, "value": position_value})
         # Cost: stored-rate amounts pass through; legacy unrated amounts
         # (USD rows with fx_rate NULL) convert at the live rate.
         cost_basis += (
@@ -670,6 +692,29 @@ def portfolio_summary():
         )
 
     unpriced.sort()  # stable, human-readable order for the tooltip
+
+    # THE DONUT SLICE — weights over the PRICED, LONG-ONLY total. Two
+    # exclusions already happened above, each for the same reason from
+    # opposite directions:
+    #   unpriced ticker → excluded from total_value AND holdings, so a
+    #     dead ticker can never inflate the other wedges (a weight over a
+    #     phantom denominator would misstate every holding that DID price);
+    #   short position → its negative value still counts in total_value
+    #     (that netting is the headline's existing, tested math) but gets
+    #     NO wedge, so the weights divide by the sum of the LONG values
+    #     only — the visible circle closes even when a short is quietly
+    #     shrinking the headline.
+    # Sorted value-DESCENDING so the donut's legend reads biggest-first —
+    # the frontend reads, never re-derives. No zero-division guard is
+    # needed past this point: every entry in holdings is a positive value,
+    # so the sum is positive whenever the list is non-empty (empty ledger,
+    # fully-sold, all-short, or nothing priced → no wedges at all — a
+    # weight computed over an empty base is exactly how a NaN reaches
+    # JSON, and the NaN contract forbids that).
+    holdings.sort(key=lambda entry: entry["value"], reverse=True)
+    long_total = sum(entry["value"] for entry in holdings)
+    for entry in holdings:
+        entry["weight"] = entry["value"] / long_total
 
     # Percentages need a meaningful BASE to divide by — otherwise the
     # math produces confident-looking nonsense:
@@ -696,6 +741,7 @@ def portfolio_summary():
         "cost_basis": cost_basis,
         "unpriced": unpriced,
         "currency": "CAD",
+        "holdings": holdings,
     })
 
 

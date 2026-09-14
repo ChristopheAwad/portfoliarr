@@ -570,6 +570,28 @@ function getChartColors() {
 // re-reading CSS on every frame. refresh() updates this when data lands.
 let CHART_COLORS = getChartColors();
 
+// The ALLOCATION DONUT's categorical palette. Unlike CHART_COLORS (a live
+// reference, because lots of code reads it between repaints), this is a
+// FUNCTION the donut calls at build time — theme flips rebuild the donut
+// through the same "themechange" listener that rebuilds the line chart,
+// so there is no second piece of state to keep in sync and no way for a
+// stale light-mode wedge to survive into dark mode.
+//
+// The sets are drawn from the "printed money" identity: light mode wears
+// the engraved-ink family (navy, spruce, ochre, oxblood...), dark mode
+// lifts each hue so it reads against slate. Ten slots = ten holdings get
+// unique wedges; beyond that Chart.js wraps around (the legend's order
+// still disambiguates), which is an acceptable horizon for a personal
+// portfolio.
+function getAllocationColors() {
+    const dark = document.documentElement.classList.contains("dark");
+    return dark
+        ? ["#d0a959", "#34d399", "#e2984f", "#a78bfa", "#67c3d8",
+           "#e28aa0", "#a3c98a", "#9fb0c7", "#f0916f", "#8ea8e8"]
+        : ["#1c3a5e", "#047857", "#b45309", "#6d28d9", "#0e7490",
+           "#9f1239", "#4d7c0f", "#374151", "#c2410c", "#4338ca"];
+}
+
 // The hover CROSSHAIR: a thin vertical line through whatever point the
 // tooltip is showing, drawn the full height of the plot. A Chart.js plugin
 // is just an object with an id and hook functions the chart calls during

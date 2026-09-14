@@ -2,37 +2,44 @@
    Every color, radius, shadow, and the font stack the whole app draws
    from. Change a value HERE and the change propagates everywhere (and
    common.js mirrors a few of these exact hexes for the Chart.js canvas —
-   keep that CHART_COLORS anchor in sync if you touch the core palette). */
+   keep that CHART_COLORS anchor in sync if you touch the core palette).
+
+   THE IDENTITY ("printed money"): Portfoliarr's subject is a personal
+   ledger of your own money, so the palette borrows from print currency
+   rather than startup SaaS — cool porcelain paper, near-black ink, and
+   ONE accent that is engraved ink-navy in light mode and banknote gold
+   in dark mode. Green/red stay a MONOPOLY: they mean market up/down and
+   nothing else, so the accent never competes with market data. */
 :root {
     /* Core palette (shared contract with common.js's chart colors). */
-    --bg-color: #f6f7f9;
+    --bg-color: #f7f7f5;        /* porcelain paper — cool, not cream   */
     --card-bg: #ffffff;
-    --text-primary: #1a1f36;
-    --text-secondary: #5b6472;
-    --border-color: #e4e7ec;
-    --green-pos: #059669;
-    --green-bg: #e7f6ef;
-    --green-bg-hover: #d9f0e4;  /* green state-buttons' hover step */
-    --red-neg: #dc2626;
-    --red-bg: #fdecec;
-    --blue-accent: #2563eb;
-    --blue-bg: #eaf1fe;
-    --blue-accent-hover: #1d4ed8;  /* primary buttons' hover step */
+    --text-primary: #171a20;    /* ink                                 */
+    --text-secondary: #5c6370;
+    --border-color: #e5e4df;    /* hairline warmed to sit on porcelain */
+    --green-pos: #047857;       /* deeper money-green, engraved feel   */
+    --green-bg: #e7f3ee;
+    --green-bg-hover: #d9ede4;  /* green state-buttons' hover step     */
+    --red-neg: #b91c1c;         /* oxblood ink instead of Tailwind red */
+    --red-bg: #fbeded;
+    --accent: #1c3a5e;          /* engraved ink-navy (banknotes' ink)  */
+    --accent-bg: #e9edf3;
+    --accent-hover: #142b47;    /* primary buttons' hover step         */
 
     /* Derived neutrals: the old hardcoded #f1f3f4 hairlines/hover tints
        became tokens so the whole grey family moves together. */
-    --bg-hover: #eef1f5;        /* rows, chips, quiet buttons on hover  */
-    --bg-inset: #eef1f5;        /* recessed input backgrounds           */
-    --border-subtle: #eef1f5;   /* hairlines *inside* cards (row rules) */
-    --border-strong: #cdd3db;   /* scrollbar thumbs, pressed hairlines  */
+    --bg-hover: #eeedea;        /* rows, chips, quiet buttons on hover  */
+    --bg-inset: #eff0ee;        /* recessed input backgrounds           */
+    --border-subtle: #eeedea;   /* hairlines *inside* cards (row rules) */
+    --border-strong: #cfcec8;   /* scrollbar thumbs, pressed hairlines  */
 
-    /* Elevation scale — soft, layered, blue-grey shadows (rgba of the
-       text-primary family, not pure black, so they never look dirty).
+    /* Elevation scale — soft, layered shadows (rgba of the text-primary
+       family, not pure black, so they never look dirty).
        sm = resting cards; md = things that lift (dropdowns, toasts,
        hovered chips); lg = true overlays (modals, the search dropdown). */
-    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-    --shadow-md: 0 2px 4px rgba(16, 24, 40, 0.05), 0 4px 12px rgba(16, 24, 40, 0.08);
-    --shadow-lg: 0 8px 16px rgba(16, 24, 40, 0.12), 0 16px 40px rgba(16, 24, 40, 0.16);
+    --shadow-sm: 0 1px 2px rgba(23, 26, 32, 0.05);
+    --shadow-md: 0 2px 4px rgba(23, 26, 32, 0.05), 0 4px 12px rgba(23, 26, 32, 0.08);
+    --shadow-lg: 0 8px 16px rgba(23, 26, 32, 0.12), 0 16px 40px rgba(23, 26, 32, 0.16);
 
     /* Corner radii: sm for inputs/badges, md for chips/inputs-of-note,
        lg for cards and modals — one consistent curvature language. */
@@ -40,28 +47,35 @@
     --radius-md: 10px;
     --radius-lg: 14px;
 
-    /* Type: Inter (loaded in base.html via Google Fonts) first, then the
-       old system stack as fallback — the same families the app always
-       had, so a failed font download changes nothing but the face. */
-    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-            Helvetica, Arial, sans-serif;
+    /* Type: TWO faces with distinct jobs. Instrument Sans (Google Fonts,
+       loaded in base.html) is the UI face — clean grotesk, and the face
+       for EVERY figure (its digits pair with font-variant-numeric:
+       tabular-nums, so live refreshes never jiggle). Fraunces is the
+       DISPLAY voice — an engraved serif with an optical-size axis, the
+       closest web face to currency engraving; used for the wordmark and
+       headings only, never for numbers. The old Inter stays first in the
+       fallback chain so a failed font download changes nothing but the
+       face. */
+    --font: "Instrument Sans", Inter, -apple-system, BlinkMacSystemFont,
+            "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
 
-    /* Focus ring: a soft blue halo, applied via box-shadow (not outline)
+    /* Focus ring: a soft accent halo, applied via box-shadow (not outline)
        so it follows rounded corners. Used by every input + button. */
-    --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.18);
+    --focus-ring: 0 0 0 3px rgba(28, 58, 94, 0.18);
 
     /* Tokens for formerly-hardcoded values (navbar, buttons, overlays,
        shimmer, scrollbar) — so .dark mode can override them all. */
     --navbar-bg: rgba(255, 255, 255, 0.85);
     --btn-text: #fff;
-    --red-neg-hover: #b91c1c;
-    --overlay-bg: rgba(16, 24, 40, 0.45);
-    --shimmer-base: #eef1f5;
-    --shimmer-highlight: #f8fafc;
-    --scrollbar-hover: #b7bfca;
+    --red-neg-hover: #991b1b;
+    --overlay-bg: rgba(23, 26, 32, 0.45);
+    --shimmer-base: #eeedea;
+    --shimmer-highlight: #f9f9f7;
+    --scrollbar-hover: #b8b6ae;
 
-    /* Prev-close reference line color (1D chart). */
-    --prev-close: #2563eb;
+    /* Prev-close reference line color (1D chart) — the ink-navy accent. */
+    --prev-close: #1c3a5e;
 }
 
 /* ═══ Dark mode ════════════════════════════════════════════════════════
@@ -71,41 +85,47 @@
    token is redefined here — components that use var() automatically
    follow the theme; hardcoded values (now tokenized above) follow too. */
 .dark {
-    --bg-color: #0f1117;
-    --card-bg: #1a1d27;
-    --text-primary: #e4e4e7;
-    --text-secondary: #9ca3af;
-    --border-color: #2a2d3a;
+    --bg-color: #101318;        /* deep slate, slightly warm            */
+    --card-bg: #181c24;
+    --text-primary: #e7e8ea;
+    --text-secondary: #9aa1ad;
+    --border-color: #262b36;
 
     --green-pos: #34d399;
     --green-bg: #0d3320;
     --green-bg-hover: #134d2e;
     --red-neg: #f87171;
     --red-bg: #3d1418;
-    --blue-accent: #60a5fa;
-    --blue-bg: #1a2744;
-    --blue-accent-hover: #3b82f6;
+    /* Banknote gold — the dark-mode face of the accent. Gold on deep
+       slate is the money print: think engraved certificates, not
+       neon-on-black terminals. Primary buttons keep --btn-text #fff... */
+    --accent: #d0a959;
+    --accent-bg: #2a2416;
+    --accent-hover: #e0bc74;
+    /* ...but gold fill + white text fails contrast, so dark primary
+       buttons set near-black text on the gold (the banknote ink). */
+    --btn-text: #171a20;
 
-    --bg-hover: #252830;
-    --bg-inset: #16181f;
-    --border-subtle: #252830;
+    --bg-hover: #1f232c;
+    --bg-inset: #14171e;
+    --border-subtle: #1f232c;
     --border-strong: #3a3d4a;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
     --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.4);
 
-    --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.25);
+    --focus-ring: 0 0 0 3px rgba(208, 169, 89, 0.28);
 
-    --navbar-bg: rgba(15, 17, 23, 0.85);
-    --btn-text: #fff;
-    --red-neg-hover: #dc2626;
+    --navbar-bg: rgba(16, 19, 24, 0.85);
+    --red-neg-hover: #ef4444;
     --overlay-bg: rgba(0, 0, 0, 0.6);
-    --shimmer-base: #252830;
-    --shimmer-highlight: #2a2d3a;
+    --shimmer-base: #1f232c;
+    --shimmer-highlight: #262b36;
     --scrollbar-hover: #4a4d5a;
 
-    /* Prev-close reference line color (1D chart). */
+    /* Prev-close reference line color (1D chart) — stays the brighter
+       yellow (gold at line weight is too faint against slate). */
     --prev-close: #facc15;
 }
 
@@ -134,6 +154,18 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+/* The DISPLAY VOICE: headings set in Fraunces, the engraved serif whose
+   optical-size axis mimics currency engraving as sizes grow. Body copy,
+   controls, and EVERY number stay in Instrument Sans — figures must
+   never set in a proportional serif (the ledger's columns and the live
+   prices live on tabular-nums alignment). The slight negative tracking
+   tightens Fraunces' fit at heading sizes. */
+h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
 /* Header & Search Bar */
 .navbar {
     display: flex;
@@ -154,14 +186,17 @@ body {
 }
 
 /* The Portfoliarr wordmark: spark mark + name, treated as ONE unit.
-   inline-flex + gap aligns the SVG and the text on a shared centerline;
-   font-weight 700 gives Inter's letterforms the punch a wordmark needs. */
+   inline-flex + gap aligns the SVG and the text on a shared centerline.
+   The wordmark is the brand's most concentrated surface, so it gets the
+   display voice — Fraunces' engraved serif is the "printed money" tell
+   that survives even where everything else looks quiet. */
 .logo {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-size: 20px;
-    font-weight: 700;
+    font-family: var(--font-display);
+    font-size: 21px;
+    font-weight: 600;
     letter-spacing: -0.01em;
 }
 
@@ -336,7 +371,7 @@ body {
 }
 
 .pref-select:focus {
-    outline: 2px solid var(--blue-accent);
+    outline: 2px solid var(--accent);
     outline-offset: -1px;
 }
 
@@ -406,7 +441,7 @@ a.logo { text-decoration: none; }
 
 .search-container input:focus {
     background-color: var(--card-bg);
-    border-color: var(--blue-accent);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
 
@@ -502,7 +537,7 @@ a.logo { text-decoration: none; }
 
 .chip:hover,
 .chip:focus-visible {
-    border-color: var(--blue-accent);
+    border-color: var(--accent);
     box-shadow: var(--shadow-md);
     transform: translateY(-1px);
     outline: none; /* we supply our own focus cue via the border */
@@ -534,6 +569,21 @@ a.logo { text-decoration: none; }
     gap: 20px;
 }
 
+/* Grid tracks never shrink below their content's intrinsic width by
+   default: `1fr` means `minmax(auto, 1fr)`, and that auto minimum
+   honors the item's min-content size. The timeframe tray is a
+   non-wrapping fit-content row (~454px intrinsic), so without this
+   rule its width would propagate through the chart card, the track,
+   and out to the PAGE — a phone viewport (390px) would grow to ~443px
+   and everything would pan sideways. min-width: 0 releases the auto
+   minimum: the track becomes exactly the container's width and the
+   tray scrolls INSIDE its card instead (the same belt-and-braces the
+   ledger page's cards carry). */
+.main-content,
+.sidebar {
+    min-width: 0;
+}
+
 /* Cards & Generic Components */
 .card {
     background: var(--card-bg);
@@ -544,6 +594,24 @@ a.logo { text-decoration: none; }
     box-shadow: var(--shadow-sm);
 }
 
+/* THE HERO CARD — the one deliberate break from the identical-cards
+   language. The page's subject (your portfolio / a security) is a
+   headline, not a widget: the header card dissolves into the page —
+   no box, no border, no shadow — and its title sets in the display
+   voice at a larger scale. Everything that remains boxed (tables,
+   watchlist, donut, stats) reads as "material on the desk" BY
+   CONTRAST: the hero is the open air, cards are the paper. */
+.stock-header-card {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 8px 0 0;
+}
+
+.stock-title h2 {
+    font-size: 28px;
+}
+
 .stock-title {
     display: flex;
     align-items: center;
@@ -551,8 +619,8 @@ a.logo { text-decoration: none; }
 }
 
 .badge {
-    background: var(--blue-bg);
-    color: var(--blue-accent);
+    background: var(--accent-bg);
+    color: var(--accent);
     font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
@@ -653,8 +721,8 @@ a.logo { text-decoration: none; }
 
 /* The track itself turns blue when its inner input checks. */
 .fx-switch:has(input:checked) {
-    background: var(--blue-accent);
-    border-color: var(--blue-accent);
+    background: var(--accent);
+    border-color: var(--accent);
 }
 
 /* Hover lift on the switch itself. */
@@ -725,7 +793,7 @@ a.logo { text-decoration: none; }
 }
 
 .current-price {
-    font-size: 32px;
+    font-size: 38px;
     font-weight: 500;
     margin-right: 12px;
     font-variant-numeric: tabular-nums;
@@ -774,28 +842,66 @@ a.logo { text-decoration: none; }
     margin-bottom: 16px;
 }
 
+/* The cost-basis caption under the hero's big number — the brief's
+   summary strip, fourth fact. Quiet by design: it's the reference the
+   gains are measured against, not a headline. The value span inside
+   keeps tabular figures like every other number. */
+.cost-basis-caption {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 8px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The allocation donut's canvas box — same contract as .chart-box:
+   fixed height + position:relative so Chart.js with responsive:true +
+   maintainAspectRatio:false fills exactly this box. */
+.donut-box {
+    height: 220px;
+    position: relative;
+}
+
+/* Segmented timeframe control. The tray is a recessed pill (inset
+   background); the ACTIVE segment is the one raised piece of paper —
+   card background + hairline shadow, the physical "selected key" idea.
+   Desktop fits all nine buttons in one row; phones scroll the tray
+   sideways (the media query below), which needs the wrap GONE there. */
 .chart-timeframe-selectors {
     display: flex;
-    flex-wrap: wrap;   /* nine 1D–MAX buttons ≈ 400px — wider than a phone;
-                          wrapping keeps them all reachable in portrait */
-    gap: 6px;
+    gap: 2px;
+    padding: 3px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+    width: fit-content;
 }
 
 .time-btn {
     border: none;
     background: none;
     padding: 6px 12px;
-    border-radius: var(--radius-sm);
+    border-radius: calc(var(--radius-md) - 3px);
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background-color 150ms ease, color 150ms ease;
+    white-space: nowrap;
+    transition: background-color 150ms ease, color 150ms ease,
+                box-shadow 150ms ease;
 }
 
-.time-btn.active, .time-btn:hover {
-    background-color: var(--blue-bg);
-    color: var(--blue-accent);
+/* Inactive hover just darkens the label — the tray itself never moves
+   until you select, so the control reads as one solid object. */
+.time-btn:hover { color: var(--text-primary); }
+
+.time-btn.active {
+    background: var(--card-bg);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.time-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
 /* Detail page: the Add-to-Watchlist / Log Transaction row. Same solid-blue
@@ -817,7 +923,7 @@ a.logo { text-decoration: none; }
     padding: 8px 14px;
     border: none;
     border-radius: 8px;
-    background: var(--blue-accent);
+    background: var(--accent);
     color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
@@ -825,7 +931,7 @@ a.logo { text-decoration: none; }
     transition: background-color 150ms ease, box-shadow 150ms ease;
 }
 
-.btn-action:hover { background: var(--blue-accent-hover); }
+.btn-action:hover { background: var(--accent-hover); }
 
 .btn-action:focus-visible {
     outline: none;
@@ -909,7 +1015,7 @@ a.logo { text-decoration: none; }
 
 .ledger-group:hover .ticker-link,
 .ticker-link:hover {
-    color: var(--blue-accent);
+    color: var(--accent);
     text-decoration: underline;
 }
 
@@ -949,8 +1055,8 @@ a.logo { text-decoration: none; }
 }
 
 .tab-btn.active {
-    color: var(--blue-accent);
-    border-bottom-color: var(--blue-accent);
+    color: var(--accent);
+    border-bottom-color: var(--accent);
 }
 
 /* The quiet text button (Import, + Add). inline-flex + gap lets a
@@ -964,13 +1070,13 @@ a.logo { text-decoration: none; }
     border-radius: var(--radius-sm);
     background: none;
     border: none;
-    color: var(--blue-accent);
+    color: var(--accent);
     font-weight: 600;
     cursor: pointer;
     transition: background-color 150ms ease, color 150ms ease;
 }
 
-.btn-text:hover { background-color: var(--blue-bg); }
+.btn-text:hover { background-color: var(--accent-bg); }
 
 /* Card header actions: wraps Import + settings button on the right side
    of the ledger card header. flex + gap keeps them neatly spaced. */
@@ -992,12 +1098,12 @@ a.logo { text-decoration: none; }
     border-radius: var(--radius-sm);
     background: none;
     border: none;
-    color: var(--blue-accent);
+    color: var(--accent);
     cursor: pointer;
     transition: background-color 150ms ease;
 }
 
-.btn-icon:hover { background-color: var(--blue-bg); }
+.btn-icon:hover { background-color: var(--accent-bg); }
 
 .btn-icon:disabled {
     opacity: 0.4;
@@ -1127,7 +1233,7 @@ a.logo { text-decoration: none; }
    field pop from a form of siblings at a glance. */
 .tx-form input:focus,
 .tx-form select:focus {
-    border-color: var(--blue-accent);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
 
@@ -1159,7 +1265,7 @@ input[type="date"]::-moz-placeholder {
     padding: 8px 14px;
     border: none;
     border-radius: 8px;
-    background: var(--blue-accent);
+    background: var(--accent);
     color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
@@ -1168,7 +1274,7 @@ input[type="date"]::-moz-placeholder {
 }
 
 .tx-form button:hover {
-    background: var(--blue-accent-hover);
+    background: var(--accent-hover);
 }
 
 .tx-form button:focus-visible {
@@ -1210,7 +1316,7 @@ input[type="date"]::-moz-placeholder {
 }
 
 .import-panel textarea:focus {
-    border-color: var(--blue-accent);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
 
@@ -1227,7 +1333,7 @@ input[type="date"]::-moz-placeholder {
     padding: 8px 14px;
     border: none;
     border-radius: 8px;
-    background: var(--blue-accent);
+    background: var(--accent);
     color: var(--btn-text);
     font-size: 13px;
     font-weight: 600;
@@ -1236,7 +1342,7 @@ input[type="date"]::-moz-placeholder {
 }
 
 .import-actions button:hover {
-    background: var(--blue-accent-hover);
+    background: var(--accent-hover);
 }
 
 .import-actions button:focus-visible {
@@ -1338,7 +1444,7 @@ input[type="date"]::-moz-placeholder {
 }
 
 .ledger-table th.sortable.active {
-    color: var(--blue-accent);
+    color: var(--accent);
 }
 
 .ledger-table .sort-indicator {
@@ -1358,11 +1464,11 @@ input[type="date"]::-moz-placeholder {
 }
 
 .ledger-table th.drop-before {
-    box-shadow: inset 3px 0 0 var(--blue-accent);
+    box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .ledger-table th.drop-after {
-    box-shadow: inset -3px 0 0 var(--blue-accent);
+    box-shadow: inset -3px 0 0 var(--accent);
 }
 
 .ledger-table td {
@@ -1478,14 +1584,14 @@ input[type="date"]::-moz-placeholder {
 .ledger-row:hover .tx-action-btn,
 .ledger-group:hover .tx-action-btn { visibility: visible; }
 
-.tx-action-btn.edit:hover { color: var(--blue-accent); }
+.tx-action-btn.edit:hover { color: var(--accent); }
 .tx-action-btn.delete:hover { color: var(--red-neg); }
 
 /* Edit-mode notice: the form is temporarily editing an existing row.
    Blue tint = "state, not error" (errors stay red in .tx-error below). */
 .tx-editing {
-    background-color: var(--blue-bg);
-    color: var(--blue-accent);
+    background-color: var(--accent-bg);
+    color: var(--accent);
     font-size: 13px;
     padding: 8px 10px;
     border-radius: var(--radius-sm);
@@ -1495,7 +1601,7 @@ input[type="date"]::-moz-placeholder {
 .tx-cancel {
     background: none;
     border: none;
-    color: var(--blue-accent);
+    color: var(--accent);
     font-size: 13px;
     font-weight: 600;
     text-decoration: underline;
@@ -1541,11 +1647,11 @@ input[type="date"]::-moz-placeholder {
 }
 
 .btn-primary {
-    background: var(--blue-accent);
+    background: var(--accent);
     color: var(--btn-text);
 }
 
-.btn-primary:hover { background: var(--blue-accent-hover); }
+.btn-primary:hover { background: var(--accent-hover); }
 
 .btn-danger {
     background: var(--red-neg);
@@ -1620,7 +1726,7 @@ input[type="date"]::-moz-placeholder {
 }
 
 .modal-input:focus {
-    border-color: var(--blue-accent);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
 }
 
@@ -1907,11 +2013,37 @@ input[type="date"]::-moz-placeholder {
     }
 
     .current-price {
-        font-size: 26px;
+        font-size: 30px;
+    }
+
+    .stock-title h2 {
+        font-size: 22px;
     }
 
     .chart-box {
         height: 240px;
+    }
+
+    /* Timeframe tray: nine segments don't fit a portrait phone, so the
+       tray scrolls sideways. Deliberately a PLAIN overflow scroll — no
+       -webkit-overflow-scrolling: touch (the legacy momentum hint; on
+       iOS its composited scroll layer made position:fixed elements —
+       the bottom tab bar — vanish while scrolling and return when the
+       direction reversed) and no scroll-snap (the snap re-layout had
+       the same jitter on Android). Modern mobile browsers scroll touch
+       layers smoothly without either; the tray's inner scroll only
+       exists because the grid's min-width: 0 fix (above) contains it. */
+    .chart-timeframe-selectors {
+        max-width: 100%;
+        overflow-x: auto;
+        scrollbar-width: thin;
+    }
+
+    /* Keep each segment at its natural width: a flex child shrinks by
+       default, and squished "1D…MAX" buttons would be unreadable — the
+       tray must scroll, not squeeze. */
+    .time-btn {
+        flex: 0 0 auto;
     }
 
     /* Tighter chips + cards: desktop paddings eat a 375px screen. */
@@ -2233,4 +2365,65 @@ input[type="date"]::-moz-placeholder {
     .fx-knob {
         transition: none;
     }
+}
+
+/* ═══ Printed money — stats clusters & stamp badges (appended block) ═══
+   One self-contained section added at the END of the stylesheet: nothing
+   above is edited, so these rules can only ADD to the cascade (later
+   rules win at equal specificity) and can never silently rewrite an
+   existing component.
+
+   1. Stats clusters (stock page). The detail page's 18 stat pairs used
+      to live in one flat grid — an undifferentiated wall of numbers.
+      stock.html now wraps them in four labelled .stats-cluster divs,
+      each with its own dl.stats-grid (same class, so the :empty shimmer
+      and the responsive column rules keep working untouched). The label
+      is deliberately a QUIET caption: sentence case, the secondary ink,
+      no all-caps and no letter-spaced "eyebrow" treatment — the dt
+      captions inside each grid are already uppercase, and two shouting
+      layers would fight. A heading states what it names and steps back.
+      Separation is done with air alone (a margin between clusters, no
+      hairline rule) so the card keeps its calm, printed-ledger feel. */
+.stats-cluster + .stats-cluster {
+    margin-top: 18px;   /* air between clusters — space, not lines */
+}
+
+.stats-cluster-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.01em;
+    /* h4 ships with browser-default top/bottom margins that would add
+       stray space above the first cluster's label; reset them and keep
+       only the 8px gap to the grid the label names. */
+    margin: 0 0 8px;
+}
+
+/* 2. Stamp badges (ledger page). BUY/SELL stop being soft pills and
+      become rubber stamps on a ledger page: small, bold, uppercase, and
+      — the line that actually separates a stamp from a pill — framed by
+      a 1px hairline in the stamp's own ink. The tinted backgrounds and
+      text colors still come from the original .tx-badge.buy / .sell
+      rules above and are NEVER redeclared here; this block only adds
+      typography + the frame. The frame color is the pos/neg ink at ~35%
+      strength via color-mix — mixing with `transparent` (not white)
+      keeps the border honest on whichever paper it lands on, and going
+      through the var() means the dark-mode ink swap happens for free.
+      (border-radius already comes from the original rule's
+      var(--radius-sm) — slightly squared, exactly a stamp's shape.) */
+.tx-badge {
+    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border: 1px solid transparent; /* the frame; a variant inks it below */
+}
+
+.tx-badge.buy {
+    border-color: color-mix(in srgb, var(--green-pos) 35%, transparent);
+}
+
+.tx-badge.sell {
+    border-color: color-mix(in srgb, var(--red-neg) 35%, transparent);
 }

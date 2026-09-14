@@ -1,120 +1,106 @@
-# Feature: Highest Volume Leaders Feed (Watchlist Tab)
+# Feature: "Printed money" — UI identity + dashboard completion
+
+Branch: `ui-printed-money` (rollback = `git checkout main && git branch -D ui-printed-money`;
+merging to main is the user's explicit yes). Chunked commits on the branch.
 
 ## What
-A "Volume Leaders" tab in the watchlist sidebar that shows the top 10
-highest-volume stocks traded today, with top 1 per market sector. Users
-can flip between their personal watchlist and the volume leaders feed.
 
-## Decisions locked in the brainstorm
-- **Tabbed interface in watchlist sidebar.** Two tabs: "Watchlist"
-  (existing) and "Volume Leaders" (new). Clicking a tab shows that
-  content; the other hides.
-- **Top 1 per sector, then top 10 overall.** Scan one representative
-  stock per market sector, pick the highest-volume stock in each sector,
-  then return the top 10 by volume.
-- **Same display format as watchlist.** Each row shows: ticker, name,
-  price, change (with color coding). No remove button (these aren't
-  user-managed). Volume badge shows shares traded.
-- **Sector leaders are hardcoded.** A predefined dict of sector →
-  representative tickers (2-3 per sector for redundancy). This avoids
-  scanning hundreds of stocks and keeps API calls fast.
-- **Volume data via yfinance `info`.** The `volume` field (today's
-  shares traded) comes from the heavy `Ticker.info` endpoint. We cache
-  the result for 5 minutes (volume changes slowly during the day).
-- **Graceful degradation.** If a sector leader fails to fetch, skip it.
-  If all fail, show an error message in the tab. Never 500.
-- **Clickable rows.** Clicking a volume leader navigates to its detail
-  page (`/stock/<symbol>`), same as watchlist rows.
+Two things in one feature:
 
-## How it works
-### Backend: `market_data.py`
-New function `get_volume_leaders()`:
-1. Define `SECTOR_LEADERS` dict: maps sector name → list of candidate
-   tickers (2-3 per sector for redundancy).
-2. For each sector, fetch `Ticker.info` in parallel (ThreadPoolExecutor,
-   max_workers=8).
-3. Extract `volume` from each successful fetch.
-4. Pick the highest-volume ticker per sector.
-5. Sort all sector leaders by volume descending, return top 10.
-6. Cache result for 300s (5 min TTL) in a new `_volume_cache` dict.
-7. Return list of dicts:
-   `[{symbol, name, price, change, change_pct, volume}, ...]`.
+1. **Identity pass** — replace the default-generated look (Inter + Tailwind
+   blue-600 + identical white cards) with a deliberate "printed money"
+   identity: engraved serif display voice (Fraunces) + Instrument Sans UI,
+   porcelain/ink light palette, slate/banknote-gold dark palette, and a
+   borderless hero card so the page stops reading as "identical rounded cards".
+2. **Dashboard completion** — the brief's summary strip gains the missing
+   **cost basis**, and the brief-listed **allocation donut** (absent from the
+   codebase today) ships, fed by a new `holdings` breakdown on
+   `/api/portfolio/summary` (computed at read time, no schema change).
 
-### Backend: `app.py`
-New route `GET /api/market/volume-leaders`:
-1. Call `get_volume_leaders()`.
-2. On success: return `{leaders: [...]}`.
-3. On failure: log at TIER 1, return `{leaders: []}` (never 500 —
-   partial data is fine).
-4. No authentication needed (public market data).
+## Design tokens
 
-### Frontend: `templates/index.html`
-Modified the watchlist sidebar section:
-1. Added a tab bar above the watchlist: two `<button>` elements
-   ("Watchlist" / "Volume Leaders").
-2. Added a `<div id="volume-leaders-tab">` container (initially hidden)
-   below the tab bar.
-3. The existing `<ul class="watchlist">` is wrapped in
-   `<div id="watchlist-tab">`.
+| Token | Light | Dark |
+|---|---|---|
+| Paper (page bg) | `#f7f7f5` porcelain | `#101318` slate |
+| Card | `#ffffff` | `#181c24` |
+| Ink (text) | `#171a20` | `#e7e8ea` |
+| Accent | ink-navy `#1c3a5e` | banknote gold `#d0a959` |
 
-### Frontend: `static/js/main.js`
-New functions:
-1. `tabBar` click listener — toggles active state, shows/hides content.
-2. `refreshVolumeLeaders()` — fetches `GET /api/market/volume-leaders`,
-   builds DOM rows in `#volume-leaders`.
-3. `buildVolumeLeaderRow(leader)` — creates a `<li>` with the same
-   structure as watchlist rows (symbol, name, price, change) plus a
-   volume badge.
-4. Added `refreshVolumeLeaders()` to the 60s polling cycle (parallel
-   with `refreshWatchlist()`).
+Type: **Fraunces** (Google Fonts) for wordmark + h2/h3 display voice;
+**Instrument Sans** for UI/body; ALL figures stay tabular-nums in the UI face
+(no live-refresh jiggle). pos/neg green/red keep their color monopoly — the
+accent never competes with market data.
 
-### Frontend: `static/style.css`
-Added tab bar styles:
-- `.tab-bar` — flex container for tab buttons
-- `.tab-btn` — individual tab button styling
-- `.tab-btn.active` — active tab gets blue accent underline
+Motion budget: one moment — donut sweep + hero settle on first paint, guarded
+by `prefers-reduced-motion`. Everything else keeps today's quiet transitions.
 
-## Files touched
-- `market_data.py` — added `SECTOR_LEADERS` dict + `get_volume_leaders()`
-  + `_volume_cache` + `_VOLUME_TTL`
-- `app.py` — added `GET /api/market/volume-leaders` route +
-  `get_volume_leaders` import
-- `templates/index.html` — added tab bar and volume-leaders container
-- `static/js/main.js` — added tab logic, `refreshVolumeLeaders()`,
-  `buildVolumeLeaderRow()`
-- `static/style.css` — added `.tab-bar` and `.tab-btn` styles
-- `tests/test_volume_leaders.py` — new test file (13 tests)
+## Test plan (tests written FIRST, must fail until implemented)
 
-## Verification
-- **Implemented, tests green:** full suite **386 passed** (14 tests in
-  `tests/test_volume_leaders.py`).
-- **Review round 1 (pr-reviewer) — request-changes, all fixed:**
-  1. Total failure was cached for 5 min (violated the successes-only
-     rule). Now: zero usable leaders raises `ValueError`, never cached;
-     route degrades to 200 + `{"leaders": []}`. Locked by
-     `test_all_sectors_fail_raises_value_error` +
-     `test_failed_fetch_is_not_cached`.
-  2. Sort test was vacuous (single-sector fill → 1-element list). Now
-     fills 3 sectors with distinct volumes and pins exact order
-     `["NVDA", "XOM", "JPM"]`; per-sector test pins `symbols == ["NVDA"]`.
-  3. Nits fixed: watchlist `<ul>` got `id="watchlist"` (identity by
-     meaning, not DOM order), `_volume_cache` documented in
-     `project-brief.md` + AGENTS.md cache inventory, route tests moved
-     to the `monkeypatch` fixture, two cache-shape comments corrected,
-     volume badge integer-formatted (stock.js's Intl pattern), cap test
-     bites (`== 10`), partial-failure test fills two sectors and kills one.
-- **GUI confirmed by user** (round 1): tabs flip, leaders render, rows
-  navigate to `/stock/<symbol>`.
+New `tests/test_ui_redesign.py` (uses existing `fresh_db`/`client`/`fake_market`):
 
-## Rollback
-Revert the commit. Touches `market_data.py`, `app.py`,
-`templates/index.html`, `static/js/main.js`, `static/style.css`,
-`tests/test_volume_leaders.py`, `feature.md`. No schema changes, no
-data migration.
+1. `GET /` fonts URL contains both `Fraunces` and `Instrument+Sans`
+   (base.html identity lock).
+2. `GET /` contains `id="portfolio-cost-basis"` (brief's summary strip).
+3. `GET /` contains donut canvas `id="allocationChart"` inside a card.
+4. Timeframe buttons on `/` and `/stock/AAPL` read exactly
+   `1D 5D 1M 3M 6M YTD 1Y 5Y MAX` (main/stock.js read textContent as
+   PERIOD_MAP keys — the segmented-control restyle must not rename them).
+5. `GET /api/portfolio/summary` reply grows `holdings`:
+   `[{ticker, value, weight}]` CAD. Tests: weights sum to 1 (1e-9);
+   single holding → weight 1.0; mixed USD/CAD converts at the LIVE rate
+   (mirror of existing conversion tests); unpriced ticker absent from
+   `holdings` (priced-only-slice rule); empty ledger → `[]`.
+6. All existing contract tests stay green.
+
+## Implementation chunks
+
+**Chunk A — foundation (lead, sequential; everything depends on it)**
+- `style.css`: token swap + dark overrides; `.stock-header-card` becomes the
+  borderless hero (larger type scale, no box); Fraunces on headings/wordmark;
+  segmented-control styles; donut card styles.
+- `base.html`: Google Fonts link swap (Fraunces + Instrument Sans), keep
+  preconnect pattern.
+- `common.js`: `getChartColors()` recolor + new `ALLOCATION_COLORS`
+  categorical set (10 distinguishable, theme-aware) — same sync contract as
+  CHART_COLORS.
+
+**Chunk B — dashboard (subagent, parallel with C)**
+- `app.py`: `portfolio_summary` reply gains `holdings` (per-ticker CAD value
+  + weight; unpriced excluded). No new endpoint; math server-side, testable.
+- `templates/index.html` + `static/js/main.js`: hero block (title + big value
+  + day/total pills + quiet "Cost basis" caption), chips row below hero;
+  donut card in sidebar under watchlist (Chart.js doughnut, ticker legend,
+  privacy eye masks CAD values in tooltips — weights stay visible).
+
+**Chunk C — ledger / stock / UX (subagent, parallel with B)**
+- Ledger: stamp-style BUY/SELL badges, quieter chrome — ZERO contract changes
+  (11 columns × 4 places, data-cs-col untouched).
+- Stock page: stats `<dl>` grouped with cluster labels (Day / Range /
+  Valuation / Profile) — `dd` ids unchanged, stock.js untouched.
+- Timeframe row → scroll-snapped segmented control on both pages
+  (textContent untouched).
+- Empty states: actionable copy; ledger/preferences pick up new tokens free.
+
+**Integration (lead)**: review both diffs, resolve style.css overlap, full
+`python -m pytest` green.
 
 ## Out of scope
-- Customizable sector leaders (user picks which sectors to watch).
-- Historical volume comparison (today vs. 30-day average).
-- Volume chart/sparkline in the feed rows.
-- Sorting/filtering within the volume leaders tab.
-- "Add to watchlist" button on volume leader rows (could be a follow-up).
+
+Period-aware pills (roadmap #9), sector donut (roadmap #4), PWA (banned by
+design rule), any schema change.
+
+## Defaults chosen (user-approved)
+
+- Donut lives in the sidebar under the watchlist.
+- Cost basis = quiet caption under the hero pills, not a fourth pill.
+
+## Status
+
+- [x] Plan approved (user, with branch-based rollback guarantee)
+- [ ] Tests written + failing
+- [ ] Chunk A
+- [ ] Chunk B
+- [ ] Chunk C
+- [ ] Integration + full suite green
+- [ ] GUI gate
+- [ ] Commit gate (merge to main = user's explicit yes)
