@@ -647,7 +647,8 @@ const tabBar = document.querySelector(".tab-bar");
 const tabBtns = document.querySelectorAll(".tab-btn");
 const watchlistTab = document.querySelector("#watchlist-tab");
 const volumeLeadersTab = document.querySelector("#volume-leaders-tab");
-const addTickerBtnEl = document.querySelector("#add-ticker-btn");
+// addTickerBtn (grabbed with the watchlist section above) is reused here —
+// the "+ Add" button belongs to the Watchlist tab, so the leaders tab hides it.
 
 tabBar.addEventListener("click", (e) => {
     const btn = e.target.closest(".tab-btn");
@@ -662,11 +663,11 @@ tabBar.addEventListener("click", (e) => {
     if (tab === "watchlist") {
         watchlistTab.style.display = "";
         volumeLeadersTab.style.display = "none";
-        addTickerBtnEl.style.display = "";
+        addTickerBtn.style.display = "";
     } else {
         watchlistTab.style.display = "none";
         volumeLeadersTab.style.display = "";
-        addTickerBtnEl.style.display = "none";
+        addTickerBtn.style.display = "none";
     }
 });
 

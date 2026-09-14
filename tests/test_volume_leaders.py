@@ -264,8 +264,10 @@ def test_volume_leaders_route_returns_200(client, fake_market, monkeypatch):
 
 
 def test_volume_leaders_route_empty_list(client, fake_market, monkeypatch):
-    """Even an empty leaders list returns 200 (graceful degradation) —
-    e.g. the data layer answered but every row lacked a usable price."""
+    """Route passthrough: whatever the data layer hands back is echoed
+    verbatim, so an empty list is 200 + {"leaders": []}. (The real data
+    layer raises instead of returning [] on total failure — this patched
+    shape is defense-in-depth for the route's own contract.)"""
     monkeypatch.setattr(app_module, "get_volume_leaders", lambda: [])
     res = client.get("/api/market/volume-leaders")
     assert res.status_code == 200
