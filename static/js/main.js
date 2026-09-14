@@ -458,8 +458,12 @@ function applyPortfolioPrivacy() {
                 value: portfolioValueEl.textContent,
                 day: portfolioDayChangeEl.textContent,
                 dayClass: portfolioDayChangeEl.className,
+                dayValue: lastPortfolioPaint?.dayValue ?? null,
+                dayPct: lastPortfolioPaint?.dayPct ?? null,
                 total: portfolioTotalReturnEl.textContent,
                 totalClass: portfolioTotalReturnEl.className,
+                totalValue: lastPortfolioPaint?.totalValue ?? null,
+                totalPct: lastPortfolioPaint?.totalPct ?? null,
                 basis: portfolioCostBasisEl.textContent,
             };
         }
@@ -474,10 +478,14 @@ function applyPortfolioPrivacy() {
         }
         portfolioValueEl.textContent = "****";
         portfolioValueEl.title = "Portfolio value hidden for privacy";
-        portfolioDayChangeEl.textContent = "****";
-        portfolioDayChangeEl.className = "price-change privacy-masked";
-        portfolioTotalReturnEl.textContent = "****";
-        portfolioTotalReturnEl.className = "price-change privacy-masked";
+        // Show only the percentage part of the change pills — hide the
+        // dollar amounts but keep relative performance visible.
+        paintChange(portfolioDayChangeEl, lastPortfolioPaint?.dayValue ?? 0,
+                    lastPortfolioPaint?.dayPct ?? null, "Today", true);
+        portfolioDayChangeEl.classList.add("price-change", "privacy-masked");
+        paintChange(portfolioTotalReturnEl, lastPortfolioPaint?.totalValue ?? 0,
+                    lastPortfolioPaint?.totalPct ?? null, "Total", true);
+        portfolioTotalReturnEl.classList.add("price-change", "privacy-masked");
         // The cost-basis span keeps its own (class-less) identity — the
         // mask rides on inline geometry locks plus the semantic
         // privacy-masked marker, not a className overwrite.
@@ -497,7 +505,12 @@ function applyPortfolioPrivacy() {
             portfolioTotalReturnEl.textContent = lastPortfolioPaint.total;
             portfolioTotalReturnEl.className = lastPortfolioPaint.totalClass;
             portfolioCostBasisEl.textContent = lastPortfolioPaint.basis || "";
+        // Release geometry locks only when NOT masked — while masked,
+        // the locks keep the layout stable around the shorter percentage-
+        // only text. Unmasking calls this via applyPortfolioPrivacy.
+        if (!masked) {
             clearPortfolioGeometryLocks();
+        }
         }
         // No cache (masked before the first fetch ever landed): nothing
         // to restore instantly — the masked look holds via the locks
@@ -538,14 +551,10 @@ async function refreshPortfolioSummary() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
 
-        // Privacy guard: the setInterval poll keeps calling this function
-        // even while the header is masked — without this check it would
-        // repaint live numbers over the **** masks and silently lift the
-        // mask within one refresh cycle. Skip ALL painting (success and
-        // degraded alike); unmasking calls back in for a fresh paint.
-        if (portfolioMasked()) {
-            return;
-        }
+        // Privacy guard: when masked, skip painting dollar-only spans
+        // (portfolio value and cost basis) but still paint the change
+        // pills so percentages stay fresh during the refresh cycle.
+        const masked = portfolioMasked();
 
         // "unpriced" lists the tickers the backend couldn't quote this
         // cycle. They were excluded from EVERY sum, so if the sums are
@@ -557,37 +566,59 @@ async function refreshPortfolioSummary() {
             data.day_gain === 0 &&
             data.total_gain === 0;
         if (nothingPriced) {
-            setPortfolioUnavailable(
-                `Couldn't price: ${data.unpriced.join(", ")}`
-            );
+            // While masked, keep the existing mask — don't overwrite with
+            // error text that would break the privacy look.
+            if (!masked) {
+                setPortfolioUnavailable(
+                    `Couldn't price: ${data.unpriced.join(", ")}`
+                );
+            }
             return;
         }
 
         // Partial case: paint the priced totals, but say on hover which
         // tickers are missing. title="" wipes a stale tooltip from an
         // earlier cycle — the hover text must always match THIS payload.
-        portfolioValueEl.title = data.unpriced.length > 0
-            ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
-            : "";
+        // While masked, skip the title to avoid leaking which tickers
+        // couldn't be priced over the privacy **** mask.
+        if (!masked) {
+            portfolioValueEl.title = data.unpriced.length > 0
+                ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
+                : "";
+        }
         // The summary is ALWAYS CAD (the ledger toggle never touches it)
         // and the reply declares that — paint the code so a converted
         // total can't be misread as native.
-        portfolioValueEl.textContent =
-            `${formatNumber(data.total_value)} ${data.currency || "CAD"}`;
+        if (!masked) {
+            portfolioValueEl.textContent =
+                `${formatNumber(data.total_value)} ${data.currency || "CAD"}`;
+        }
+        // Cache raw values so applyPortfolioPrivacy can call paintChange
+        // with hideValue=true when the toggle is activated mid-cycle.
+        if (!lastPortfolioPaint) lastPortfolioPaint = {};
+        lastPortfolioPaint.dayValue = data.day_gain;
+        lastPortfolioPaint.dayPct = data.day_gain_pct;
+        lastPortfolioPaint.totalValue = data.total_gain;
+        lastPortfolioPaint.totalPct = data.total_gain_pct;
         paintChange(portfolioDayChangeEl, data.day_gain, data.day_gain_pct,
-                    "Today");
+                    "Today", masked);
         paintChange(portfolioTotalReturnEl, data.total_gain,
-                    data.total_gain_pct, "Total");
+                    data.total_gain_pct, "Total", masked);
         // The strip's fourth fact: what the position(s) cost. Raw float
         // from the backend — same formatter, same CAD label as the total
         // above (the cost basis is a CAD figure: stored per-transaction
         // rates make it so). The caption's "Cost basis" wording lives in
         // index.html; only the number is painted here.
-        portfolioCostBasisEl.textContent =
-            `${formatNumber(data.cost_basis)} ${data.currency || "CAD"}`;
-        // Real content is back over the masks — release the geometry locks
-        // in the same JS turn so there's exactly one layout pass (no jump).
-        clearPortfolioGeometryLocks();
+        if (!masked) {
+            portfolioCostBasisEl.textContent =
+                `${formatNumber(data.cost_basis)} ${data.currency || "CAD"}`;
+        }
+        // Release geometry locks only when NOT masked — while masked,
+        // the locks keep the layout stable around the shorter percentage-
+        // only text. Unmasking calls this via applyPortfolioPrivacy.
+        if (!masked) {
+            clearPortfolioGeometryLocks();
+        }
 
         // The donut eats the same reply: the holdings slice arrives
         // already priced-only, CAD, and value-sorted — the backend's math,

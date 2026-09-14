@@ -54,11 +54,21 @@ function formatSigned(value, currency) {
 // the DATA as a raw float, so adding the "+" character here is presentation.
 // pct === null means "no meaningful base to divide by" (e.g. a fully-sold
 // portfolio) — the amount still shows, only the % degrades away.
-function paintChange(el, value, pct, label) {
+// When hideValue is true, the dollar amount is suppressed and only the
+// percentage label is shown (e.g. "(+5.00%) Today") — used by the privacy
+// toggle to hide absolute figures while keeping relative performance visible.
+function paintChange(el, value, pct, label, hideValue) {
     const sign = value >= 0 ? "+" : "";
-    el.textContent = pct === null
-        ? `${sign}${formatNumber(value)} ${label}`
-        : `${sign}${formatNumber(value)} (${sign}${pct.toFixed(2)}%) ${label}`;
+    if (hideValue && pct !== null) {
+        el.textContent = `(${sign}${pct.toFixed(2)}%) ${label}`;
+    } else if (hideValue) {
+        // pct is null — nothing meaningful to show without the dollar amount
+        el.textContent = "****";
+    } else {
+        el.textContent = pct === null
+            ? `${sign}${formatNumber(value)} ${label}`
+            : `${sign}${formatNumber(value)} (${sign}${pct.toFixed(2)}%) ${label}`;
+    }
     // One call each: set green (pos) or red (neg), replacing the other.
     el.classList.toggle("pos", value >= 0);
     el.classList.toggle("neg", value < 0);
