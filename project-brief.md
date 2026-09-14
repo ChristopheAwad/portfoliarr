@@ -180,6 +180,16 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   so a transient Yahoo hiccup retries on the next click instead of posing
   as a dead ticker for a TTL window. **Rework trigger:** the quote cache's
   — move both into the SQLite database together.
+- **Volume-leaders cache is an in-memory dict** (`market_data.py`, single
+  entry, TTL 300s) holding the whole computed top-10 list for the
+  dashboard's "Volume Leaders" tab — one composite result (per-sector
+  winners, sorted, capped), not per-symbol entries, because every consumer
+  wants the identical list. Same NOT-SQLite call as the quote cache; dies
+  on restart, acceptable. Successes only: a scan that resolves zero usable
+  leaders raises `ValueError` instead of caching `[]`, so a total Yahoo
+  outage retries on the next poll instead of posing as "no volume anywhere"
+  for 5 minutes. **Rework trigger:** the quote cache's — move into the
+  SQLite database together.
 - **The portfolio summary sums native currencies without conversion.**
   ~~`GET /api/portfolio/summary` adds each holding's value, day move, and
   net cost in whatever currency Yahoo quotes it — the ledger's per-row

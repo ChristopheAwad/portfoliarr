@@ -17,5 +17,8 @@ instance/
 .vscode/
 .opencode/
 
+# Screenshots (local captures, not part of the app)
+*.png
+
 # Test framework
 .pytest_cache/

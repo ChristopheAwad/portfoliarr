@@ -28,7 +28,7 @@ from werkzeug.exceptions import HTTPException
 # and the transaction ledger.
 from market_data import (
     get_quote, get_name, get_stats, get_history, search_tickers,
-    get_fx_rate, get_fx_rate_on, PERIOD_MAP
+    get_fx_rate, get_fx_rate_on, PERIOD_MAP, get_volume_leaders
 )
 import db
 
@@ -2030,6 +2030,32 @@ def ticker_search():
         return jsonify({"error": "search service unavailable"}), 503
 
     return jsonify({"results": results})
+
+
+@app.route("/api/market/volume-leaders")
+def volume_leaders():
+    """Top 10 highest-volume stocks today, top 1 per market sector.
+
+    Scans hardcoded sector leaders (2-3 liquid tickers per sector) and
+    picks the highest-volume stock per sector, then returns the top 10
+    overall by volume. Cached server-side for 5 minutes.
+
+    Reply shape: {"leaders": [{symbol, name, price, change, change_pct,
+                                volume}, ...]}
+
+    Never a 500 — partial data is fine. If everything fails, the list
+    is empty and the frontend shows a graceful empty state.
+    """
+    try:
+        leaders = get_volume_leaders()
+    except Exception:
+        # Wide catch on purpose: volume leaders are a convenience feature,
+        # not core data. A total failure degrades to an empty list — the
+        # tab shows "No data available" rather than breaking the page.
+        app.logger.warning("volume leaders fetch failed", exc_info=True)
+        leaders = []
+
+    return jsonify({"leaders": leaders})
 
 
 @app.route("/api/stock/<symbol>")

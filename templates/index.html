@@ -152,23 +152,34 @@
 
             </div>
 
-            <!-- Right Sidebar Column (Watchlist) -->
+            <!-- Right Sidebar Column (Watchlist + Volume Leaders) -->
             <aside class="sidebar">
 
-                <!-- Watchlist Card. Unlike the indices chips above, watchlist
-                     rows come and go, so the HTML ships an EMPTY list and
-                     main.js builds the rows from /api/watchlist. The list is
-                     rebuilt on every refresh cycle, so nothing static here. -->
+                <!-- Watchlist Card with tab switcher. Two tabs: "Watchlist"
+                     (user's personal list) and "Volume Leaders" (top volume
+                     stocks today). The tab bar sits inside the card header;
+                     clicking a tab toggles which content is visible. -->
                 <div class="card watchlist-card">
                     <div class="card-header">
-                        <h3>Watchlist</h3>
+                        <div class="tab-bar">
+                            <button class="tab-btn active" data-tab="watchlist">Watchlist</button>
+                            <button class="tab-btn" data-tab="volume-leaders">Volume Leaders</button>
+                        </div>
                         <button class="btn-text" id="add-ticker-btn">+ Add</button>
                     </div>
-                    <ul class="watchlist">
-                        <!-- main.js fills this: one <li class="watchlist-item">
-                             per symbol, or a single empty-state row when the
-                             watchlist has nothing in it. -->
-                    </ul>
+                    <div id="watchlist-tab">
+                        <ul class="watchlist" id="watchlist">
+                            <!-- main.js fills this: one <li class="watchlist-item">
+                                 per symbol, or a single empty-state row when the
+                                 watchlist has nothing in it. -->
+                        </ul>
+                    </div>
+                    <div id="volume-leaders-tab" style="display: none;">
+                        <ul class="watchlist" id="volume-leaders">
+                            <!-- main.js fills this: one <li class="watchlist-item">
+                                 per volume leader, or an empty-state row. -->
+                        </ul>
+                    </div>
                 </div>
 
             </aside>
