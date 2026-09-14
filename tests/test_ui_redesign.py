@@ -138,7 +138,7 @@ def test_holdings_single_holding_weight_one(client, fake_market):
     """One holding owns 100% of the donut. 10 RBC @ $150 (CAD) → value
     1500.0, weight exactly 1.0."""
     seed("RBC.TO", 150.0, 10)
-    market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
+    fake_market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
     body = client.get("/api/portfolio/summary").get_json()
     assert len(body["holdings"]) == 1
     entry = body["holdings"][0]
@@ -156,8 +156,8 @@ def test_holdings_weights_sum_to_one_and_sort_by_value(client, fake_market):
     again (main.js reads, never re-derives)."""
     seed("RY.TO", 100.0, 10)    # 10 × 200 = 2000 (price moved to 200)
     seed("TD.TO", 50.0, 10)     # 10 × 100 = 1000 (price moved to 100)
-    market.quotes["RY.TO"] = make_quote("RY.TO", 200.0, 195.0)
-    market.quotes["TD.TO"] = make_quote("TD.TO", 100.0, 99.0)
+    fake_market.quotes["RY.TO"] = make_quote("RY.TO", 200.0, 195.0)
+    fake_market.quotes["TD.TO"] = make_quote("TD.TO", 100.0, 99.0)
     body = client.get("/api/portfolio/summary").get_json()
     holdings = body["holdings"]
     assert [h["ticker"] for h in holdings] == ["RY.TO", "TD.TO"]
@@ -174,8 +174,8 @@ def test_holdings_usd_converts_at_live_rate(client, fake_market):
     10 AAPL @ $180 USD × 1.35 = 2430 CAD; the seeded fx dict proves the
     rate was actually consulted (absent key would raise KeyError)."""
     seed("AAPL", 180.0, 10, currency="USD", fx_rate=1.30)
-    market.quotes["AAPL"] = make_quote("AAPL", 180.0, 175.0, currency="USD")
-    market.fx_rates["USDCAD"] = 1.35
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 180.0, 175.0, currency="USD")
+    fake_market.fx_rates["USDCAD"] = 1.35
     body = client.get("/api/portfolio/summary").get_json()
     assert body["holdings"][0]["value"] == pytest.approx(2430.0)
     assert body["holdings"][0]["weight"] == pytest.approx(1.0)
@@ -188,7 +188,7 @@ def test_holdings_excludes_unpriced_ticker(client, fake_market):
     other wedge. RBC prices (weight 1.0, not 0.5 over a fake total)."""
     seed("RBC.TO", 150.0, 10)
     seed("DEAD.TO", 50.0, 10)
-    market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
+    fake_market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
     # DEAD.TO absent from the quotes dict = Yahoo couldn't answer.
     body = client.get("/api/portfolio/summary").get_json()
     assert body["unpriced"] == ["DEAD.TO"]
@@ -214,6 +214,23 @@ def test_holdings_fully_sold_portfolio_has_no_wedges(client, fake_market):
     worst; 'no position, no wedge' is the honest shape."""
     seed("AAPL", 100.0, 10)
     seed("AAPL", 110.0, 10, tx_type="SELL", date="2026-08-05")
-    market.quotes["AAPL"] = make_quote("AAPL", 105.0, 100.0)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 105.0, 100.0)
     body = client.get("/api/portfolio/summary").get_json()
     assert body["holdings"] == []
+
+
+def test_holdings_excludes_short_positions(client, fake_market):
+    """The ledger fold is short-symmetric: selling more than you own
+    leaves a NET-NEGATIVE position. A short is a bet AGAINST, not an
+    allocation — it gets no wedge — and the wedge weights divide by the
+    LONG-ONLY total, so the visible circle still closes while the
+    headline total keeps the existing netting (the short's negative
+    value reduces it: 1500 − 200 = 1300)."""
+    seed("RBC.TO", 150.0, 10)
+    seed("SHORT.TO", 50.0, 4, tx_type="SELL", date="2026-08-01")
+    fake_market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
+    fake_market.quotes["SHORT.TO"] = make_quote("SHORT.TO", 50.0, 49.0)
+    body = client.get("/api/portfolio/summary").get_json()
+    assert body["total_value"] == pytest.approx(1300.0)
+    assert [h["ticker"] for h in body["holdings"]] == ["RBC.TO"]
+    assert body["holdings"][0]["weight"] == pytest.approx(1.0)

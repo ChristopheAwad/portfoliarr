@@ -667,7 +667,9 @@ function exitEditMode() {
 // on top.
 function renderLedger(transactions) {
     if (transactions.length === 0) {
-        setLedgerMessage("No transactions yet — log your first above.");
+        setLedgerMessage(
+            "No transactions yet — log your first buy in the form above, " +
+            "or paste an import.");
         return;
     }
 
@@ -1500,7 +1502,9 @@ function renderClosedSales(payload) {
 
     closedSalesBody.textContent = "";
     if (payload.rows.length === 0) {
-        setClosedSalesMessage("No closed sales yet");
+        setClosedSalesMessage(
+            "No closed sales yet — the realized result of each SELL " +
+            "appears here.");
         return;
     }
     for (const sale of payload.rows) {

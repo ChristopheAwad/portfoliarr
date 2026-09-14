@@ -102,31 +102,66 @@
              ONCE per page load (not polled): they come from Yahoo's heavy
              profile endpoint, and 60s polling would pay its cost for data
              that can't move. A dl (description list) is the honest element
-             for label:value pairs; CSS grids the pairs. Every <dd> ships
-             EMPTY (the :empty shimmer fills in while the fetch runs);
-             missing fields (an index has no market cap) gap-fill to "—". -->
+             for label:value pairs; CSS grids the pairs. The 18 pairs used
+             to sit in ONE flat grid — an undifferentiated wall of numbers —
+             so they're now grouped into FOUR labelled clusters (Today /
+             Ranges & averages / Valuation / Profile). Each cluster keeps
+             its own dl with the SAME .stats-grid class, so the :empty
+             shimmer and the responsive column rules keep working
+             untouched; the h4 caption sits OUTSIDE the dl because a dl
+             must contain only dt/dd. Every <dd> ships EMPTY (the :empty
+             shimmer fills in while the fetch runs) and keeps its EXACT id
+             (stock.js fills by id); missing fields (an index has no
+             market cap) gap-fill to "—". -->
         <div class="card stats-card">
             <h3>Stats</h3>
-            <dl class="stats-grid">
-                <div class="stat"><dt>Open</dt><dd id="stat-open"></dd></div>
-                <div class="stat"><dt>Day High</dt><dd id="stat-day-high"></dd></div>
-                <div class="stat"><dt>Day Low</dt><dd id="stat-day-low"></dd></div>
-                <div class="stat"><dt>Prev Close</dt><dd id="stat-prev-close"></dd></div>
-                <div class="stat"><dt>Volume</dt><dd id="stat-volume"></dd></div>
-                <div class="stat"><dt>52W Range</dt><dd id="stat-week52-range"></dd></div>
-                <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap"></dd></div>
-                <div class="stat"><dt>P/E</dt><dd id="stat-pe"></dd></div>
-                <div class="stat"><dt>EPS</dt><dd id="stat-eps"></dd></div>
-                <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield"></dd></div>
-                <div class="stat"><dt>Beta</dt><dd id="stat-beta"></dd></div>
-                <div class="stat"><dt>50-Day Avg</dt><dd id="stat-50d-avg"></dd></div>
-                <div class="stat"><dt>200-Day Avg</dt><dd id="stat-200d-avg"></dd></div>
-                <div class="stat"><dt>Avg Volume</dt><dd id="stat-avg-volume"></dd></div>
-                <div class="stat"><dt>Analyst Target</dt><dd id="stat-target-price"></dd></div>
-                <div class="stat"><dt>Rating</dt><dd id="stat-rating"></dd></div>
-                <div class="stat"><dt>Sector</dt><dd id="stat-sector"></dd></div>
-                <div class="stat"><dt>Industry</dt><dd id="stat-industry"></dd></div>
-            </dl>
+
+            <!-- "Today": the numbers that reset every trading day. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Today</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Open</dt><dd id="stat-open"></dd></div>
+                    <div class="stat"><dt>Day High</dt><dd id="stat-day-high"></dd></div>
+                    <div class="stat"><dt>Day Low</dt><dd id="stat-day-low"></dd></div>
+                    <div class="stat"><dt>Prev Close</dt><dd id="stat-prev-close"></dd></div>
+                    <div class="stat"><dt>Volume</dt><dd id="stat-volume"></dd></div>
+                    <div class="stat"><dt>Avg Volume</dt><dd id="stat-avg-volume"></dd></div>
+                </dl>
+            </div>
+
+            <!-- Price history distilled: where the stock has been and the
+                 averages traders watch for crosses. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Ranges &amp; averages</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>52W Range</dt><dd id="stat-week52-range"></dd></div>
+                    <div class="stat"><dt>50-Day Avg</dt><dd id="stat-50d-avg"></dd></div>
+                    <div class="stat"><dt>200-Day Avg</dt><dd id="stat-200d-avg"></dd></div>
+                </dl>
+            </div>
+
+            <!-- Size, price-vs-earnings, and what the analysts think. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Valuation</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap"></dd></div>
+                    <div class="stat"><dt>P/E</dt><dd id="stat-pe"></dd></div>
+                    <div class="stat"><dt>EPS</dt><dd id="stat-eps"></dd></div>
+                    <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield"></dd></div>
+                    <div class="stat"><dt>Beta</dt><dd id="stat-beta"></dd></div>
+                    <div class="stat"><dt>Analyst Target</dt><dd id="stat-target-price"></dd></div>
+                    <div class="stat"><dt>Rating</dt><dd id="stat-rating"></dd></div>
+                </dl>
+            </div>
+
+            <!-- The company itself, not the price: static facts. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Profile</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Sector</dt><dd id="stat-sector"></dd></div>
+                    <div class="stat"><dt>Industry</dt><dd id="stat-industry"></dd></div>
+                </dl>
+            </div>
         </div>
 
 {% endblock %}

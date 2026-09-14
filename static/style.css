@@ -2347,3 +2347,64 @@ input[type="date"]::-moz-placeholder {
         transition: none;
     }
 }
+
+/* ═══ Printed money — stats clusters & stamp badges (appended block) ═══
+   One self-contained section added at the END of the stylesheet: nothing
+   above is edited, so these rules can only ADD to the cascade (later
+   rules win at equal specificity) and can never silently rewrite an
+   existing component.
+
+   1. Stats clusters (stock page). The detail page's 18 stat pairs used
+      to live in one flat grid — an undifferentiated wall of numbers.
+      stock.html now wraps them in four labelled .stats-cluster divs,
+      each with its own dl.stats-grid (same class, so the :empty shimmer
+      and the responsive column rules keep working untouched). The label
+      is deliberately a QUIET caption: sentence case, the secondary ink,
+      no all-caps and no letter-spaced "eyebrow" treatment — the dt
+      captions inside each grid are already uppercase, and two shouting
+      layers would fight. A heading states what it names and steps back.
+      Separation is done with air alone (a margin between clusters, no
+      hairline rule) so the card keeps its calm, printed-ledger feel. */
+.stats-cluster + .stats-cluster {
+    margin-top: 18px;   /* air between clusters — space, not lines */
+}
+
+.stats-cluster-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.01em;
+    /* h4 ships with browser-default top/bottom margins that would add
+       stray space above the first cluster's label; reset them and keep
+       only the 8px gap to the grid the label names. */
+    margin: 0 0 8px;
+}
+
+/* 2. Stamp badges (ledger page). BUY/SELL stop being soft pills and
+      become rubber stamps on a ledger page: small, bold, uppercase, and
+      — the line that actually separates a stamp from a pill — framed by
+      a 1px hairline in the stamp's own ink. The tinted backgrounds and
+      text colors still come from the original .tx-badge.buy / .sell
+      rules above and are NEVER redeclared here; this block only adds
+      typography + the frame. The frame color is the pos/neg ink at ~35%
+      strength via color-mix — mixing with `transparent` (not white)
+      keeps the border honest on whichever paper it lands on, and going
+      through the var() means the dark-mode ink swap happens for free.
+      (border-radius already comes from the original rule's
+      var(--radius-sm) — slightly squared, exactly a stamp's shape.) */
+.tx-badge {
+    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border: 1px solid transparent; /* the frame; a variant inks it below */
+}
+
+.tx-badge.buy {
+    border-color: color-mix(in srgb, var(--green-pos) 35%, transparent);
+}
+
+.tx-badge.sell {
+    border-color: color-mix(in srgb, var(--red-neg) 35%, transparent);
+}

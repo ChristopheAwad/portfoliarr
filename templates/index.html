@@ -11,6 +11,81 @@
 
 {% block content %}
 
+        <!-- THE HERO — the portfolio's headline, deliberately NOT boxed
+             (style.css dissolves .stock-header-card into the page: no
+             border, no shadow). Everything below it is "material on the
+             desk"; this is the open air it sits on. -->
+        <div class="card stock-header-card">
+            <div class="stock-title">
+                <h2>Your Portfolio</h2>
+                <span class="badge">Main</span>
+                <!-- Privacy button: click to hide/show portfolio value
+                     for screen sharing. Eye icon swaps to eye-off when
+                     active. State persists in localStorage. -->
+                <button type="button" class="privacy-btn"
+                        id="hide-portfolio-toggle"
+                        title="Hide portfolio values"
+                        aria-label="Hide portfolio values"
+                        aria-pressed="false"
+                        data-hidden="false">
+                    <svg class="icon privacy-eye" viewBox="0 0 24 24" width="16" height="16"
+                         fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" aria-hidden="true">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <svg class="icon privacy-eye-off" viewBox="0 0 24 24" width="16" height="16"
+                         fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" aria-hidden="true">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
+                    </svg>
+                </button>
+                <!-- The ledger's display-currency toggle. OFF
+                     (default): the whole ledger reads in CAD.
+                     ON: USD securities flip back to their native
+                     USD (CAD rows are unaffected either way).
+                     ONLY the ledger flips — the portfolio total
+                     and the chart below are ALWAYS CAD (main.js
+                     sends ?currency= to /api/transactions and
+                     nothing else). Session-only: every page load
+                     starts in CAD again, by design. -->
+                <label class="fx-toggle" title="Show USD holdings in their native USD instead of CAD">
+                    <span class="fx-switch">
+                        <input type="checkbox" id="usd-native-toggle">
+                        <span class="fx-knob"></span>
+                    </span>
+                    Show USD in USD
+                </label>
+            </div>
+            <!-- Live portfolio numbers. These spans ship COMPLETELY
+                 EMPTY — not even whitespace (the :empty CSS selector
+                 is false the moment any text node exists, and a
+                 shimmer keyframe in style.css draws a loading
+                 skeleton only while they're empty). main.js fills
+                 them from GET /api/portfolio/summary the moment the
+                 page loads (backend sends raw floats; formatting is
+                 frontend-only). The ids are the hooks JS finds them
+                 by; static mockup numbers are gone so they can
+                 never masquerade as live data. -->
+            <div class="stock-price-container">
+                <span class="current-price" id="portfolio-value"></span>
+                <span class="price-change" id="portfolio-day-change"></span>
+                <span class="price-change" id="portfolio-total-return"></span>
+            </div>
+
+            <!-- The summary strip's fourth fact — cost basis, the reference
+                 the two gains above are measured against. The value span
+                 ships COMPLETELY EMPTY (no whitespace!) for the same :empty
+                 shimmer contract as the three numbers above; main.js paints
+                 it from the summary reply's cost_basis field, and the
+                 privacy eye masks it like the rest of the header. -->
+            <p class="cost-basis-caption">Cost basis <span id="portfolio-cost-basis"></span></p>
+        </div>
+
         <!-- Market Index Chips. data-symbol is the hook main.js uses to find
              each chip (by meaning, not position). Every chip here is managed:
              the price/change spans ship EMPTY and main.js fills them with
@@ -61,73 +136,14 @@
 
             <!-- Left Main Column -->
             <div class="main-content">
-                <div class="card stock-header-card">
-                    <div class="stock-title">
-                        <h2>Your Portfolio</h2>
-                        <span class="badge">Main</span>
-                        <!-- Privacy button: click to hide/show portfolio value
-                             for screen sharing. Eye icon swaps to eye-off when
-                             active. State persists in localStorage. -->
-                        <button type="button" class="privacy-btn"
-                                id="hide-portfolio-toggle"
-                                title="Hide portfolio values"
-                                aria-label="Hide portfolio values"
-                                aria-pressed="false"
-                                data-hidden="false">
-                            <svg class="icon privacy-eye" viewBox="0 0 24 24" width="16" height="16"
-                                 fill="none" stroke="currentColor" stroke-width="2"
-                                 stroke-linecap="round" aria-hidden="true">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                <circle cx="12" cy="12" r="3"></circle>
-                            </svg>
-                            <svg class="icon privacy-eye-off" viewBox="0 0 24 24" width="16" height="16"
-                                 fill="none" stroke="currentColor" stroke-width="2"
-                                 stroke-linecap="round" aria-hidden="true">
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
-                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
-                                <line x1="1" y1="1" x2="23" y2="23"></line>
-                                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
-                            </svg>
-                        </button>
-                        <!-- The ledger's display-currency toggle. OFF
-                             (default): the whole ledger reads in CAD.
-                             ON: USD securities flip back to their native
-                             USD (CAD rows are unaffected either way).
-                             ONLY the ledger flips — the portfolio total
-                             and the chart below are ALWAYS CAD (main.js
-                             sends ?currency= to /api/transactions and
-                             nothing else). Session-only: every page load
-                             starts in CAD again, by design. -->
-                        <label class="fx-toggle" title="Show USD holdings in their native USD instead of CAD">
-                            <span class="fx-switch">
-                                <input type="checkbox" id="usd-native-toggle">
-                                <span class="fx-knob"></span>
-                            </span>
-                            Show USD in USD
-                        </label>
-                    </div>
-                    <!-- Live portfolio numbers. These spans ship COMPLETELY
-                         EMPTY — not even whitespace (the :empty CSS selector
-                         is false the moment any text node exists, and a
-                         shimmer keyframe in style.css draws a loading
-                         skeleton only while they're empty). main.js fills
-                         them from GET /api/portfolio/summary the moment the
-                         page loads (backend sends raw floats; formatting is
-                         frontend-only). The ids are the hooks JS finds them
-                         by; static mockup numbers are gone so they can
-                         never masquerade as live data. -->
-                    <div class="stock-price-container">
-                        <span class="current-price" id="portfolio-value"></span>
-                        <span class="price-change" id="portfolio-day-change"></span>
-                        <span class="price-change" id="portfolio-total-return"></span>
-                    </div>
-
-                    <!-- Chart area. Chart.js paints onto a <canvas> — think
-                         of it as a blank drawing pad. main.js finds it by
-                         id and draws the real portfolio value history on
-                         it (computed by GET /api/portfolio/history from
-                         the ledger + close prices). -->
+                <!-- The value chart, boxed now that the hero dissolved
+                     above — the headline is open air, the chart is paper.
+                     Chart.js paints onto a <canvas> — think of it as a
+                     blank drawing pad. main.js finds it by id and draws
+                     the real portfolio value history on it (computed by
+                     GET /api/portfolio/history from the ledger + close
+                     prices). -->
+                <div class="card chart-card">
                     <div class="chart-box">
                         <canvas id="portfolioChart"></canvas>
                     </div>
@@ -179,6 +195,21 @@
                             <!-- main.js fills this: one <li class="watchlist-item">
                                  per volume leader, or an empty-state row. -->
                         </ul>
+                    </div>
+                </div>
+
+                <!-- Allocation donut. main.js paints a Chart.js doughnut
+                     onto the canvas from the summary reply's `holdings`
+                     slice (per-ticker CAD value + weight — the backend
+                     computes, the browser paints). While there is nothing
+                     priced to plot, the canvas box hides and an
+                     .empty-state line takes its place. -->
+                <div class="card donut-card">
+                    <div class="card-header">
+                        <h3>Allocation</h3>
+                    </div>
+                    <div class="donut-box">
+                        <canvas id="allocationChart"></canvas>
                     </div>
                 </div>
 
