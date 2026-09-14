@@ -27,22 +27,29 @@
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
-    <!-- Inter, the app's typeface, from Google Fonts' CDN (a free hosted
-         copy — same pattern as Chart.js below: nothing to install, it
-         ships straight to the browser). The two preconnect lines tell the
-         browser "you WILL talk to these hosts — open the connection now",
-         so the font stylesheet and the font files themselves start
-         downloading the instant the css2 link is parsed instead of
-         waiting for a fresh DNS + TLS handshake. fonts.gstatic.com (the
-         actual font files) needs crossorigin because font requests are
-         CORS-mode requests. display=swap means text renders immediately
-         in the fallback stack and upgrades to Inter when it arrives — no
-         invisible-text period. Weight 400 (body), 500/600 (labels,
-         buttons), 700 (wordmark). -->
+    <!-- TWO typefaces with distinct jobs, from Google Fonts' CDN (free
+         hosted copies — same pattern as Chart.js below: nothing to
+         install, they ship straight to the browser). The two preconnect
+         lines tell the browser "you WILL talk to these hosts — open the
+         connection now", so the font stylesheet and the font files
+         themselves start downloading the instant the css2 link is parsed
+         instead of waiting for a fresh DNS + TLS handshake.
+         fonts.gstatic.com (the actual font files) needs crossorigin
+         because font requests are CORS-mode requests. display=swap means
+         text renders immediately in the fallback stack and upgrades when
+         the fonts arrive — no invisible-text period.
+
+         Fraunces (variable axis: optical size 9..144, weight 400..700) is
+         the DISPLAY voice — wordmark + headings; its high optical sizes
+         look like currency engraving, the "printed money" identity.
+         Instrument Sans (400..700) is the UI face — body copy, controls,
+         and every figure (pairs with tabular-nums for live prices).
+         The old Inter stays in the CSS fallback chain, so a failed
+         download changes nothing but the face. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Instrument+Sans:wght@400..700&display=swap">
 
     <!-- Chart.js, loaded from a public CDN (a free hosted copy — nothing to
          pip install, it ships straight to the browser). Loading it here adds
