@@ -33,6 +33,42 @@ def test_stock_page_renders_shell_with_normalized_symbol(client):
     assert "AAPL" in html   # also in the <title>
 
 
+def test_stock_page_ships_bottom_tab_bar(client):
+    """The bottom tab bar must render on the stock detail page so users can
+    navigate to the dashboard or ledger without the logo. Both tabs point
+    to the right pages, neither is highlighted as active (the stock page
+    is its own context), and the body carries both the has-bottom-tabs
+    class (needed for container padding + toast offset) and the stock
+    page's data-symbol identity hook."""
+    html = client.get("/stock/aapl").get_data(as_text=True)
+
+    # Both tabs render with the correct destinations.
+    assert 'href="/" ' in html, "Dashboard tab href missing or wrong"
+    assert "/ledger" in html, "Ledger tab href missing or wrong"
+    assert "Dashboard" in html, "Dashboard tab label missing"
+    assert "Ledger" in html, "Ledger tab label missing"
+
+    # Neither tab is marked as the current page.
+    assert 'class="bottom-tab active"' not in html, (
+        "no bottom-tab should be active on the stock page"
+    )
+    assert 'aria-current="page"' not in html, (
+        "no bottom-tab should carry aria-current on the stock page"
+    )
+
+    # The <body> tag must be WELL-FORMED with both attributes: base.html
+    # glues the block onto <body> with no space, so the block MUST carry a
+    # leading space. Without it the render becomes <bodyclass=...> — the
+    # browser parses that as a bogus tag name and the real <body> never
+    # gets data-symbol, so stock.js's document.body.dataset.symbol is
+    # undefined and the whole page dies. (A plain substring check for
+    # 'class="has-bottom-tabs"' can't catch this — it still matches inside
+    # the broken tag.)
+    assert '<body class="has-bottom-tabs" data-symbol="AAPL">' in html, (
+        "the <body> tag must be well-formed with has-bottom-tabs AND data-symbol"
+    )
+
+
 # ── Watch-state stamp (the watch button's initial state) ─────────────
 
 def test_stock_page_ships_unwatched_by_default(client):

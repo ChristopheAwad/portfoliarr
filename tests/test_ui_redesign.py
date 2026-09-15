@@ -128,6 +128,23 @@ def test_dashboard_ships_redesigned_fonts(client):
     )
 
 
+def test_tabbed_pages_ship_well_formed_body_tag(client):
+    """The pages that fill the bottom_tabs block must render a WELL-FORMED
+    <body class="has-bottom-tabs"> tag. base.html glues the body_attrs
+    block onto <body> with NO space, so the block MUST carry a leading
+    space — without it the render becomes <bodyclass=...>, which the
+    browser parses as a bogus tag name. On the dashboard/ledger that lost
+    the has-bottom-tabs padding + toast offsets (cosmetic); on the stock
+    page it would be fatal (data-symbol never lands, stock.js dies). A
+    substring check for 'has-bottom-tabs' can't catch the glue bug — it
+    still matches inside the broken tag — so the EXACT tag is the lock."""
+    for path in ("/", "/ledger"):
+        html = client.get(path).get_data(as_text=True)
+        assert '<body class="has-bottom-tabs">' in html, (
+            f"{path} must render a well-formed <body class=\"has-bottom-tabs\"> tag"
+        )
+
+
 def test_dashboard_has_cost_basis_element(client):
     """The brief's summary strip lists cost basis; the dashboard never
     showed it. main.js paints the number into this element from the

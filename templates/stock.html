@@ -13,7 +13,7 @@
 <!-- The symbol is stamped on <body> (via base.html's body_attrs block):
      stock.js's identity hook. The template renders it uppercased by the
      route; every fetch below uses the same canonical form. -->
-{% block body_attrs %} data-symbol="{{ symbol }}"{% endblock %}
+{% block body_attrs %} class="has-bottom-tabs" data-symbol="{{ symbol }}"{% endblock %}
 
 {% block content %}
 
@@ -168,4 +168,12 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/stock.js') }}"></script>
+{% endblock %}
+
+<!-- Bottom tab bar — the stock page isn't Dashboard or Ledger, so neither
+     tab is highlighted (tab_active = ''). The bar still renders so users
+     can navigate between pages without needing the logo. -->
+{% block bottom_tabs %}
+{% set tab_active = '' %}
+{% include '_bottom_tabs.html' %}
 {% endblock %}
