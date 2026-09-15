@@ -206,8 +206,8 @@ h2, h3 {
 .logo-accent { color: var(--green-pos); }
 
 /* Bottom tab bar — fixed to the viewport bottom, opt-in per page via
-   base.html's bottom_tabs block. Dashboard and Ledger use it; stock
-   detail and preferences don't. The has-bottom-tabs body class adds
+   base.html's bottom_tabs block. Dashboard, Ledger, and stock detail
+   opt in; preferences doesn't. The has-bottom-tabs body class adds
    padding so content isn't hidden behind the bar. */
 .bottom-tabs {
     position: fixed;
