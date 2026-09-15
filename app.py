@@ -1064,7 +1064,7 @@ def portfolio_realized():
 # (an excluded ticker's value never inflates the denominator).
 #
 # DATA SOURCE: the "currency" dimension classifies off the quote's own
-# currency (zero extra network). The other six consult get_profile()
+# currency (zero extra network). The other four consult get_profile()
 # (market_data.py) — one Ticker.info call per ticker, process-lifetime
 # cached (the name-cache pattern). Missing metadata fields → excluded
 # with a human-readable reason, never fabricated into a category.
