@@ -61,6 +61,28 @@ def clear_history_cache():
     counts would depend on execution order."""
     _history_cache.clear()
 
+# ── Profile cache — the allocation donut's answer to "what sector is this
+#    ticker in?".
+#
+# {symbol: {sector, industry, country, quote_type, exchange, market_cap}}
+# Same data lifetime policy as _name_cache: a company's profile never
+# changes, so entries stay valid forever — no TTL, no timestamps. One
+# Ticker.info call per symbol per process lifetime. Deliberately a
+# SEPARATE cache from _name_cache (get_name RAISES when no name exists —
+# a profile must not inherit that rule; missing FIELDS are fine, missing
+# DATA is not).
+_profile_cache = {}
+
+
+def clear_profile_cache():
+    """Empty the profile cache — test isolation's escape hatch.
+
+    Production never needs this (entries live forever); tests do, or a
+    profile test would inherit an entry a previous test cached and call
+    counts would depend on execution order."""
+    _profile_cache.clear()
+
+
 # The page's timeframe buttons map to a Yahoo "period" + "interval" pair.
 # This dict is the single source of truth for that mapping, shared by
 # get_history (the HOW of fetching) and the portfolio-history route (also
@@ -277,6 +299,60 @@ def get_stats(symbol):
         "sector": info.get("sector"),
         "industry": info.get("industry"),
     }
+
+
+def get_profile(symbol):
+    """Return the classification profile for `symbol`.
+
+    One cached Ticker.info call serves the allocation donut's six
+    non-currency dimensions: sector, industry, country, quote_type,
+    exchange, and market_cap. Process-lifetime cache (the _name_cache
+    pattern): a company's profile never changes, so the first success
+    stays valid forever.
+
+    Returns snake_case keys — the route layer's convention of
+    translating Yahoo's camelCase at this boundary (same as get_stats):
+        sector          e.g. "Technology", "Financial Services" (None
+                        for crypto, indices, some ETFs)
+        industry        e.g. "Consumer Electronics", "REIT—Diversified"
+        country         e.g. "United States", "Canada"
+        quote_type      e.g. "EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"
+        exchange        e.g. "NMS" (Yahoo's raw code for NASDAQ)
+        market_cap      shares outstanding × price (native currency;
+                        None for indices, some ETFs)
+
+    Missing fields → None, not an error (same convention as get_stats):
+    different security types legitimately lack different fields. An
+    EMPTY profile (Yahoo returned nothing) raises ValueError — it means
+    the symbol is genuinely unknown, not "profile exists but sparse".
+
+    Raises on failure — same boundary rule as get_quote: this layer
+    reports problems, the route layer decides the HTTP response.
+    """
+    # Cache check: after the first success this is a pure dict lookup.
+    if symbol in _profile_cache:
+        return _profile_cache[symbol]
+
+    # Cache miss: pay the (slow) network cost once.
+    info = yf.Ticker(symbol).info
+
+    # An empty profile means Yahoo knows nothing about this symbol —
+    # fail loudly with a named error instead of returning Nones that
+    # masquerade as "real but empty" profiles.
+    if not info:
+        raise ValueError(f"no profile data for {symbol}")
+
+    profile = {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "country": info.get("country"),
+        "quote_type": info.get("quoteType"),
+        "exchange": info.get("exchange"),
+        "market_cap": info.get("marketCap"),
+    }
+
+    _profile_cache[symbol] = profile
+    return profile
 
 
 def get_history(symbol, period_key):

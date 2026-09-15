@@ -198,19 +198,28 @@
                     </div>
                 </div>
 
-                <!-- Allocation donut. main.js paints a Chart.js doughnut
-                     onto the canvas from the summary reply's `holdings`
-                     slice (per-ticker CAD value + weight — the backend
-                     computes, the browser paints). While there is nothing
-                     priced to plot, the canvas box hides and an
-                     .empty-state line takes its place. -->
+                <!-- Allocation donut with dimension carousel. main.js paints
+                     a Chart.js doughnut onto the canvas from either the
+                     summary reply's `holdings` slice (By Ticker) or the
+                     allocation endpoint's `slices` (by sector/industry/etc).
+                     The arrow buttons cycle through 8 views; the label
+                     shows the current dimension. The excluded note lists
+                     any holdings that couldn't be classified. -->
                 <div class="card donut-card">
                     <div class="card-header">
                         <h3>Allocation</h3>
+                        <div class="alloc-carousel-ctrl">
+                            <button id="alloc-prev" class="alloc-arrow"
+                                    title="Previous view">&lsaquo;</button>
+                            <span id="alloc-label">By Ticker</span>
+                            <button id="alloc-next" class="alloc-arrow"
+                                    title="Next view">&rsaquo;</button>
+                        </div>
                     </div>
                     <div class="donut-box">
                         <canvas id="allocationChart"></canvas>
                     </div>
+                    <p id="alloc-excluded" class="alloc-excluded"></p>
                 </div>
 
             </aside>

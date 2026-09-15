@@ -27,7 +27,8 @@ from werkzeug.exceptions import HTTPException
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
 from market_data import (
-    get_quote, get_name, get_stats, get_history, search_tickers,
+    get_quote, get_name, get_stats, get_profile, get_history,
+    search_tickers,
     get_fx_rate, get_fx_rate_on, PERIOD_MAP, get_volume_leaders
 )
 import db
@@ -54,6 +55,22 @@ db.init()
 # not in the generic data module. Adding a chip = adding a string here AND
 # a matching data-symbol attribute on the chip in templates/index.html.
 INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^GSPTSE", "BTC-USD"]
+
+# Product decision: which allocation dimensions the donut carousel offers.
+# Each key maps to a human-readable label (frontend reads, never re-derives)
+# and the profile field it groups by. "ticker" is deliberately excluded —
+# that view is served by the summary's holdings slice; two sources for one
+# view would drift. Keys must match the frontend's ALLOCATION_VIEWS array
+# (locked by test_allocation_ui.py::test_js_dimension_keys_match_backend_whitelist).
+ALLOCATION_DIMENSIONS = {
+    "sector":   {"label": "By Sector",   "field": "sector"},
+    "industry": {"label": "By Industry", "field": "industry"},
+    "country":  {"label": "By Country",  "field": "country"},
+    "type":     {"label": "By Type",     "field": "quote_type"},
+    "exchange": {"label": "By Exchange", "field": "exchange"},
+    "cap":      {"label": "By Cap Bucket", "field": "market_cap"},
+    "currency": {"label": "By Currency", "field": None},  # special: from quote
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1026,6 +1043,249 @@ def portfolio_realized():
             else fold_total
         ),
         "rows": rows,
+    })
+
+
+# ---------------------------------------------------------------------------
+# ALLOCATION DONUT — multi-dimension slicing of the portfolio value.
+#
+# The dashboard's donut card offers 8 views (By Ticker via the summary
+# endpoint, plus 7 dimensions here), cycled with arrow buttons. Each
+# dimension groups the same holdings math (net-qty × live quote × live
+# FX rate) by a metadata field: sector, industry, country, asset type,
+# exchange, market-cap bucket, or currency.
+#
+# HOW THE MATH WORKS: identical to the summary's pass (fold → parallel
+# quotes → live FX → long-only, priced-only), but instead of returning
+# per-ticker entries, the per-ticker value is bucketed by the chosen
+# dimension's key. Weights divide by the sum of CLASSIFIED slices only
+# (an excluded ticker's value never inflates the denominator).
+#
+# DATA SOURCE: the "currency" dimension classifies off the quote's own
+# currency (zero extra network). The other six consult get_profile()
+# (market_data.py) — one Ticker.info call per ticker, process-lifetime
+# cached (the name-cache pattern). Missing metadata fields → excluded
+# with a human-readable reason, never fabricated into a category.
+#
+# CAP BUCKETS: USD market caps convert at the live rate so all buckets
+# are CAD-consistent. Thresholds: Large ≥ $10B CAD, Mid $2–10B,
+# Small < $2B. Missing market_cap → excluded.
+#
+# EXCLUDED LIST: every ticker that contributes to no slice lands in
+# `excluded` with {ticker, reason}. Two exclusion paths:
+#   - unpriced (quote failed or unsupported currency) — same excluded-
+#     from-every-sum rule the summary already follows
+#   - unclassified (profile missing the field, or profile fetch failed)
+# The frontend surfaces this as a small note under the donut.
+# ---------------------------------------------------------------------------
+
+# Market-cap bucket thresholds (CAD). USD caps convert at the live rate
+# before bucketing, so the thresholds are currency-agnostic.
+_CAP_LARGE = 10_000_000_000   # ≥ $10B CAD
+_CAP_MID = 2_000_000_000      # ≥ $2B CAD
+# Small = everything below $2B CAD
+
+
+def _cap_bucket(market_cap_cad):
+    """Classify a CAD-converted market cap into a human-readable bucket.
+    Returns the bucket label, or None if the cap is missing."""
+    if market_cap_cad is None:
+        return None
+    if market_cap_cad >= _CAP_LARGE:
+        return "Large"
+    if market_cap_cad >= _CAP_MID:
+        return "Mid"
+    return "Small"
+
+
+@app.route("/api/portfolio/allocation")
+def portfolio_allocation():
+    """Return per-dimension allocation slices for the donut carousel.
+
+    Query param `by` is a key in ALLOCATION_DIMENSIONS; defaults to
+    "sector". Invalid key → 400 with the valid options. Shape of reply:
+
+        by          the dimension key ("sector", "currency", ...)
+        currency    "CAD" — all values are CAD
+        slices[]    value-desc, one per classified group:
+            key     the dimension value ("Technology", "USD", ...)
+            value   Σ net_qty × live price × rate for long positions
+                    in this group (CAD)
+            weight  value ÷ sum of all slice values
+        excluded[]  tickers that contribute to no slice:
+            ticker  the symbol
+            reason  human-readable: "couldn't be priced", "no sector
+                    data", "couldn't fetch profile", etc.
+
+    Slices may be [] when every holding is excluded — that's honest, not
+    an error. Empty ledger → both slices and excluded are [].
+    """
+    # Validate the dimension key BEFORE doing any work — the same
+    # "fail early, fail friendly" pattern as portfolio_history's period
+    # validation.
+    by = request.args.get("by", "sector").lower()
+    if by not in ALLOCATION_DIMENSIONS:
+        options = ", ".join(sorted(ALLOCATION_DIMENSIONS))
+        return jsonify({"error": f"by must be one of: {options}"}), 400
+
+    dimension = ALLOCATION_DIMENSIONS[by]
+    profile_field = dimension["field"]  # None for currency
+
+    # ── PASS 1: fold transactions into per-ticker figures ────────────────
+    # Same fold as portfolio_summary: net qty (BUY adds, SELL subtracts)
+    # and cost. We need net_qty for the long-only check; value is priced
+    # in pass 2 from live quotes.
+    transactions = db.get_transactions()
+    net_qty = {}
+    currency_by_symbol = {}
+    for tx in transactions:
+        symbol = tx["ticker"]
+        sign = 1 if tx["transaction_type"] == "BUY" else -1
+        net_qty[symbol] = net_qty.get(symbol, 0) + sign * tx["qty"]
+        currency_by_symbol.setdefault(symbol, tx["currency"])
+
+    # Empty ledger → empty slices, empty excluded.
+    if not net_qty:
+        return jsonify({"by": by, "currency": "CAD",
+                        "slices": [], "excluded": []})
+
+    # ── PASS 2: price the priced slice in CAD ───────────────────────────
+    # One quote per UNIQUE ticker, fetched in parallel — same pattern as
+    # portfolio_summary. Unpriced tickers join the excluded list.
+    def fetch_alloc_quote(symbol):
+        try:
+            return symbol, get_quote(symbol)
+        except Exception:
+            app.logger.warning(
+                "allocation quote failed for %s — excluded from slices",
+                symbol,
+                exc_info=True,
+            )
+            return symbol, None
+
+    quotes = {}
+    with ThreadPoolExecutor(
+        max_workers=min(len(net_qty), 8)
+    ) as pool:
+        for symbol, quote in pool.map(fetch_alloc_quote, net_qty):
+            quotes[symbol] = quote
+
+    # ONE live USDCAD rate — fetched only when a USD holding needs
+    # converting. Same logic as portfolio_summary.
+    usd_tickers = sorted(
+        s for s, c in currency_by_symbol.items()
+        if c == "USD" and net_qty.get(s, 0) > 0
+    )
+    live_rate = None
+    if usd_tickers:
+        try:
+            live_rate = get_fx_rate("USD", "CAD")
+        except Exception:
+            app.logger.warning(
+                "live USDCAD rate unavailable — USD holdings excluded "
+                "from allocation",
+                exc_info=True,
+            )
+
+    # ── PASS 3: classify + aggregate ────────────────────────────────────
+    # Walk every held ticker. Priced + classified → slice; otherwise →
+    # excluded with a reason. For profile dimensions, get_profile is
+    # called once per unique ticker (process-lifetime cached, so only
+    # the first request pays the cost).
+    slices = {}    # {group_key: value}
+    excluded = []  # [{ticker, reason}]
+
+    for symbol, held in net_qty.items():
+        quote = quotes[symbol]
+
+        # Unpriced: same excluded-from-every-sum rule as the summary.
+        if quote is None:
+            excluded.append({"ticker": symbol,
+                             "reason": "couldn't be priced"})
+            continue
+
+        # Currency check: only USD and CAD are supported — anything else
+        # is excluded, same as the summary.
+        currency = quote["currency"]
+        if currency not in ("USD", "CAD"):
+            excluded.append({"ticker": symbol,
+                             "reason": f"unsupported currency: {currency}"})
+            continue
+        if currency == "USD" and live_rate is None:
+            excluded.append({"ticker": symbol,
+                             "reason": "USDCAD rate unavailable"})
+            continue
+
+        value_rate = live_rate if currency == "USD" else 1.0
+        position_value = held * quote["price"] * value_rate
+
+        # Long-only: a short is a bet against, not an allocation.
+        if held <= 0:
+            continue
+
+        # Classify by the chosen dimension.
+        if profile_field is None:
+            # Currency dimension: group off the quote's currency directly.
+            group_key = currency
+        else:
+            # Profile dimensions: consult get_profile (cached).
+            try:
+                profile = get_profile(symbol)
+            except Exception:
+                app.logger.warning(
+                    "allocation profile failed for %s — excluded from "
+                    "slices by %s",
+                    symbol, by,
+                    exc_info=True,
+                )
+                excluded.append({"ticker": symbol,
+                                 "reason": "couldn't fetch profile"})
+                continue
+
+            field_value = profile.get(profile_field)
+
+            # Missing metadata: excluded with a reason, never fabricated.
+            if field_value is None:
+                excluded.append({
+                    "ticker": symbol,
+                    "reason": f"no {dimension['label'].lower().removeprefix('by ')} data",
+                })
+                continue
+
+            # Cap dimension: bucket the market cap (convert USD → CAD).
+            if by == "cap":
+                mc = profile.get("market_cap")
+                if currency == "USD" and live_rate is not None and mc is not None:
+                    mc = mc * live_rate
+                field_value = _cap_bucket(mc)
+                if field_value is None:
+                    excluded.append({"ticker": symbol,
+                                     "reason": "no market-cap data"})
+                    continue
+
+            group_key = field_value
+
+        slices[group_key] = slices.get(group_key, 0.0) + position_value
+
+    # ── PASS 4: build the response ──────────────────────────────────────
+    # Sorted value-descending (biggest slice first — the donut's legend
+    # reads biggest-first). Weights divide by the sum of classified
+    # slices only: an excluded ticker's value never enters the denominator.
+    total = sum(slices.values())
+    result_slices = [
+        {"key": key, "value": value,
+         "weight": value / total if total > 0 else 0.0}
+        for key, value in sorted(slices.items(),
+                                 key=lambda item: item[1], reverse=True)
+    ]
+
+    excluded.sort(key=lambda e: e["ticker"])
+
+    return jsonify({
+        "by": by,
+        "currency": "CAD",
+        "slices": result_slices,
+        "excluded": excluded,
     })
 
 

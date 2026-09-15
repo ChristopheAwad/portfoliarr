@@ -622,8 +622,20 @@ async function refreshPortfolioSummary() {
 
         // The donut eats the same reply: the holdings slice arrives
         // already priced-only, CAD, and value-sorted — the backend's math,
-        // painted verbatim.
-        paintAllocation(data.holdings);
+        // painted verbatim. Convert to the unified slices shape (key/value/
+        // weight) so both the ticker view and the allocation views share
+        // one paintAllocation function.
+        const tickerSlices = data.holdings.map(
+            (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
+        );
+        lastSummaryHoldings = tickerSlices;
+
+        // Paint ONLY if the ticker view is currently active — the other
+        // views have their own fetch cycle. Painting a non-active view
+        // would overwrite the chart with stale data on the next arrow flip.
+        if (allocViewIndex === 0) {
+            paintAllocation(tickerSlices, null);
+        }
 
         // Feed yesterday's portfolio value into the chart handle so the
         // 1D view can draw a horizontal reference line at yesterday's close.
@@ -710,10 +722,10 @@ document.addEventListener("themechange", () => {
 
 // ---------------------------------------------------------------------------
 // ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
-// OF. Data comes from the summary reply's `holdings` slice: already CAD,
-// already value-descending, already priced-only (an unpriced ticker is in
-// NO wedge — the backend excludes it from the weights' denominator too).
-// This code paints; it never re-derives the math.
+// OF, cycled through 8 views with arrow buttons (and touch-swipe on the
+// donut box). The "By Ticker" view reads the summary reply's `holdings`
+// slice; the other 7 views fetch /api/portfolio/allocation?by=<key>.
+// Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
 
 // The canvas from the HTML, plus the card/box around it (found by walking
@@ -725,11 +737,17 @@ const donutCardEl = allocationCanvas
 const donutBoxEl = allocationCanvas
     ? allocationCanvas.closest(".donut-box") : null;
 
-// The holdings slice the donut currently plots. The tooltip callbacks need
-// each wedge's CAD value, but Chart.js hands a tooltip only the parsed
-// weight — this is the bridge from weight back to the value it came from.
-// Kept in module state (not chart config) so a poll refresh can swap it
-// in one place.
+// Carousel controls — the arrow buttons and label in the card header.
+const allocPrevBtn = document.getElementById("alloc-prev");
+const allocNextBtn = document.getElementById("alloc-next");
+const allocLabelEl = document.getElementById("alloc-label");
+const allocExcludedEl = document.getElementById("alloc-excluded");
+
+// The holdings/slices array the donut currently plots. The tooltip
+// callbacks need each wedge's CAD value, but Chart.js hands a tooltip
+// only the parsed weight — this is the bridge from weight back to the
+// value it came from. Kept in module state (not chart config) so a poll
+// refresh can swap it in one place.
 let currentHoldings = [];
 
 // The chart object. Built LAZILY on the first non-empty payload — an
@@ -773,9 +791,151 @@ function setDonutEmpty(empty) {
     }
 }
 
-// Paint (build OR update) the donut from one summary reply's holdings.
-// Called from refreshPortfolioSummary on every poll cycle.
-function paintAllocation(holdings) {
+// ---------------------------------------------------------------------------
+// ALLOCATION CAROUSEL — 8 views, cycled with arrows + swipe.
+//
+// The "By Ticker" view reads from the summary poll's `holdings` slice
+// (already fetched every 60s — zero extra network). The other 7 views
+// fetch /api/portfolio/allocation?by=<key>, which reuses the quote
+// cache warmed by the summary poll (steady-state: nearly free).
+//
+// Each dimension's payload is cached in a JS-side dict so arrow flips
+// are instant. The 60s poll refreshes ONLY the active dimension. A
+// flip paints the cached payload immediately and refetches in the
+// background if stale.
+// ---------------------------------------------------------------------------
+
+// Source of truth for carousel order + labels. The null key signals
+// "use the summary's holdings slice" — no allocation fetch needed.
+// Order matches the template's alt/arrow flow: prev at index 0 wraps
+// to the last, next at index 7 wraps to the first.
+const ALLOCATION_VIEWS = [
+    { key: null,     label: "By Ticker" },
+    { key: "sector", label: "By Sector" },
+    { key: "industry", label: "By Industry" },
+    { key: "country", label: "By Country" },
+    { key: "type",   label: "By Type" },
+    { key: "exchange", label: "By Exchange" },
+    { key: "cap",    label: "By Cap Bucket" },
+    { key: "currency", label: "By Currency" },
+];
+
+// Carousel state. persisted in localStorage so the last-viewed
+// dimension survives a reload.
+let allocViewIndex = 0;
+try {
+    const saved = localStorage.getItem("allocationDimension");
+    if (saved !== null) {
+        const idx = parseInt(saved, 10);
+        if (idx >= 0 && idx < ALLOCATION_VIEWS.length) allocViewIndex = idx;
+    }
+} catch { /* localStorage unavailable — use default */ }
+
+// Per-dimension payload cache: {by_key: {data, fetchedAt}}.
+// The ticker view (key null) uses the summary poll directly — no
+// cache entry needed.
+const allocCache = {};
+const ALLOC_CACHE_TTL = REFRESH_MS; // refresh alongside the poll
+
+function allocCacheStale(key) {
+    const entry = allocCache[key];
+    return !entry || (Date.now() - entry.fetchedAt) > ALLOC_CACHE_TTL;
+}
+
+// Navigate the carousel to a new index (with wrap-around) and fetch
+// the new view's data.
+function switchAllocView(newIndex) {
+    // Wrap: prev on 0 → last; next on last → 0.
+    allocViewIndex = (newIndex + ALLOCATION_VIEWS.length) % ALLOCATION_VIEWS.length;
+
+    // Persist the choice.
+    try { localStorage.setItem("allocationDimension", allocViewIndex); }
+    catch { /* private browsing, ignore */ }
+
+    // Update the label + button state.
+    const view = ALLOCATION_VIEWS[allocViewIndex];
+    if (allocLabelEl) allocLabelEl.textContent = view.label;
+
+    // Fetch the data for this view (ticker views use the summary's
+    // holdings; others fetch the allocation endpoint).
+    if (view.key === null) {
+        // By Ticker: re-paint from the summary's holdings (already
+        // in memory from the last poll). The next poll will refresh it.
+        paintAllocation(lastSummaryHoldings, null);
+    } else {
+        fetchAllocDimension(view.key);
+    }
+}
+
+// Fetch one allocation dimension, painting on arrival.
+async function fetchAllocDimension(by) {
+    if (!allocCacheStale(by)) {
+        // Cache hit: paint instantly.
+        const entry = allocCache[by];
+        paintAllocation(entry.data.slices, entry.data.excluded);
+        return;
+    }
+    try {
+        const response = await fetch(
+            `/api/portfolio/allocation?by=${encodeURIComponent(by)}`
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        allocCache[by] = { data, fetchedAt: Date.now() };
+        paintAllocation(data.slices, data.excluded);
+    } catch (err) {
+        console.error(`allocation fetch (${by}) failed:`, err);
+        paintAllocation([], []);
+    }
+}
+
+// Arrow button handlers.
+if (allocPrevBtn) {
+    allocPrevBtn.addEventListener("click", () => {
+        switchAllocView(allocViewIndex - 1);
+    });
+}
+if (allocNextBtn) {
+    allocNextBtn.addEventListener("click", () => {
+        switchAllocView(allocViewIndex + 1);
+    });
+}
+
+// Touch-swipe on the donut box for phones: swipe left = next,
+// swipe right = previous. The delta threshold prevents tiny
+// accidental swipes from flipping views.
+if (donutBoxEl) {
+    let touchStartX = 0;
+    donutBoxEl.addEventListener("touchstart", (e) => {
+        touchStartX = e.touches[0].clientX;
+    }, { passive: true });
+    donutBoxEl.addEventListener("touchend", (e) => {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(dx) > 40) {
+            switchAllocView(allocViewIndex + (dx < 0 ? 1 : -1));
+        }
+    }, { passive: true });
+}
+
+// The summary's holdings slice — the By Ticker view's data source.
+// Set on every summary poll, consumed by switchAllocView when the
+// ticker view is active.
+let lastSummaryHoldings = [];
+
+// Update the label on first load.
+if (allocLabelEl) {
+    allocLabelEl.textContent = ALLOCATION_VIEWS[allocViewIndex].label;
+}
+
+// ---------------------------------------------------------------------------
+// PAINT ALLOCATION — build or update the donut from one payload.
+// Accepts an array of {label, value, weight} objects (the "slices"
+// shape) plus an optional excluded list. The By Ticker view maps
+// holdings (which have a `ticker` key) to this shape; the allocation
+// endpoint's slices already match.
+// ---------------------------------------------------------------------------
+
+function paintAllocation(slices, excluded) {
     // No canvas (defensive — index.html ships one) or no Chart.js (the
     // CDN script failed to load): degrade to the empty-state text rather
     // than throwing — same spirit as the chart handle's null guard.
@@ -783,9 +943,23 @@ function paintAllocation(holdings) {
         setDonutEmpty(true);
         return;
     }
-    currentHoldings = holdings;
+    currentHoldings = slices;
 
-    if (holdings.length === 0) {
+    // Update the excluded note.
+    if (allocExcludedEl) {
+        if (excluded && excluded.length > 0) {
+            const parts = excluded.map(
+                (e) => `${e.ticker}\u2009\u2014\u2009${e.reason}`
+            );
+            allocExcludedEl.textContent = `Excludes ${parts.join("; ")}`;
+            allocExcludedEl.style.display = "";
+        } else {
+            allocExcludedEl.textContent = "";
+            allocExcludedEl.style.display = "none";
+        }
+    }
+
+    if (!slices || slices.length === 0) {
         // Empty reply: no wedges. DESTROY any chart a previous cycle
         // built — a stale donut beside an "empty" message would
         // contradict the data it claims to show.
@@ -798,8 +972,8 @@ function paintAllocation(holdings) {
     }
     setDonutEmpty(false);
 
-    const labels = holdings.map((h) => h.ticker);
-    const weights = holdings.map((h) => h.weight);
+    const labels = slices.map((s) => s.key ?? s.ticker);
+    const weights = slices.map((s) => s.weight);
 
     if (allocationChart) {
         // POLL REFRESH: swap the arrays in place and redraw WITHOUT
@@ -853,7 +1027,7 @@ function paintAllocation(holdings) {
                 tooltip: {
                     callbacks: {
                         label(item) {
-                            const holding = currentHoldings[item.dataIndex];
+                            const slice = currentHoldings[item.dataIndex];
                             // PRIVACY: the CAD value masks while the eye
                             // is active, but the weight stays visible —
                             // the same rule as the ledger's privacy
@@ -862,8 +1036,8 @@ function paintAllocation(holdings) {
                             // tooltip with no rebuild.
                             const amount = portfolioMasked()
                                 ? "****"
-                                : `${formatNumber(holding.value)} CAD`;
-                            return `${holding.ticker}: ${amount} ` +
+                                : `${formatNumber(slice.value)} CAD`;
+                            return `${labels[item.dataIndex]}: ${amount} ` +
                                 `(${(item.parsed * 100).toFixed(1)}%)`;
                         },
                     },
@@ -1047,12 +1221,20 @@ chartReady?.then?.(() => {
 });
 
 // 3. Poll. ONE timer drives all quote-driven cycles: indices, watchlist,
-//    volume leaders, and portfolio summary all change at the same rate.
-//    setupAutoRefresh owns the interval and wires visibility/online events
-//    so the page refreshes instantly when the user returns (see common.js).
+//    volume leaders, portfolio summary, and the active allocation dimension
+//    all change at the same rate. setupAutoRefresh owns the interval and
+//    wires visibility/online events so the page refreshes instantly when
+//    the user returns (see common.js).
 setupAutoRefresh(() => {
     refreshIndices();
     refreshWatchlist();
     refreshVolumeLeaders();
     refreshPortfolioSummary();
+    // Refresh the active allocation dimension (skip the ticker view —
+    // the summary poll already handles it above). The allocation
+    // endpoint reuses the quote cache, so this is nearly free.
+    const view = ALLOCATION_VIEWS[allocViewIndex];
+    if (view.key !== null) {
+        fetchAllocDimension(view.key);
+    }
 });
