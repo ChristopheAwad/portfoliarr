@@ -53,7 +53,11 @@ jobs:
         run: ./gradlew assembleDebug
         working-directory: android
 
+      # Unique per-run artifact name: every download self-identifies. Every
+      # run before #37 (Sep 15 2026) uploaded the SAME name while signed with
+      # a per-runner throwaway key — a stale download then refuses to install
+      # over a newer build ("App not installed" = signature mismatch).
       - uses: actions/upload-artifact@v4
         with:
-          name: portfoliarr-debug.apk
+          name: portfoliarr-debug-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
