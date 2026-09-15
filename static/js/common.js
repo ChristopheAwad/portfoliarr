@@ -463,33 +463,35 @@ function showToast(message, type = "error") {
 }
 
 // ---------------------------------------------------------------------------
-// SEARCH DROPDOWN — the navbar's ticker suggestions, on every page.
+// SUGGESTION DROPDOWN — the shared ticker-autocomplete factory.
+//
+// The navbar search box and the ledger's Ticker field BOTH need the same
+// thing: type -> debounced GET /api/search -> a clickable suggestion
+// dropdown. This factory supplies it once; each call site passes its own
+// input element, dropdown element, and an onPick callback that decides
+// what "choosing a suggestion" means (the navbar navigates to the detail
+// page; the ledger fills its ticker field).
 //
 // Flow: typing (debounced) -> GET /api/search?q=... -> one clickable row
-// per hit -> click (or Enter) navigates to /stock/<symbol>, the detail
-// page. Rows are rebuilt on every search, so the click listener is
-// DELEGATED to the dropdown container — the same survive-a-rebuild trick
-// the watchlist and ledger use.
+// per hit -> click (or Enter) calls onPick(symbol). Rows are rebuilt on
+// every search, so the click listener is DELEGATED to the dropdown
+// container — the same survive-a-rebuild trick the watchlist and ledger
+// use. The dropdown only ever shows while the input has text.
 //
 // createElement + textContent only: suggestion names come from Yahoo and
 // echo the user's own query — innerHTML would let any of it execute as
 // markup.
+//
+// Every call site gets its OWN debounce timer, stale-guard, and listeners
+// in a closure — two fields on one page cannot interfere (the ledger page
+// runs both the navbar and the Ticker field through this factory).
 // ---------------------------------------------------------------------------
-
-const searchInput = document.getElementById("ticker-search");
-const searchResultsEl = document.getElementById("search-results");
 
 // Debounce — the concept: wait for the user to STOP typing before spending
 // a network call. Every keypress resets the timer; only a pause of
 // DEBOUNCE_MS actually fires the fetch. Typing "apple" costs one request,
 // not five.
 const DEBOUNCE_MS = 300;
-let searchTimer = null;
-
-function hideSearchResults() {
-    searchResultsEl.hidden = true;
-    searchResultsEl.textContent = "";
-}
 
 // Build one clickable suggestion row: symbol + name on the left, the
 // security type and exchange on the right ("Equity · NASDAQ").
@@ -518,102 +520,163 @@ function buildSearchRow(result) {
     return row;
 }
 
-// Fill the dropdown: one row per hit, plus (optionally) a status line
+// Fill a dropdown: one row per hit, plus (optionally) a status line
 // ("No matches", "Search unavailable") that takes the dropdown's space so
-// it never silently vanishes.
-function renderSearchResults(results, message) {
-    searchResultsEl.textContent = "";
+// it never silently vanishes. Dropdown-agnostic: the container is a
+// parameter, so the factory can serve both the navbar and the ledger.
+function renderSearchResults(resultsEl, results, message) {
+    resultsEl.textContent = "";
     if (message) {
         const note = document.createElement("div");
         note.className = "search-empty";
         note.textContent = message;
-        searchResultsEl.append(note);
+        resultsEl.append(note);
     }
     for (const result of results) {
-        searchResultsEl.append(buildSearchRow(result));
+        resultsEl.append(buildSearchRow(result));
     }
-    searchResultsEl.hidden = false;
+    resultsEl.hidden = false;
 }
 
-// One search cycle: HTTP GET -> check status -> parse JSON -> paint.
-async function runSearch(query) {
-    try {
-        // encodeURIComponent: queries are user text and may contain
-        // URL-hostile characters ("&", "#", spaces).
-        const response = await fetch(
-            `/api/search?q=${encodeURIComponent(query)}`
-        );
-        // fetch does NOT throw on 4xx/5xx — only on network failure.
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
+// Wire ONE suggestion dropdown to ONE input. The caller decides what a
+// pick does via onPick(symbol). options:
+//   scopeEl               — the element clicks are checked against before
+//                           the dropdown closes; defaults to the input
+//                           itself. The navbar passes its .search-container
+//                           so clicks on the box's surroundings do not slam
+//                           the dropdown shut.
+//   pickTypedTextOnEnter  — true: Enter ALWAYS picks — the first
+//                           suggestion, or the raw typed text when no
+//                           suggestions have arrived (the navbar's old "go"
+//                           reflex). false (default): Enter only intercepts
+//                           while the dropdown is OPEN, so once it closes
+//                           the browser's default runs — which, for an
+//                           input inside a <form>, is submit. Each call
+//                           site picks what fits its flow.
+function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
+    const scopeEl = options.scopeEl || inputEl;
+    const pickTypedTextOnEnter = options.pickTypedTextOnEnter === true;
 
-        // Stale-guard: while this request was in flight the user may have
-        // kept typing, and a SLOWER EARLIER request can land after a newer
-        // one. Only paint if this answer is still about what the box
-        // shows NOW — otherwise drop it (the newer runSearch will paint).
-        if (searchInput.value.trim() !== query) return;
+    // Per-instance debounce timer — two dropdowns on one page cannot reset
+    // each other's pending searches.
+    let searchTimer = null;
 
-        renderSearchResults(
-            payload.results,
-            payload.results.length === 0 ? "No matches" : null
-        );
-    } catch (err) {
-        console.error("search failed:", err);
-        if (searchInput.value.trim() === query) {
-            renderSearchResults([], "Search unavailable");
+    function hide() {
+        resultsEl.hidden = true;
+        resultsEl.textContent = "";
+    }
+
+    // One search cycle: HTTP GET -> check status -> parse JSON -> paint.
+    async function runSearch(query) {
+        try {
+            // encodeURIComponent: queries are user text and may contain
+            // URL-hostile characters ("&", "#", spaces).
+            const response = await fetch(
+                `/api/search?q=${encodeURIComponent(query)}`
+            );
+            // fetch does NOT throw on 4xx/5xx — only on network failure.
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const payload = await response.json();
+
+            // Stale-guard: while this request was in flight the user may
+            // have kept typing, and a SLOWER EARLIER request can land
+            // after a newer one. Only paint if this answer is still about
+            // what the box shows NOW — otherwise drop it (the newer
+            // runSearch will paint).
+            if (inputEl.value.trim() !== query) return;
+
+            renderSearchResults(
+                resultsEl,
+                payload.results,
+                payload.results.length === 0 ? "No matches" : null
+            );
+        } catch (err) {
+            console.error("search failed:", err);
+            if (inputEl.value.trim() === query) {
+                renderSearchResults(resultsEl, [], "Search unavailable");
+            }
         }
     }
+
+    inputEl.addEventListener("input", () => {
+        const query = inputEl.value.trim();
+        clearTimeout(searchTimer); // reset the debounce window
+        if (!query) {
+            hide();
+            return;
+        }
+        searchTimer = setTimeout(() => runSearch(query), DEBOUNCE_MS);
+    });
+
+    // One keydown handler, two keys that mean "stop browsing suggestions":
+    //   Escape — just close the dropdown.
+    //   Enter  — pick: the FIRST suggestion when one has arrived, or the
+    //            raw typed text otherwise. preventDefault whenever we
+    //            intercept: picking is "mid-thought" — a form must not
+    //            submit under it (the ledger's Ticker field lives inside
+    //            the tx-form; without this, Enter would log a transaction
+    //            carrying the half-typed ticker the user was still
+    //            correcting).
+    inputEl.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            hide();
+            return;
+        }
+        if (event.key === "Enter") {
+            const dropdownOpen = !resultsEl.hidden;
+            const first = resultsEl.querySelector(".search-row");
+            const symbol = first ? first.dataset.symbol : inputEl.value.trim();
+            // Intercept only when a pick is actually meaningful: while the
+            // dropdown shows, or always when the caller opted in. With
+            // neither, let the browser's default run — for an input in a
+            // form that default is submit.
+            if (!dropdownOpen && !pickTypedTextOnEnter) return;
+            event.preventDefault();
+            if (symbol) {
+                hide();
+                onPick(symbol);
+            }
+        }
+    });
+
+    // Clicking a suggestion picks it. Delegated on the dropdown container:
+    // the rows are rebuilt on every search, so listeners attached to the
+    // rows themselves would die with each rebuild — delegation survives it.
+    resultsEl.addEventListener("click", (event) => {
+        const row = event.target.closest(".search-row");
+        if (!row) return; // click landed on the padding or a message row
+        hide();
+        onPick(row.dataset.symbol);
+    });
+
+    // Click anywhere OUTSIDE the field closes the dropdown (a new
+    // keystroke in the input opens it again).
+    document.addEventListener("click", (event) => {
+        if (scopeEl.contains(event.target)
+            || resultsEl.contains(event.target)) {
+            return;
+        }
+        hide();
+    });
 }
 
-searchInput.addEventListener("input", () => {
-    const query = searchInput.value.trim();
-    clearTimeout(searchTimer); // reset the debounce window
-    if (!query) {
-        hideSearchResults();
-        return;
-    }
-    searchTimer = setTimeout(() => runSearch(query), DEBOUNCE_MS);
-});
-
-// One keydown handler, two keys that mean "stop browsing suggestions":
-//   Escape — just close the dropdown.
-//   Enter  — navigate: to the FIRST suggestion when one has arrived, or
-//            to the raw typed text as a symbol otherwise. The detail page
-//            shows an honest "Unknown symbol" if Yahoo doesn't know it.
-searchInput.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-        hideSearchResults();
-        return;
-    }
-    if (event.key === "Enter") {
-        event.preventDefault(); // no form here, but keep the habit explicit
-        const first = searchResultsEl.querySelector(".search-row");
-        const symbol = first ? first.dataset.symbol : searchInput.value.trim();
-        if (symbol) {
-            // encodeURIComponent: symbols can contain URL-hostile
-            // characters ("^GSPC", "BRK.B") — encode the PATH segment,
-            // never the whole URL.
-            window.location.href = `/stock/${encodeURIComponent(symbol)}`;
-        }
-    }
-});
-
-// Clicking a suggestion navigates. Delegated on the dropdown container:
-// the rows are rebuilt on every search, so listeners attached to the rows
-// themselves would die with each rebuild — delegation survives it.
-searchResultsEl.addEventListener("click", (event) => {
-    const row = event.target.closest(".search-row");
-    if (!row) return; // click landed on the padding or a message row
-    window.location.href = `/stock/${encodeURIComponent(row.dataset.symbol)}`;
-});
-
-// Click anywhere OUTSIDE the search box closes the dropdown (the input's
-// own listeners reopen it on the next keystroke).
-document.addEventListener("click", (event) => {
-    if (!event.target.closest(".search-container")) {
-        hideSearchResults();
-    }
-});
+// The navbar's search box is the original call site: typing shows
+// suggestions, picking navigates to the stock detail page. Enter always
+// means "go" here (the same reflex the box had before this factory
+// existed): the first suggestion, or the raw typed text as a symbol — the
+// detail page shows an honest "Unknown symbol" if Yahoo doesn't know it.
+setupTickerSuggestions(
+    document.getElementById("ticker-search"),
+    document.getElementById("search-results"),
+    (symbol) => {
+        // encodeURIComponent: symbols can contain URL-hostile characters
+        // ("^GSPC", "BRK.B") — encode the PATH segment, never the whole
+        // URL.
+        window.location.href = `/stock/${encodeURIComponent(symbol)}`;
+    },
+    { scopeEl: document.querySelector(".search-container"),
+      pickTypedTextOnEnter: true }
+);
 
 // ---------------------------------------------------------------------------
 // SHARED CHART FACTORY — the timeframe chart both pages plot.
