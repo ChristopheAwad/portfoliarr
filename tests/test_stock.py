@@ -45,7 +45,7 @@ def test_stock_page_ships_bottom_tab_bar(client):
     # Both tabs render with the correct destinations. Scrape the nav's own
     # span so the hrefs bind to the tab bar, NOT the navbar logo (which is
     # also <a href="/"> on every page — a bare string check is vacuous).
-    nav_start = html.index('class="bottom-tabs"') - 4   # -4: the <nav
+    nav_start = html.index('class="bottom-tabs"') - 5   # -5: include the <nav
     nav_end = html.index("</nav>", nav_start)
     nav = html[nav_start:nav_end]
     assert 'href="/"' in nav, "Dashboard tab href missing or wrong"

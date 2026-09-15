@@ -76,4 +76,4 @@ hide behind the fixed 56px bar) and `.has-bottom-tabs #toast-container
 - [x] GUI check by user (stock page renders + tab bar; Dashboard/Ledger
       padding + toasts restored).
 - [x] Commit only on explicit user yes.
-- [x] PR #39 opened, reviewed (approve, 3 nits all fixed), merged.
+- [x] PR #39 opened, reviewed (approve), nit fixes pushed.
