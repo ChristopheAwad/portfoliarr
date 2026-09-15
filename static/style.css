@@ -861,6 +861,54 @@ a.logo { text-decoration: none; }
     position: relative;
 }
 
+/* Allocation carousel controls — the prev/next arrows and dimension
+   label inside the donut card header. The label is centred between
+   the two arrow buttons so the whole row sits neatly under the
+   "Allocation" title. */
+.alloc-carousel-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.alloc-arrow {
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+}
+
+.alloc-arrow:hover {
+    background: var(--bg-inset);
+    color: var(--text-primary);
+}
+
+#alloc-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 80px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* Excluded-tickers note below the donut — a small, muted line listing
+   any holdings that couldn't be classified. Hidden when empty. */
+.alloc-excluded {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 0 12px 8px;
+    margin: 0;
+    line-height: 1.3;
+    display: none;
+}
+
 /* Segmented timeframe control. The tray is a recessed pill (inset
    background); the ACTIVE segment is the one raised piece of paper —
    card background + hairline shadow, the physical "selected key" idea.
