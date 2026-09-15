@@ -60,14 +60,15 @@ INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^GSPTSE", "BTC-USD"]
 # Each key maps to a human-readable label (frontend reads, never re-derives)
 # and the profile field it groups by. "ticker" is deliberately excluded —
 # that view is served by the summary's holdings slice; two sources for one
-# view would drift. Keys must match the frontend's ALLOCATION_VIEWS array
+# view would drift. By Industry and By Exchange were CUT from the product
+# (Industry restates By Ticker with noisier labels at small-portfolio scale;
+# Exchange shows raw Yahoo codes — cryptic and near-duplicates
+# Currency/Country). Keys must match the frontend's ALLOCATION_VIEWS array
 # (locked by test_allocation_ui.py::test_js_dimension_keys_match_backend_whitelist).
 ALLOCATION_DIMENSIONS = {
     "sector":   {"label": "By Sector",   "field": "sector"},
-    "industry": {"label": "By Industry", "field": "industry"},
     "country":  {"label": "By Country",  "field": "country"},
     "type":     {"label": "By Type",     "field": "quote_type"},
-    "exchange": {"label": "By Exchange", "field": "exchange"},
     "cap":      {"label": "By Cap Bucket", "field": "market_cap"},
     "currency": {"label": "By Currency", "field": None},  # special: from quote
 }
@@ -1049,11 +1050,12 @@ def portfolio_realized():
 # ---------------------------------------------------------------------------
 # ALLOCATION DONUT — multi-dimension slicing of the portfolio value.
 #
-# The dashboard's donut card offers 8 views (By Ticker via the summary
-# endpoint, plus 7 dimensions here), cycled with arrow buttons. Each
+# The dashboard's donut card offers 6 views (By Ticker via the summary
+# endpoint, plus 5 dimensions here), cycled with arrow buttons. Each
 # dimension groups the same holdings math (net-qty × live quote × live
-# FX rate) by a metadata field: sector, industry, country, asset type,
-# exchange, market-cap bucket, or currency.
+# FX rate) by a metadata field: sector, country, asset type, market-cap
+# bucket, or currency. (By Industry and By Exchange were cut — see
+# ALLOCATION_DIMENSIONS.)
 #
 # HOW THE MATH WORKS: identical to the summary's pass (fold → parallel
 # quotes → live FX → long-only, priced-only), but instead of returning
@@ -1062,7 +1064,7 @@ def portfolio_realized():
 # (an excluded ticker's value never inflates the denominator).
 #
 # DATA SOURCE: the "currency" dimension classifies off the quote's own
-# currency (zero extra network). The other six consult get_profile()
+# currency (zero extra network). The other four consult get_profile()
 # (market_data.py) — one Ticker.info call per ticker, process-lifetime
 # cached (the name-cache pattern). Missing metadata fields → excluded
 # with a human-readable reason, never fabricated into a category.
