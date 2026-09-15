@@ -19,6 +19,88 @@
 const REFRESH_MS = 60000;
 
 // ---------------------------------------------------------------------------
+// AUTO-REFRESH — the single shared heartbeat for every page.
+//
+// Every page that polls (dashboard, ledger, stock detail) used to call
+// its own `setInterval(() => { ... }, REFRESH_MS)`. That worked on
+// desktop but broke on Android:
+//
+//   1. Android throttles timers in background tabs / when the screen is
+//      off (Doze). On return, stale data stays stale until the next tick
+//      — up to 60 s of reading prices from an hour ago.
+//
+//   2. When the network drops (Wi-Fi sleep, cellular handoff, Doze cuts
+//      connectivity), EVERY poll fails → a cascade of "Could not reach
+//      the server" toasts that stack on top of each other.
+//
+//   3. When the user returns to the app, nothing triggers an immediate
+//      refresh — the user sees stale data and has to wait or manually
+//      pull-to-reload.
+//
+// setupAutoRefresh fixes all three by owning ONE interval per page and
+// wiring the standard browser events that fire when the page becomes
+// visible again or the network comes back. Page scripts pass their
+// refresh callback and never touch setInterval directly.
+//
+// How it works:
+//   - Starts the 60 s interval immediately.
+//   - On `visibilitychange` → visible: clears + restarts the interval
+//     (so the user never waits a full 60 s after returning) and fires
+//     refreshFn right away.
+//   - On `online` event (network recovered): fires refreshFn + shows a
+//     "Back online" success toast so the user knows it worked.
+//   - Pauses the interval while `document.hidden` is true — saves
+//     battery and avoids the failure-toast storm during Doze.
+//
+// Both events fire in browsers AND Android WebView, so the same code
+// serves the browser and the app.
+// ---------------------------------------------------------------------------
+function setupAutoRefresh(refreshFn) {
+    // The live interval ID — null means "paused" (hidden or not started).
+    let pollId = null;
+
+    function start() {
+        if (pollId !== null) return;           // already running
+        pollId = setInterval(refreshFn, REFRESH_MS);
+    }
+
+    function stop() {
+        if (pollId === null) return;           // already stopped
+        clearInterval(pollId);
+        pollId = null;
+    }
+
+    // --- Network reconnect ---
+    // The `online` event fires on the window when the browser regains
+    // connectivity (Wi-Fi restored, airplane mode off, Doze ends).
+    // Fire immediately + toast so the user sees the recovery.
+    window.addEventListener("online", () => {
+        refreshFn();
+        showToast("Back online", "success");
+    });
+
+    // --- Foreground refresh ---
+    // The `visibilitychange` event fires on the document when the page
+    // transitions between visible and hidden. When it becomes visible:
+    //   1. Restart the interval (so the next tick is 60 s from NOW,
+    //      not from whenever it was last fired in the background).
+    //   2. Fire refreshFn immediately — the user sees fresh data the
+    //      moment they look at the screen.
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            stop();                            // save battery
+        } else {
+            start();                           // restart interval
+            refreshFn();                       // instant refresh
+        }
+    });
+
+    // Kick off — the page's first data load is the caller's job (it
+    // already happened before this runs); we just start the poll.
+    start();
+}
+
+// ---------------------------------------------------------------------------
 // FORMATTERS — the browser's built-in human formatting engine.
 // 7711.759765625 -> "7,711.76". This is why the backend sends raw floats.
 // ---------------------------------------------------------------------------
