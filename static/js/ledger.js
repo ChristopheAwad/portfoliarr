@@ -44,6 +44,26 @@ const ledgerBody = document.querySelector("#ledger-body");
 const ledgerHead = document.querySelector(".ledger-table thead");
 const txDateInput = txForm.elements.date;
 
+// Ticker autocomplete — the SAME /api/search suggestion dropdown the
+// navbar uses, via the shared setupTickerSuggestions factory from
+// common.js (loaded before this file). Typing in the Ticker field shows
+// suggestions; clicking one (or pressing Enter while the dropdown shows)
+// fills the field with the picked symbol, so the user flows straight into
+// Price → Qty → Log with a real Yahoo symbol, never a typo. The factory
+// hides the dropdown after a pick and keeps focus in the field.
+//
+// Edit mode is naturally inert: the ticker input is disabled there, and a
+// disabled input fires no input/keydown events, so no suggestions can
+// appear while identity is locked. Same for the deep-link prefill
+// (/ledger?ticker=... sets .value programmatically — no events fire).
+// The default (no scopeEl / pickTypedTextOnEnter) leaves Enter alone once
+// the dropdown closes, so Enter-to-submit still works as it always has.
+const txTickerResultsEl = document.querySelector("#tx-ticker-results");
+setupTickerSuggestions(txForm.elements.ticker, txTickerResultsEl,
+    (symbol) => {
+        txForm.elements.ticker.value = symbol;
+    });
+
 // The ledger's display currency, read fresh from the toggle on EVERY
 // fetch (not cached in a variable — the checkbox is the single source of
 // truth, so clicks, polls and refetches can never disagree).

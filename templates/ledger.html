@@ -113,8 +113,23 @@
                      Transaction" button deep-links here as
                      /ledger?ticker=AAPL#tx-form; ledger.js prefills. -->
                 <form id="tx-form" class="tx-form">
-                    <input type="text" name="ticker" placeholder="Ticker"
-                           autocomplete="off" required>
+                    <!-- The Ticker field is WRAPPED so the suggestion
+                         dropdown can anchor under it: .search-results is
+                         absolutely positioned against its nearest
+                         positioned ancestor, which is .tx-ticker-field
+                         (position: relative in style.css). The field takes
+                         the wrapper's flex sizing; the input fills it. The
+                         dropdown div ships hidden and is filled by
+                         ledger.js through common.js's shared
+                         setupTickerSuggestions factory — the SAME
+                         /api/search suggestions the navbar shows, so a
+                         pick lands a real Yahoo symbol, never a typo. -->
+                    <div class="tx-ticker-field">
+                        <input type="text" name="ticker" placeholder="Ticker"
+                               autocomplete="off" required>
+                        <div id="tx-ticker-results"
+                             class="search-results" hidden></div>
+                    </div>
                     <input type="date" name="date" required>
                     <input type="number" name="price" placeholder="Price"
                            step="any" min="0" required>
