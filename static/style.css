@@ -1301,6 +1301,15 @@ a.logo { text-decoration: none; }
     width: 100%;
 }
 
+/* The ledger's suggestion dropdown is as wide as the ticker field's share
+   of the form row (~200px on a desktop) — wide enough for a symbol, too
+   narrow for a company name. Give it a floor so names read like the
+   navbar's; the 600px media query stacks the form full-width anyway, so
+   the floor never fights a phone layout. */
+.tx-ticker-field .search-results {
+    min-width: 280px;
+}
+
 /* Placeholder text: use --text-secondary so it's consistently visible
    in both light and dark mode regardless of the input's background. */
 input::placeholder,

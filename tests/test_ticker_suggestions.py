@@ -85,6 +85,26 @@ def test_common_wires_navbar_through_factory():
     )
 
 
+def test_common_locks_enter_interception_guard():
+    """The Enter guard must not drift.
+
+    The line deciding WHEN Enter intercepts (pick a suggestion — only
+    while the field could actually hand over a .search-row, or always for
+    the navbar's opt-in) versus when it falls through to the browser
+    default (form submit) is the most regression-prone part of the
+    factory. Pinning it means a refactor can't silently steal the
+    ledger's Enter-to-submit or make the form submit mid-pick.
+    """
+    src = _read("static/js/common.js")
+    assert (
+        "if ((!dropdownOpen || !first) && !pickTypedTextOnEnter) return;"
+        in src
+    ), (
+        "common.js must keep the Enter guard that falls through to the "
+        "browser default unless a suggestion is actually pickable"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ledger.js — the ledger's Ticker field is the second call site
 # ---------------------------------------------------------------------------

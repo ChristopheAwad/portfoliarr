@@ -610,13 +610,14 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
 
     // One keydown handler, two keys that mean "stop browsing suggestions":
     //   Escape — just close the dropdown.
-    //   Enter  — pick: the FIRST suggestion when one has arrived, or the
-    //            raw typed text otherwise. preventDefault whenever we
-    //            intercept: picking is "mid-thought" — a form must not
-    //            submit under it (the ledger's Ticker field lives inside
-    //            the tx-form; without this, Enter would log a transaction
-    //            carrying the half-typed ticker the user was still
-    //            correcting).
+    //   Enter  — pick: the FIRST suggestion shown (or, for call sites that
+    //            opt in, the raw typed text). A suggestion-less dropdown
+    //            ("No matches") falls through to the browser default
+    //            instead. preventDefault whenever we intercept: picking is
+    //            "mid-thought" — a form must not submit under it. The
+    //            ledger's Ticker field lives inside the tx-form; without
+    //            this, Enter would log a transaction carrying the
+    //            half-typed ticker the user was still correcting.
     inputEl.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
             hide();
@@ -625,17 +626,17 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
         if (event.key === "Enter") {
             const dropdownOpen = !resultsEl.hidden;
             const first = resultsEl.querySelector(".search-row");
-            const symbol = first ? first.dataset.symbol : inputEl.value.trim();
             // Intercept only when a pick is actually meaningful: while the
-            // dropdown shows, or always when the caller opted in. With
-            // neither, let the browser's default run — for an input in a
-            // form that default is submit.
-            if (!dropdownOpen && !pickTypedTextOnEnter) return;
+            // dropdown shows a SUGGESTION, or always when the caller opted
+            // in. With neither — including a "No matches" dropdown, which
+            // has nothing to pick — let the browser's default run: for an
+            // input in a form that default is submit.
+            if ((!dropdownOpen || !first) && !pickTypedTextOnEnter) return;
+            const symbol = first ? first.dataset.symbol : inputEl.value.trim();
+            if (!symbol) return;
             event.preventDefault();
-            if (symbol) {
-                hide();
-                onPick(symbol);
-            }
+            hide();
+            onPick(symbol);
         }
     });
 
