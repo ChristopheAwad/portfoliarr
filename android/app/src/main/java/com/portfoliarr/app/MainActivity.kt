@@ -78,6 +78,23 @@ class MainActivity : AppCompatActivity() {
                         loadFailed = true
                     }
                 }
+
+                // Renderer crash recovery. This callback belongs to the
+                // WebViewClient, NOT the Activity — Kotlin's `override`
+                // only compiles here (AppCompatActivity has no such
+                // method, so a class-level override fails with
+                // "overrides nothing"). After hours in the background
+                // Android may reclaim the WebView's renderer process
+                // (OOM, memory pressure), leaving a dead blank screen
+                // that can never recover on its own. Requires API 26;
+                // on older devices it simply never fires.
+                override fun onRenderProcessGone(
+                    view: WebView, detail: RenderProcessGoneDetail
+                ): Boolean {
+                    this@MainActivity.rebuildWebView()
+                    // Return true = we handled it (don't kill the activity).
+                    return true
+                }
             }
         }
     }
@@ -114,14 +131,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ── Renderer crash recovery ────────────────────────────────────────
-    // After hours in the background, Android may reclaim the WebView's
-    // renderer process (OOM, memory pressure). The old WebView becomes a
-    // dead blank screen that can never recover on its own. This callback
-    // destroys it and builds a fresh one, then reloads.
+    // The actual rebuild the WebViewClient's onRenderProcessGone asks
+    // for: destroy the dead WebView, build a fresh one, put it on
+    // screen, and reload. Kept as an Activity method (not inside the
+    // client) because it mutates the activity's webView field and
+    // content view.
 
-    override fun onRenderProcessGone(
-        view: WebView?, detail: RenderProcessGoneDetail?
-    ): Boolean {
+    private fun rebuildWebView() {
         webView.destroy()
 
         webView = createWebView()
@@ -133,9 +149,6 @@ class MainActivity : AppCompatActivity() {
         if (!url.isNullOrBlank()) {
             webView.loadUrl(url)
         }
-
-        // Return true = we handled it (don't kill the activity).
-        return true
     }
 
     // ── Menu & back ────────────────────────────────────────────────────
