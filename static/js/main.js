@@ -722,9 +722,9 @@ document.addEventListener("themechange", () => {
 
 // ---------------------------------------------------------------------------
 // ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
-// OF, cycled through 8 views with arrow buttons (and touch-swipe on the
+// OF, cycled through 6 views with arrow buttons (and touch-swipe on the
 // donut box). The "By Ticker" view reads the summary reply's `holdings`
-// slice; the other 7 views fetch /api/portfolio/allocation?by=<key>.
+// slice; the other 5 views fetch /api/portfolio/allocation?by=<key>.
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
 
@@ -792,10 +792,10 @@ function setDonutEmpty(empty) {
 }
 
 // ---------------------------------------------------------------------------
-// ALLOCATION CAROUSEL — 8 views, cycled with arrows + swipe.
+// ALLOCATION CAROUSEL — 6 views, cycled with arrows + swipe.
 //
 // The "By Ticker" view reads from the summary poll's `holdings` slice
-// (already fetched every 60s — zero extra network). The other 7 views
+// (already fetched every 60s — zero extra network). The other 5 views
 // fetch /api/portfolio/allocation?by=<key>, which reuses the quote
 // cache warmed by the summary poll (steady-state: nearly free).
 //
@@ -807,21 +807,23 @@ function setDonutEmpty(empty) {
 
 // Source of truth for carousel order + labels. The null key signals
 // "use the summary's holdings slice" — no allocation fetch needed.
-// Order matches the template's alt/arrow flow: prev at index 0 wraps
-// to the last, next at index 7 wraps to the first.
+// Order matches the template's arrow flow: prev at index 0 wraps
+// to the last, next at the last index wraps to the first.
 const ALLOCATION_VIEWS = [
     { key: null,     label: "By Ticker" },
     { key: "sector", label: "By Sector" },
-    { key: "industry", label: "By Industry" },
     { key: "country", label: "By Country" },
     { key: "type",   label: "By Type" },
-    { key: "exchange", label: "By Exchange" },
     { key: "cap",    label: "By Cap Bucket" },
     { key: "currency", label: "By Currency" },
 ];
 
 // Carousel state. persisted in localStorage so the last-viewed
-// dimension survives a reload.
+// dimension survives a reload. The index is bounds-checked below — a
+// STALE saved index (e.g. a view cut from a previous build, or an
+// index that now points at a different dimension after a reorder)
+// simply opens whatever is at that position now; harmless, and we
+// never change the persistence format over it.
 let allocViewIndex = 0;
 try {
     const saved = localStorage.getItem("allocationDimension");

@@ -64,13 +64,14 @@ def clear_history_cache():
 # ── Profile cache — the allocation donut's answer to "what sector is this
 #    ticker in?".
 #
-# {symbol: {sector, industry, country, quote_type, exchange, market_cap}}
-# Same data lifetime policy as _name_cache: a company's profile never
-# changes, so entries stay valid forever — no TTL, no timestamps. One
-# Ticker.info call per symbol per process lifetime. Deliberately a
-# SEPARATE cache from _name_cache (get_name RAISES when no name exists —
-# a profile must not inherit that rule; missing FIELDS are fine, missing
-# DATA is not).
+# {symbol: {sector, country, quote_type, market_cap}} — the four surviving
+# dimensions after the By Industry / By Exchange cut (fields nothing reads
+# are dead code). Same data lifetime policy as _name_cache: a company's
+# profile never changes, so entries stay valid forever — no TTL, no
+# timestamps. One Ticker.info call per symbol per process lifetime.
+# Deliberately a SEPARATE cache from _name_cache (get_name RAISES when no
+# name exists — a profile must not inherit that rule; missing FIELDS are
+# fine, missing DATA is not).
 _profile_cache = {}
 
 
@@ -304,20 +305,17 @@ def get_stats(symbol):
 def get_profile(symbol):
     """Return the classification profile for `symbol`.
 
-    One cached Ticker.info call serves the allocation donut's six
-    non-currency dimensions: sector, industry, country, quote_type,
-    exchange, and market_cap. Process-lifetime cache (the _name_cache
-    pattern): a company's profile never changes, so the first success
-    stays valid forever.
+    One cached Ticker.info call serves the allocation donut's four
+    non-currency dimensions: sector, country, quote_type, and market_cap.
+    Process-lifetime cache (the _name_cache pattern): a company's profile
+    never changes, so the first success stays valid forever.
 
     Returns snake_case keys — the route layer's convention of
     translating Yahoo's camelCase at this boundary (same as get_stats):
         sector          e.g. "Technology", "Financial Services" (None
                         for crypto, indices, some ETFs)
-        industry        e.g. "Consumer Electronics", "REIT—Diversified"
         country         e.g. "United States", "Canada"
         quote_type      e.g. "EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"
-        exchange        e.g. "NMS" (Yahoo's raw code for NASDAQ)
         market_cap      shares outstanding × price (native currency;
                         None for indices, some ETFs)
 
@@ -344,10 +342,8 @@ def get_profile(symbol):
 
     profile = {
         "sector": info.get("sector"),
-        "industry": info.get("industry"),
         "country": info.get("country"),
         "quote_type": info.get("quoteType"),
-        "exchange": info.get("exchange"),
         "market_cap": info.get("marketCap"),
     }
 

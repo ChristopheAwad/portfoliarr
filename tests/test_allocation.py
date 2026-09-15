@@ -4,11 +4,13 @@
 #
 # Two contracts under test:
 #   1. THE DATA LAYER (market_data.get_profile): a cached Ticker.info call
-#      that returns {sector, industry, country, quote_type, exchange,
-#      market_cap} with process-lifetime caching — the name-cache pattern.
+#      that returns {sector, country, quote_type, market_cap} with
+#      process-lifetime caching — the name-cache pattern. By Industry and
+#      By Exchange were CUT as carousel dimensions, so those fields are
+#      dropped here too (a layer serving fields nothing reads is dead code).
 #   2. THE ALLOCATION ROUTE: multi-dimension donut data, slicing the same
-#      portfolio value by sector / industry / country / type / exchange /
-#      cap / currency. Inherits every rule the summary already follows:
+#      portfolio value by sector / country / type / cap / currency.
+#      Inherits every rule the summary already follows:
 #        - long-only wedges (a short is a bet against, not an allocation)
 #        - priced-only slices (an unpriced ticker is in no slice and
 #          excluded from the denominator — a weight over a phantom
@@ -41,15 +43,14 @@ def make_quote(symbol, price, previous_close, currency="CAD"):
     }
 
 
-def make_profile(sector=None, industry=None, country=None,
-                 quote_type=None, exchange=None, market_cap=None):
-    """A profile dict in exactly market_data.get_profile's shape."""
+def make_profile(sector=None, country=None, quote_type=None,
+                 market_cap=None):
+    """A profile dict in exactly market_data.get_profile's shape (the 4
+    surviving keys after the By Industry / By Exchange cut)."""
     return {
         "sector": sector,
-        "industry": industry,
         "country": country,
         "quote_type": quote_type,
-        "exchange": exchange,
         "market_cap": market_cap,
     }
 
@@ -146,15 +147,17 @@ def fake_yf(monkeypatch):
 
 
 def test_get_profile_extracts_and_renames_fields(fake_yf):
-    """One .info call returns all six snake_case keys with correct
-    Yahoo→snake_case translations."""
+    """One .info call returns the four snake_case keys with correct
+    Yahoo→snake_case translations — and the cut fields (industry,
+    exchange) never leak out of the layer even though Yahoo still
+    sends them."""
     profile = market_data.get_profile("AAPL")
     assert profile["sector"] == "Technology"
-    assert profile["industry"] == "Consumer Electronics"
     assert profile["country"] == "United States"
     assert profile["quote_type"] == "EQUITY"
-    assert profile["exchange"] == "NMS"
     assert profile["market_cap"] == 2500000000000
+    assert "industry" not in profile
+    assert "exchange" not in profile
 
 
 def test_get_profile_missing_fields_become_none(fake_yf):
@@ -163,10 +166,8 @@ def test_get_profile_missing_fields_become_none(fake_yf):
     fake_yf.state["info"] = {"shortName": "Bitcoin"}
     profile = market_data.get_profile("BTC-USD")
     assert profile["sector"] is None
-    assert profile["industry"] is None
     assert profile["country"] is None
     assert profile["quote_type"] is None
-    assert profile["exchange"] is None
     assert profile["market_cap"] is None
 
 
@@ -228,6 +229,16 @@ def test_ticker_is_not_a_valid_by(client, fake_market):
     allocation endpoint rejects 'ticker' as a by key to prevent drift."""
     res = client.get("/api/portfolio/allocation?by=ticker")
     assert res.status_code == 400
+
+
+def test_cut_dimensions_are_rejected(client, fake_market):
+    """By Industry and By Exchange were cut from the carousel — the
+    endpoint must 400 on them, not silently serve views the UI no
+    longer offers (a UI/API mismatch would leak stale chips)."""
+    for by in ("industry", "exchange"):
+        res = client.get(f"/api/portfolio/allocation?by={by}")
+        assert res.status_code == 400
+        assert "error" in res.get_json()
 
 
 def test_empty_ledger_returns_empty_slices(client, fake_market):

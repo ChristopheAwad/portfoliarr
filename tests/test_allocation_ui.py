@@ -64,18 +64,25 @@ def test_excluded_note_element_exists():
 # JS: ALLOCATION_VIEWS list (the source of truth for carousel order + labels)
 # ---------------------------------------------------------------------------
 
-def test_main_js_defines_eight_allocation_views():
-    """main.js must define an ALLOCATION_VIEWS array with 8 entries —
-    the ticker view (null key, label from summary) plus 7 dimension views."""
+def test_main_js_defines_six_allocation_views():
+    """main.js must define an ALLOCATION_VIEWS array with 6 entries —
+    the ticker view (null key, label from summary) plus 5 dimension views.
+    By Industry and By Exchange were CUT from the product (cryptic /
+    restates By Ticker at small-portfolio scale) — they must be gone from
+    the source both ways, the test_docker-style absent-assert."""
     src = _read_js("static/js/main.js")
     assert "ALLOCATION_VIEWS" in src
-    # Must have 8 entries. We can't run JS, but we can count the objects
+    # Must have 6 entries. We can't run JS, but we can count the objects
     # in the array literal (each entry is {key: "..."..., label: "..."}).
     # Count label values as a proxy for the number of entries.
-    for label in ["By Ticker", "By Sector", "By Industry", "By Country",
-                  "By Type", "By Exchange", "By Cap Bucket", "By Currency"]:
+    for label in ["By Ticker", "By Sector", "By Country",
+                  "By Type", "By Cap Bucket", "By Currency"]:
         assert label in src, (
             f"ALLOCATION_VIEWS must include a view labeled '{label}'"
+        )
+    for cut_label in ["By Industry", "By Exchange"]:
+        assert cut_label not in src, (
+            f"ALLOCATION_VIEWS must NOT include a view labeled '{cut_label}'"
         )
 
 
