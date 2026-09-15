@@ -370,4 +370,6 @@ paintWatchBtn(addToWatchlistBtn.dataset.watched === "true");
 refreshStockQuote();
 refreshStockStats();
 if (stockChartHandle) stockChartHandle.refresh();
-setInterval(refreshStockQuote, REFRESH_MS);
+// setupAutoRefresh owns the interval and wires visibility/online events
+// so the page refreshes instantly when the user returns (see common.js).
+setupAutoRefresh(refreshStockQuote);

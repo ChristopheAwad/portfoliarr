@@ -1048,9 +1048,11 @@ chartReady?.then?.(() => {
 
 // 3. Poll. ONE timer drives all quote-driven cycles: indices, watchlist,
 //    volume leaders, and portfolio summary all change at the same rate.
-setInterval(() => {
+//    setupAutoRefresh owns the interval and wires visibility/online events
+//    so the page refreshes instantly when the user returns (see common.js).
+setupAutoRefresh(() => {
     refreshIndices();
     refreshWatchlist();
     refreshVolumeLeaders();
     refreshPortfolioSummary();
-}, REFRESH_MS);
+});

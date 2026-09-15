@@ -1599,7 +1599,9 @@ async function refreshClosedSales() {
 
 refreshLedger();
 refreshClosedSales();
-setInterval(() => {
+// setupAutoRefresh owns the interval and wires visibility/online events
+// so the page refreshes instantly when the user returns (see common.js).
+setupAutoRefresh(() => {
     refreshLedger();
     refreshClosedSales();
-}, REFRESH_MS);
+});
