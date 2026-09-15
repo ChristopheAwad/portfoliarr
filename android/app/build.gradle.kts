@@ -22,7 +22,13 @@ android {
     // WITHOUT this, each machine's ~/.android/debug.keystore produces a
     // different certificate, and Android refuses the update ("app not installed").
     signingConfigs {
-        create("debug") {
+        // getByName, NOT create: AGP automatically pre-registers a signing
+        // config named "debug" when the plugin applies, so create("debug")
+        // fails with "Cannot add a SigningConfig with name 'debug' as a
+        // SigningConfig with that name already exists" — a configuration-
+        // phase error that kills every build before it compiles. We just
+        // reconfigure the built-in one to point at the shared keystore.
+        getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
