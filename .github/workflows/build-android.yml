@@ -33,7 +33,19 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - uses: android-actions/setup-android@v3
+      # GitHub's ubuntu runners ship a preinstalled Android SDK
+      # ($ANDROID_HOME), so no sdkmanager setup is needed. The old
+      # android-actions/setup-android@v3 step failed on every run with
+      # "sdkmanager exit 1" (flaky license/tooling handshake), so here we
+      # accept licenses DETERMINISTICALLY by writing the SDK's known
+      # license hashes — AGP reads these files before auto-downloading
+      # missing components (platform 34, build-tools) during the build.
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo "8933bad161af4178b1185d1a37fbf41ea5269c55"  > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" >> "$ANDROID_HOME/licenses/android-sdk-license"
 
       - uses: gradle/actions/setup-gradle@v4
 
