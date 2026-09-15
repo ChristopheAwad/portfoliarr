@@ -17,6 +17,9 @@ instance/
 .vscode/
 .opencode/
 
+# AI agent instructions (local working notes, not part of the app)
+AGENTS.md
+
 # Screenshots (local captures, not part of the app)
 *.png
 
