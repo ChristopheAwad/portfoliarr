@@ -1,6 +1,6 @@
 # Bug fix: Nav buttons to Ledger/Portfolio disappear on stock detail page
 
-Status: **PLAN APPROVED — NOT YET IMPLEMENTED** (user said write the plan, don't implement yet).
+Status: **COMPLETE — merged via PR #39** (`stock-page-bottom-tabs`).
 
 ## The bug
 
@@ -29,49 +29,51 @@ hide behind the fixed 56px bar) and `.has-bottom-tabs #toast-container
    neither Dashboard nor Ledger; tabs highlight their own page only
    (`tab_active = ''` → no `active` class, no `aria-current`).
 
-## The fix — 4 files, no CSS changes
+## The fix — as shipped (actual edits differed slightly from the plan)
+
+0. **Same-root-cause glue bug (discovered during implementation):**
+   `base.html` renders `<body{% block body_attrs %}` with NO space, so the
+   block MUST carry a leading space. index.html/ledger.html shipped
+   `<bodyclass="has-bottom-tabs">` (bogus tag name — cosmetically lost the
+   padding/toast offsets); stock.html's `data-symbol` was functionally
+   required by stock.js, so the glue bug was FATAL there (blank page).
+   All three templates got the leading-space fix, and the tests lock the
+   EXACT well-formed body tag (a substring check can't catch the glue bug).
 
 1. **`templates/stock.html`**
-   - `body_attrs` block (line ~16) becomes:
-     `{% block body_attrs %}class="has-bottom-tabs" data-symbol="{{ symbol }}"{% endblock %}`
-     — keeps stock.js's `data-symbol` identity hook, adds the tab-bar class.
-   - Add after the `content` block's `{% endblock %}`:
-     `{% block bottom_tabs %}{% set tab_active = '' %}{% include '_bottom_tabs.html' %}{% endblock %}`
-     with a short teaching comment (empty `tab_active` = neither tab active).
+   - `body_attrs` block becomes:
+     `{% block body_attrs %} class="has-bottom-tabs" data-symbol="{{ symbol }}"{% endblock %}`
+     — leading space preserved, keeps stock.js's `data-symbol` identity hook,
+     adds the tab-bar class.
+   - `{% block bottom_tabs %}{% set tab_active = '' %}{% include '_bottom_tabs.html' %}{% endblock %}`
+     (empty `tab_active` = neither tab active).
 
-2. **`templates/base.html`** (~lines 182-183) — comment currently says
-   "Dashboard and Ledger opt in; stock detail and preferences don't." Update
-   to "Dashboard, Ledger, and stock detail opt in; preferences doesn't."
-   (Comments must not lie.)
+2. **`templates/index.html` + `templates/ledger.html`** — leading space in
+   `body_attrs`: ` class="has-bottom-tabs"`.
 
-3. **`static/style.css`** (~lines 208-211) — same stale sentence in the
-   `.bottom-tabs` comment; update identically.
+3. **`templates/base.html`** + **`static/style.css`** + **`_bottom_tabs.html`**
+   — stale comments updated (stock detail now opts in; partial lists all
+   three includers).
 
-4. **`tests/test_stock.py`** — new rendered-HTML test (matches the file's
-   existing `client.get("/stock/aapl")` style):
-   - both bottom tabs render: `href="/"` labeled Dashboard, `href="/ledger"`
-     labeled Ledger;
-   - NEITHER tab carries the `active` class or `aria-current="page"`;
-   - `<body>` tag still carries `data-symbol="AAPL"` AND now carries
-     `class="has-bottom-tabs"`.
+4. **`tests/test_stock.py`** — `test_stock_page_ships_bottom_tab_bar`: both
+   tabs render (scraped from the `.bottom-tabs` nav, so the hrefs bind to
+   the bar, not the navbar logo), neither tab active / `aria-current`, and
+   the EXACT well-formed `<body>` tag.
+
+5. **`tests/test_ui_redesign.py`** — `test_tabbed_pages_ship_well_formed_body_tag`:
+   `/` and `/ledger` render the exact `<body class="has-bottom-tabs">` tag.
 
 ## Why no CSS changes are needed
 
 - Modal overlay (`z-index: 300`) already sits above the tab bar (`z-index: 100`).
 - Padding + toast offsets come free from `has-bottom-tabs`.
-- No existing test locks the old "no tabs on stock page" behavior (grep
+- No existing test locked the old "no tabs on stock page" behavior (grep
   confirmed), so nothing to un-lock.
 
-## Test plan (pytest)
+## Workflow gates
 
-Single new test in `tests/test_stock.py` (e.g.
-`test_stock_page_ships_bottom_tab_bar`), assertions as listed in file 4
-above. Must fail before the template edits, pass after. Full suite green:
-`python -m pytest`.
-
-## Workflow gates after implementation
-
-- [ ] Full `python -m pytest` green.
-- [ ] GUI check by user (stock page shows tabs; tabs still active-correct on
-      Dashboard and Ledger; toasts on stock page sit above the bar).
-- [ ] Commit only on explicit user yes.
+- [x] Full `python -m pytest` green (438 passed).
+- [x] GUI check by user (stock page renders + tab bar; Dashboard/Ledger
+      padding + toasts restored).
+- [x] Commit only on explicit user yes.
+- [x] PR #39 opened, reviewed (approve, 3 nits all fixed), merged.
