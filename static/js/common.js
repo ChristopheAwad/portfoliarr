@@ -1051,6 +1051,7 @@ function setupTimeframeChart(
             // beforeDraw is too late: the pixel mapping is already baked.
             afterDataLimits(chart, { scale }) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
+                if (mode === "performance") return;
                 if (scale.id !== "y") return;
                 const lo = scale.min;
                 const hi = scale.max;
@@ -1063,6 +1064,7 @@ function setupTimeframeChart(
             },
             afterDraw(chart) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
+                if (mode === "performance") return;
                 const y = chart.scales.y.getPixelForValue(prevClose);
                 const { left, right, top } = chart.chartArea;
                 const ctx = chart.ctx;

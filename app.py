@@ -540,13 +540,23 @@ Algorithm: walk every trading day in the range forward, keeping a
     # that never actually arrived — that would fake a LOSS. Same for a
     # USD row with no live rate, or an unsupported currency. Flow removal
     # is the exact mirror of the value walk: no value, no flow.
+    #
+    # Non-empty is not enough: a ticker whose ENTIRE history predates the
+    # window (delisted before the first transaction; another holding
+    # anchors the labels) also never enters the series — its bars are all
+    # trimmed away, so the walk never prices it and it contributes 0 to
+    # values. Requiring its last bar to reach labels[0] is what keeps the
+    # gate equivalent to the invariant above. Safe for the intraday walk
+    # too: all flows land on bar 0 there and are ignored anyway (and
+    # history keys and labels share one format — both come from
+    # get_history for the same period).
     flowable_symbols = {
         symbol for symbol, history in histories.items()
-        if history and (
-            currency_by_symbol.get(symbol) == "CAD"
-            or (currency_by_symbol.get(symbol) == "USD"
-                and live_rate is not None)
-        )
+        if history
+        and max(history) >= labels[0]
+        and (currency_by_symbol.get(symbol) == "CAD"
+             or (currency_by_symbol.get(symbol) == "USD"
+                 and live_rate is not None))
     }
 
     def tx_flow(tx):
@@ -560,7 +570,17 @@ Algorithm: walk every trading day in the range forward, keeping a
         units, and the two must match or the books don't close.)"""
         if tx["ticker"] not in flowable_symbols:
             return 0.0   # mirror rule — no value in the series, no flow
-        rate = live_rate if tx["currency"] == "USD" else 1.0
+        if tx["currency"] == "USD":
+            # The flowable gate already proves live_rate exists for a
+            # USD-CLASSIFIED ticker — but a first-seen-CAD symbol can
+            # still carry a stray USD row (classification is per first
+            # tx, app-created data never mixes). Degrade to 0 like the
+            # cost side above rather than multiply by None.
+            rate = live_rate
+            if rate is None:
+                return 0.0   # unconvertible — contributes no flow
+        else:
+            rate = 1.0
         sign = 1 if tx["transaction_type"] == "BUY" else -1
         return sign * tx["price"] * tx["qty"] * rate
 

@@ -248,6 +248,41 @@ def test_dead_ticker_flow_excluded_mirror_rule(client, monkeypatch):
     assert body["twrr_pct"] == pytest.approx(100.0 / 11.0)
 
 
+def test_delisted_before_window_flow_excluded(client, fake_market):
+    """The mirror rule, second hole: a ticker whose history is NON-EMPTY
+    but entirely BEFORE the label window (delisted before the chart
+    starts; another holding anchors the labels). Its bars are all trimmed
+    away, so it contributes 0 to values — its buy must contribute 0 to
+    flows too, or the "returned" money fakes a loss (measured −40% on a
+    true +10% portfolio against the buggy build).
+        AAPL: buy 10 @ 100 on 09-01, price 100 → 110
+        DEAD: buy 10 @ 50  on 09-03, delisted 08-26 (pre-window history)
+        buggy: r_09-03 = (1100 − 500 − 1100)/1100 → index dips to 60
+        fixed: DEAD never flowable → index [100, 110, 110, 110] = +10%"""
+    seed_transaction(ticker="AAPL", date="2026-09-01", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="DEAD", date="2026-09-03", price=50.0, qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-09-01": 100.0, "2026-09-02": 110.0,
+        "2026-09-03": 110.0, "2026-09-04": 110.0,
+    }
+    # Non-empty history — but every bar predates the window's first
+    # label (09-01, the first transaction's date).
+    fake_market.histories["DEAD"] = {
+        "2026-08-25": 60.0, "2026-08-26": 60.0,
+    }
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["labels"] == ["2026-09-01", "2026-09-02",
+                              "2026-09-03", "2026-09-04"]
+    assert body["values"] == [1000.0, 1100.0, 1100.0, 1100.0]
+    assert body["costs"] == [1000.0, 1000.0, 1500.0, 1500.0]  # paid = fact
+    assert body["index_values"] == pytest.approx(
+        [100.0, 110.0, 110.0, 110.0])
+    assert body["twrr_pct"] == pytest.approx(10.0)
+
+
 # ── Truncation (honest degradation) ───────────────────────────────────
 
 def test_short_truncates_index(client, fake_market):
