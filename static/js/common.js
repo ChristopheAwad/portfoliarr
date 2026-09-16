@@ -1001,7 +1001,10 @@ function setupTimeframeChart(
     // that net contributions fall inside the value range and the line
     // actually lands on the plot. Short windows deliberately show no line;
     // the hover numbers still tell the full story there. Mirrors
-    // PERIOD_MAP's keys — the one place to edit if the periods change.
+    // PERIOD_MAP's keys — kept in sync by
+    // tests/test_chart_cost_line.py (which asserts this set equals
+    // set(PERIOD_MAP) - {1D, 5D, 1M}), so adding a timeframe fails the
+    // suite until this list is updated too.
     const COST_LINE_PERIODS = new Set(["3M", "6M", "YTD", "1Y", "5Y", "MAX"]);
 
     // ── Value / Performance view state (PORTFOLIO chart only) ────────────
@@ -1343,11 +1346,21 @@ function setupTimeframeChart(
                 }
                 // Pad by a fraction of the axis span so the line never
                 // sits flush against the top/bottom edge.
-                const range = (scale.max - scale.min)
-                    || Math.abs(hi) || 1;
-                const pad = range * 0.05;
-                scale.min = Math.min(scale.min, lo - pad);
-                scale.max = Math.max(scale.max, hi + pad);
+                const valueSpan = scale.max - scale.min;
+                const pad = (valueSpan || Math.abs(hi) || 1) * 0.05;
+                const headroom = valueSpan || Math.abs(lo) || 1;
+                // Squish guard: never grow the axis beyond 3x the value
+                // series' own span (at most one extra value-span of headroom
+                // on each side). In a pathological case (cost basis far
+                // below a long-held winner's 3M range) that keeps the VALUE
+                // line readable instead of crushing it into a sliver; the
+                // cost line may then fall outside again, but the hover
+                // tooltip still reports cost basis. The normal 3M+ case —
+                // cost near the value range — is unaffected.
+                const floor = scale.min - headroom;
+                const ceil = scale.max + headroom;
+                scale.min = Math.max(Math.min(scale.min, lo - pad), floor);
+                scale.max = Math.min(Math.max(scale.max, hi + pad), ceil);
             },
             afterDatasetsDraw(chart) {
                 if (chart._priceDiffMeasuring) return;
