@@ -682,6 +682,10 @@ const DEFAULT_CHART_PERIOD = "5D";
 const portfolioChartHandle = setupTimeframeChart({
     canvas: portfolioCanvas,
     buttonBar: chartButtonsEl,
+    // The Value/Performance view toggle — the portfolio endpoint answers
+    // both series, so this tray (in index.html) flips between them. The
+    // stock page passes nothing here and gets a plain value chart.
+    modeBar: document.querySelector(".chart-mode-selectors"),
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",

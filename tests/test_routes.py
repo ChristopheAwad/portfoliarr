@@ -572,7 +572,11 @@ def test_history_empty_ledger_is_not_an_error(client, fake_market):
     """An empty ledger is a normal state: empty chart data, 200."""
     res = client.get("/api/portfolio/history")
     assert res.status_code == 200
-    assert res.get_json() == {"labels": [], "values": [], "costs": []}
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        # TWR: nothing to measure on an empty ledger → null, not 0.
+        "index_values": None, "twrr_pct": None,
+    }
 
 
 def test_history_buy_applies_from_its_date_onward(client, fake_market):
@@ -651,7 +655,10 @@ def test_history_first_buy_after_window_yields_empty_chart(
 
     res = client.get("/api/portfolio/history?period=5D")
     assert res.status_code == 200
-    assert res.get_json() == {"labels": [], "values": [], "costs": []}
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        "index_values": None, "twrr_pct": None,
+    }
 
 
 def test_history_intraday_prices_carry_in_past_holdings(client, fake_market):
@@ -828,7 +835,10 @@ def test_history_intraday_future_buy_returns_empty(client, fake_market):
 
     res = client.get("/api/portfolio/history?period=1D")
     assert res.status_code == 200
-    assert res.get_json() == {"labels": [], "values": [], "costs": []}
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        "index_values": None, "twrr_pct": None,
+    }
 
 
 def test_history_non_usd_cad_ticker_contributes_zero(
