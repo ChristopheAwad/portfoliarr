@@ -1294,7 +1294,7 @@ function setupTimeframeChart(
             // ── Cost-basis line (hover reveal) ──────────────────────────
             // The portfolio chart's netted cost basis is drawn ONLY while
             // the user hovers: a faint dashed polyline that pops in with
-            // the tooltip and vanishes on mouse-out (or tap-away on
+            // the tooltip and vanishes on mouse-out (or finger-lift on
             // touch). It is a canvas DECORATION, not a Chart.js dataset —
             // so the y-axis is sized to the value line alone and never
             // reflows as the line appears/disappears (a toggled dataset
@@ -1738,6 +1738,14 @@ function setupTimeframeChart(
         // an incoming call) — the finger is gone exactly as if it lifted,
         // so run the same "hover ended" cleanup. Without this, a cancelled
         // drag could leave the tooltip stuck the same way touchend does.
+        // ALSO finalize any two-finger measurement: a cancelled gesture
+        // never gets its touchend, so without this `measuring` stays true
+        // and a phantom ruler would persist while the tooltip/crosshair
+        // remain suppressed (the priceDiff guards key on that flag).
+        if (measuring) {
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+        }
         chart._hoverDormant = true;
         chart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
         if (chart.tooltip) {
