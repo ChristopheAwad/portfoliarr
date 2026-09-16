@@ -2366,6 +2366,41 @@ def volume_leaders():
     return jsonify({"leaders": leaders})
 
 
+@app.route("/api/quote/<symbol>")
+def quote(symbol):
+    """One security's live price — the LIGHTWEIGHT slice of
+    /api/stock/<symbol> that the ledger's Ticker field calls to prefill the
+    Price input when a symbol is picked (from the suggestion dropdown or the
+    stock page's deep-link).
+
+    Why a separate endpoint instead of reusing /api/stock/<symbol>: that
+    route also fetches the display NAME via get_name (the heavy `Ticker.info`
+    endpoint — process-lifetime cached, but slow on a cold process). The form
+    only needs the number, so this route ships the get_quote dict alone and
+    never touches get_name — picking a symbol on the ledger must feel instant,
+    not like a company-profile lookup.
+
+    Reply shape: exactly the get_quote dict (symbol, price, previous_close,
+    currency, change, change_pct). Same contract as the other single-symbol
+    routes: case-normalized, and an unquotable symbol is a plain 404 — the
+    prefill silently leaves the price empty and the user types it (the POST
+    route re-validates the ticker anyway).
+    """
+    # Same normalize-to-canonical-form rule as every symbol route.
+    symbol = symbol.strip().upper()
+
+    try:
+        # COPY before returning: get_quote hands back the object SHARED with
+        # the cache — the route layer must never hand shared state to a
+        # caller that could mutate it (same rule as stock_quote).
+        return jsonify(dict(get_quote(symbol)))
+    except Exception:
+        # TIER 1 at INFO — same expected-client-behavior rule as stock_quote:
+        # an unquotable symbol is usually a typo, not a malfunction.
+        app.logger.info("quote failed for %s — serving 404", symbol)
+        return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
+
+
 @app.route("/api/stock/<symbol>")
 def stock_quote(symbol):
     """One security's live quote + display name — the detail page's polled
