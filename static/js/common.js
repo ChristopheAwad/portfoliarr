@@ -992,6 +992,18 @@ function setupTimeframeChart(
     // alone and the chart looks unchanged when you're not inspecting a bar.
     let lastCosts = null;
 
+    // Which periods get the hover cost LINE. The tooltip's Cost Basis /
+    // Gain text is never gated — it's always available. The LINE is:
+    // it maps cost through the value-only y-axis, and on short windows
+    // (1D, 5D, 1M) the cost basis sits entirely BELOW the plotted value
+    // range, so the plugin's clip rect would swallow it — the line looked
+    // broken rather than absent. Only from 3M up is the window long enough
+    // that net contributions fall inside the value range and the line
+    // actually lands on the plot. Short windows deliberately show no line;
+    // the hover numbers still tell the full story there. Mirrors
+    // PERIOD_MAP's keys — the one place to edit if the periods change.
+    const COST_LINE_PERIODS = new Set(["3M", "6M", "YTD", "1Y", "5Y", "MAX"]);
+
     // ── Value / Performance view state (PORTFOLIO chart only) ────────────
     // The portfolio endpoint answers BOTH a money-weighted value line
     // (values/costs — "all the money I put in vs. what it's worth now")
@@ -1295,19 +1307,52 @@ function setupTimeframeChart(
             // The portfolio chart's netted cost basis is drawn ONLY while
             // the user hovers: a faint dashed polyline that pops in with
             // the tooltip and vanishes on mouse-out (or finger-lift on
-            // touch). It is a canvas DECORATION, not a Chart.js dataset —
-            // so the y-axis is sized to the value line alone and never
-            // reflows as the line appears/disappears (a toggled dataset
-            // would recompute the scale and make the value line jump under
-            // the cursor). Same pattern as the crosshair and price-diff
-            // ruler: draw after the datasets, read the CSS var per frame
-            // for theme safety. Skipped while measuring (the crosshair
-            // rule too), and absent entirely on the stock page — lastCosts
-            // is null there.
+            // touch). It is a canvas DECORATION, not a Chart.js dataset, so
+            // its presence is not a scale input — instead the y-axis is
+            // expanded ONCE per refresh by the afterDataLimits hook below
+            // (not re-toggled per hover), which keeps the value line from
+            // jumping under the cursor as the line fades in/out. Same
+            // pattern as the crosshair and price-diff ruler: draw after the
+            // datasets, read the CSS var per frame for theme safety. Skipped
+            // while measuring (the crosshair rule too), and absent entirely
+            // on the stock page — lastCosts is null there. Also EXCLUDED on
+            // short windows (see COST_LINE_PERIODS above): on 1D/5D/1M the
+            // cost basis maps below the value range, so no line is drawn.
             id: "costLine",
+            // Expand the y-axis to CONTAIN the cost series on the eligible
+            // periods, so the dashed line can never be clipped off-screen
+            // (the bug this hook fixes: cost sits below the value-only
+            // range on short windows). Same technique prevCloseLine uses
+            // above — afterDataLimits runs during the scale update, the
+            // only safe place to move the limits. It is deliberately
+            // UNCONDITIONAL on hover: the hook only re-runs on a full
+            // chart.update(), not on a hover redraw, so expanding always
+            // keeps the axis from jumping as the line fades in and out.
+            // Gated identically to the line itself, so short windows, the
+            // stock page (lastCosts null) and Performance view (lastCosts
+            // null) are untouched.
+            afterDataLimits(chart, { scale }) {
+                if (scale.id !== "y") return;
+                if (!lastCosts || lastCosts.length === 0) return;
+                if (!COST_LINE_PERIODS.has(currentPeriod)) return;
+                let lo = Infinity;
+                let hi = -Infinity;
+                for (const c of lastCosts) {
+                    if (c < lo) lo = c;
+                    if (c > hi) hi = c;
+                }
+                // Pad by a fraction of the axis span so the line never
+                // sits flush against the top/bottom edge.
+                const range = (scale.max - scale.min)
+                    || Math.abs(hi) || 1;
+                const pad = range * 0.05;
+                scale.min = Math.min(scale.min, lo - pad);
+                scale.max = Math.max(scale.max, hi + pad);
+            },
             afterDatasetsDraw(chart) {
                 if (chart._priceDiffMeasuring) return;
                 if (!lastCosts || lastCosts.length === 0) return;
+                if (!COST_LINE_PERIODS.has(currentPeriod)) return;
                 const active = chart.tooltip?.getActiveElements();
                 if (!active || active.length === 0) return;   // not hovering
                 const xScale = chart.scales.x;
