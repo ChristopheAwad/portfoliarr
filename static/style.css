@@ -2022,6 +2022,32 @@ input[type="date"]::-moz-placeholder {
     font-weight: 600;
 }
 
+/* The Closed sales card header doubles as the expand/collapse control:
+   the pointer cursor signals "clickable", a soft tint underlines it on
+   hover, and the caret rotates when the table is open — the same visual
+   language as the ledger's group rows (.ledger-group .caret / .open).
+   ledger.js drives the .open class; the wrapper's hidden attribute (the
+   real state) is what the cramped rectangle here suggests visually. */
+.closed-sales-toggle {
+    cursor: pointer;
+}
+
+.closed-sales-toggle .caret {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.closed-sales-toggle:hover {
+    background-color: var(--bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+.closed-sales-toggle.open .caret {
+    transform: rotate(90deg);
+}
+
 @media (hover: none) {
     .tx-action-btn,
     .remove-btn {

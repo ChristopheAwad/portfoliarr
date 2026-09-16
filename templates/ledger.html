@@ -265,27 +265,53 @@
                 </div>
             </div>
 
-            <!-- Closed sales card. One row per SELL with its realized
-                 result in CAD: proceeds vs what the sold shares actually
-                 cost (average-cost basis), the number the ledger's
-                 per-row gain can never give you — that one compares to
-                 YESTERDAY'S close, which is market noise, not
-                 performance. The header total is the portfolio's
-                 realized-to-date sum; it shows "—" rather than a partial
-                 sum when any row's CAD math is unknowable (a missing
-                 fx_rate anywhere in that position's history — hover the
-                 row's "—" for the reason). Native facts stay native
-                 (Avg cost / Sell price in the security's own currency,
-                 the ledger's price convention); only Realized is CAD. -->
+<!-- Closed sales card. One row per SELL with its realized
+             result in CAD: proceeds vs what the sold shares actually
+             cost (average-cost basis), the number the ledger's
+             per-row gain can never give you — that one compares to
+             YESTERDAY'S close, which is market noise, not
+             performance. The header total is the portfolio's
+             realized-to-date sum; it shows "—" rather than a partial
+             sum when any row's CAD math is unknowable (a missing
+             fx_rate anywhere in that position's history — hover the
+             row's "—" for the reason). Native facts stay native
+             (Avg cost / Sell price in the security's own currency,
+             the ledger's price convention); only Realized is CAD.
+
+             The TABLE ships COLLAPSED: the whole header row is a
+             toggle control (role=button + tabindex + aria-expanded
+             — the sortable-<th> accessibility kit) and the wrapper
+             below carries the `hidden` attribute, so every page load
+             starts with just the title + "Realized to date" visible.
+             ledger.js flips hidden + the caret's rotation on click
+             or Enter/Space; the total NEVER hides — it lives in the
+             header, outside the collapsible region, by design. -->
             <div class="card closed-sales-card">
-                <div class="card-header">
-                    <h3>Closed sales</h3>
+                <div class="card-header closed-sales-toggle"
+                     id="closed-sales-toggle" role="button"
+                     tabindex="0" aria-expanded="false">
+                    <h3>
+                        <!-- The expand/collapse chevron, inline SVG like
+                             the other template icons. The .caret wrapper
+                             is what CSS rotates for the open state (the
+                             same pattern the ledger's group rows use);
+                             aria-hidden marks the glyph decorative. -->
+                        <span class="caret">
+                            <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </span>
+                        Closed sales
+                    </h3>
                     <span class="closed-sales-total">
                         Realized to date:
                         <span id="realized-total"></span>
                     </span>
                 </div>
-                <div class="table-wrap">
+                <div class="table-wrap" id="closed-sales-wrap" hidden>
                     <table class="closed-sales-table">
                         <thead>
                             <tr>

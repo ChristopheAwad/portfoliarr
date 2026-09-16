@@ -1577,6 +1577,36 @@ if (hideLedgerToggle) {
 const closedSalesBody = document.querySelector("#closed-sales-body");
 const realizedTotalEl = document.querySelector("#realized-total");
 
+// The expand/collapse pair: the card HEADER is the toggle control and the
+// table's wrapper is what opens and closes. The collapsed state ships in
+// the HTML (`hidden` on the wrapper) — so "collapsed by default on every
+// page load" needs no boot-time JS at all; this code only ever REVERSES
+// the shipped state. The realized-total span lives in the header, outside
+// the wrapper, so it stays visible in both states by construction.
+const closedSalesToggle = document.querySelector("#closed-sales-toggle");
+const closedSalesWrap = document.querySelector("#closed-sales-wrap");
+
+// One toggle for both input paths (click + keyboard). Reading the wrapper's
+// hidden BEFORE flipping: "is it showing right now?" → close it. The .open
+// class rotates the header's .caret; aria-expanded keeps the
+// screen-reader state truthful (it must mirror hidden, never drift).
+function toggleClosedSales() {
+    const open = closedSalesWrap.hidden;
+    closedSalesWrap.hidden = !open;
+    closedSalesToggle.classList.toggle("open", open);
+    closedSalesToggle.setAttribute(
+        "aria-expanded", String(!closedSalesWrap.hidden));
+}
+closedSalesToggle.addEventListener("click", () => toggleClosedSales());
+closedSalesToggle.addEventListener("keydown", (event) => {
+    // A role="button" DIV responds to no keys natively — Enter and Space
+    // are wired by hand, the sortable-<th> kit's exact pattern
+    // (preventDefault stops Space from scrolling the page).
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleClosedSales();
+});
+
 // Cell captions for phone card mode, read from the thead ONCE at boot —
 // the same rule as the ledger's ledgerColLabels: the caption is the
 // header's own text, so the two can never drift apart. Keyed by the

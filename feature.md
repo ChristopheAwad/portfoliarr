@@ -1,95 +1,59 @@
-# Feature: Ledger ticker pick auto-fills the latest price
+# Feature: Closed sales collapsed by default; Realized to date always visible
 
 ## Status
-Implemented (both increments); FULL suite green (461 passed). NEXT STEP:
-user GUI check of the 2-decimal display + accurate-value behavior on
-/ledger, then commit gate on explicit yes.
+Implemented; FULL suite green (466 passed). NEXT STEP: user GUI check of
+the collapsible Closed sales card, then commit gate on explicit yes.
 
-## Delivered
-- `app.py`: `GET /api/quote/<symbol>` — the get_quote dict WITHOUT the
-  heavy get_name call (copy-before-return, case-normalized, 404 on
-  unquotable symbols).
-- `ledger.js`: `prefillPriceForTicker()` helper + form state
-  (`autofillPrice` / `priceEdited` + a Price-field `input` listener):
-  clears the field, fetches the quote, stale-guards the reply, keeps the
-  FULL price in `autofillPrice` and displays `toFixed(2)`; wired into BOTH
-  the dropdown onPick and the deep-link prefill block. `enterEditMode` uses
-  the exact stored `tx.price` (no live fetch) with a 2-decimal display;
-  `exitEditMode` resets the backing; the submit ships the accurate price
-  when untouched and the typed value when edited.
-- `tests/test_quote.py` (4 route tests) + `tests/test_price_autofill.py`
-  (11 string-lock tests, updated for the display/backing split).
-
-## Plan
-When a symbol lands in the ledger form's Ticker field — via the suggestion
-dropdown OR the stock page's deep-link (`/ledger?ticker=AAPL`) — the Price
-field first CLEARS, then fills with the live native-currency price from the
-quote. A failed fetch leaves Price empty (quiet, no toast — the backend
-re-validates at submit anyway). Both were user-approved decisions.
-
-INCREMENT (approved): the field DISPLAYS only 2 decimals, while everything
-that gets LOGGED keeps the full accurate number (user: "all calcs should
-use actual accurate numbers not rounded"). The app-wide rule elsewhere
-(stored full floats, painted 2 decimals) now applies to the form too.
-
-1. `app.py` — new lightweight `GET /api/quote/<symbol>` route beside the
-   stock routes: case-normalizes, `dict(get_quote(symbol))` (copy — the
-   shared-cache rule), 200 with the get_quote payload (price,
-   previous_close, currency, change, change_pct), and 404 on unquotable
-   symbols — all mirroring `stock_quote`, but WITHOUT the heavy `get_name`
-   `.info` fetch (the form only needs the number).
-2. `static/js/ledger.js` — a shared `prefillPriceForTicker()` helper plus
-   form-level accurate-value state:
-   - `autofillPrice` (module var) — the ACCURATE number behind a cosmetic
-     2-decimal display; `priceEdited` (module var) — flipped true by an
-     `input` listener on the Price field (programmatic `.value` sets never
-     fire `input`, so a fill stays "untouched").
-   - `prefillPriceForTicker`: clears the field, fetches
-     `/api/quote/<URL-encoded symbol>`, stale-guards the reply, then
-     `autofillPrice = quote.price; priceEdited = false;` and DISPLAYS
-     `value = quote.price.toFixed(2)` (raw number string — no Intl grouping,
-     which a type="number" input rejects). Failure → Price stays empty,
-     console.error only.
-   - `enterEditMode`: `autofillPrice = tx.price` (the STORED fact — no live
-     fetch, edit mode never quotes), `priceEdited = false`, DISPLAYS
-     `tx.price.toFixed(2)` — one consistent "show 2, back with accurate"
-     rule for every programmatic fill.
-   - `exitEditMode`: `autofillPrice = null` (form reset() clears the field;
-     for BOTH success paths).
-   - submit handler: `price: priceEdited ? Number(fields.price) :
-     (autofillPrice ?? Number(fields.price))` — your typed value wins when
-     you edited the field; otherwise the exact accurate price reaches the
-     backend and every calculation.
-   - Edit mode stays quote-inert: the ticker input is disabled there, and
-     `prefillPriceForTicker` is never called in edit mode.
+## Decision
+The Closed sales card's table ships COLLAPSED on every page load; the card
+header — "Closed sales" + "Realized to date: X" — stays fully visible, so
+the realized-to-date total is always on screen. Clicking anywhere on the
+header toggles the table, with a right-pointing caret that rotates when
+expanded (the ledger-group-row visual language).
+- NO persistence: every load starts collapsed (explicit user choice).
+- Backend untouched: `refreshClosedSales()` still fetches + renders every
+  60s regardless of collapsed state; collapsing is pure visibility, so
+  expanding always reveals freshly-fetched rows instantly.
+- A11y: the header is `role="button"`, `tabindex="0"`, `aria-expanded` (JS
+  keeps it in sync), Enter/Space keyboard parity (sortable-`<th>` precedent).
 
 ## Test plan (FIRST — must fail until implemented)
-1. `tests/test_quote.py` (backend route, fake_market style like
-   test_stock.py / test_routes.py):
-   - 200 + full get_quote payload, with NO `name` key;
-   - case normalization (`/api/quote/aapl`);
-   - 404 for an unquotable symbol;
-   - 200 even when `get_name` would raise (names dict empty) — proves the
-     route never touches the heavy name fetch.
-2. `tests/test_price_autofill.py` (string-lock style) — UPDATED for the
-   increment:
-   - `@app.route("/api/quote/<symbol>")` present in app.py;
-   - ledger.js defines `function prefillPriceForTicker(`; clears
-     `price.value = ""`; fetches `/api/quote/`;
-   - display is 2-decimal: `price.value = quote.price.toFixed(2)` present;
-   - accurate backing: `autofillPrice = quote.price` present;
-   - dirty listener: `priceEdited = true` present on the price input;
-   - submit substitution: `priceEdited ? Number(fields.price)` and
-     `autofillPrice ?? Number(fields.price)` present;
-   - edit mode: `autofillPrice = tx.price` + `tx.price.toFixed(2)` present;
-   - reset: `autofillPrice = null` present;
-   - called from BOTH the dropdown onPick path and the deep-link prefill
-     block (unchanged locks).
+New file `tests/test_closed_sales_collapse.py`:
+1. `test_ledger_ships_closed_sales_collapsed_by_default` — rendered
+   `/ledger` carries the closed-sales table wrapper with the `hidden`
+   attribute (`id="closed-sales-wrap"`), i.e. collapsed-by-default lives in
+   HTML, no boot JS required.
+2. `test_ledger_ships_closed_sales_toggle_header` — the header carries the
+   toggle hooks: `id="closed-sales-toggle"`, `role="button"`,
+   `aria-expanded="false"`, `tabindex="0"`.
+3. `test_realized_total_always_visible` — `id="realized-total"` renders and
+   sits BEFORE the hidden wrapper in the HTML (order assertion: total is in
+   the always-visible header, never inside the collapsible region).
+4. `test_ledger_js_wires_closed_sales_toggle` — ledger.js reads
+   `#closed-sales-toggle` and `#closed-sales-wrap`, toggles `wrapper.hidden`
+   and `.open`, updates `aria-expanded`, and handles Enter/Space.
+5. `test_closed_sales_toggle_css` — style.css has the caret rotate rule and
+   pointer cursor for `.closed-sales-toggle`.
 
-Existing tests must keep passing: `test_stock.py`'s quote tests are
-unaffected (separate route); `test_ticker_suggestions.py`'s locks on the
-`onPick` ticker assignment stay intact (we only ADD the prefill call).
+Existing locks stay valid: `closed-sales-body`, the 8 `data-cs-col` hooks,
+and `realized-total` still render (hidden ≠ removed).
 
-## Gates
-Full `python -m pytest` green → user GUI check on /ledger → commit only on
-explicit yes.
+## Implementation (after tests exist and fail)
+1. `templates/ledger.html` — closed-sales card:
+   - header: `id="closed-sales-toggle"` `role="button"` `tabindex="0"`
+     `aria-expanded="false"`; `.caret` span with inline right-chevron SVG
+     (template icon precedent) inside the `<h3>`.
+   - `.table-wrap`: `id="closed-sales-wrap"` + `hidden` attribute.
+2. `static/js/ledger.js` (CLOSED SALES section) — grab toggle + wrap;
+   click handler toggles `wrap.hidden`, `.open` on header, `aria-expanded`;
+   keydown handler for Enter/Space.
+3. `static/style.css` — `.closed-sales-toggle` cursor: pointer + subtle
+   hover tint; `.closed-sales-toggle .caret` rotate-on-`.open` (mirrors
+   `.ledger-group`).
+
+## Notes
+- Collapsed state is HTML-default; JS never resets at boot.
+- No effect on mobile card-mode CSS (hidden wrapper is display:none
+  absolutely; the header renders normally at every width).
+- Gates after implementation: full `python -m pytest` green → user GUI
+  check → commit only on explicit yes.
