@@ -18,6 +18,16 @@
 // touches Yahoo.
 const REFRESH_MS = 60000;
 
+// How long after a finger LIFTS from the chart to keep treating mouse
+// events as "ghosts" to swallow. The browser fires synthetic mouse events
+// (mousemove, click, ...) at the spot where a touch ended; Chart.js sees
+// the mousemove as a real hover and would resurrect the tooltip we just
+// cleared on touchend. This window covers those ghosts across browsers
+// and the Android WebView (iOS can delay them a few hundred ms). A real
+// touch always passes through — touch events are never swallowed — so a
+// fast second tap is unaffected. (See the touchGhostGuard plugin.)
+const GHOST_EVENT_WINDOW_MS = 500;
+
 // ---------------------------------------------------------------------------
 // AUTO-REFRESH — the single shared heartbeat for every page.
 //
@@ -1208,7 +1218,77 @@ function setupTimeframeChart(
                     chart.tooltip.setActiveElements([], { x: 0, y: 0 });
                 }
                 chart.setActiveElements([]);
-                args.cancel = true;
+                // RETURN false — the only way to actually cancel the event.
+                // args.cancel = true is dead API: core.plugins.js _notify
+                // aborts the hook chain ONLY when a plugin returns false,
+                // and without that abort _handleEvent keeps running and
+                // re-activates whatever we just cleared.
+                return false;
+            },
+        }, {
+            // ── Touch "hover end" ghost guard ─────────────────────────
+            // On a touch screen "hover" means finger-down: Chart.js shows
+            // the tooltip while the finger moves, and we clear it the
+            // moment the last finger lifts (see the touchend handler
+            // below) — the tooltip exists ONLY while the finger is on the
+            // chart.
+            //
+            // Clearing on touchend is not enough for a TAP, because the
+            // browser then fires SYNTHETIC mouse events (mousemove, click)
+            // at the spot where the finger lifted, and Chart.js — whose
+            // events list includes mousemove/click — reads those as genuine
+            // hovers and re-shows the tooltip the same instant we cleared
+            // it. A drag escapes this only because moving the finger past
+            // the tap threshold makes the browser suppress those compat
+            // events entirely. (Touchstart can also be replayed by Chart.js's
+            // rAF-throttled platform proxy after our synchronous clear, so
+            // we guard both.) This plugin swallows BOTH kinds of ghost:
+            //   - replayed touchstart/touchmove while `_hoverDormant` is
+            //     true (the all-fingers-lifted state set by our touchend/
+            //     touchcancel handlers). The next GENUINE finger-down
+            //     dispatches a fresh touchstart through our DIRECT
+            //     listener, which flips the flag off before Chart.js's
+            //     throttled handler runs.
+            //   - synthetic MOUSE events (mousemove, click, ...) while the
+            //     time window `_ghostEventsUntil` is open. The window
+            //     expires on its own, so a stray touch can never wedge a
+            //     real desktop mouse out of its hover.
+            // Both branches cancel by RETURNING false: core.plugins.js
+            // _notify aborts the event only on a false return — args.cancel
+            // is dead API (this was the actual bug: the guard cleared the
+            // active elements but the un-aborted _handleEvent immediately
+            // recomputed and re-lit them).
+            // The price-diff ruler is untouched either way.
+            id: "touchGhostGuard",
+            beforeEvent(chart, args) {
+                const type = args.event.native && args.event.native.type;
+                if (chart._priceDiffMeasuring) return;
+                const isTouchMove =
+                    type === "touchstart" || type === "touchmove";
+                if (isTouchMove) {
+                    // A gesture whose finger has already lifted (the
+                    // rAF-replay case above) is a ghost — kill it instead
+                    // of letting Chart.js light the hover back up.
+                    if (chart._hoverDormant) {
+                        if (chart.tooltip) {
+                            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+                        }
+                        chart.setActiveElements([]);
+                        return false;
+                    }
+                    return;
+                }
+                // Window closed (or never opened — desktop mouse) — nothing
+                // to swallow.
+                if (Date.now() >= chart._ghostEventsUntil) return;
+                // A synthetic mouse event from the platform (browser or
+                // Android WebView alike) that would resurrect the
+                // just-cleared hover.
+                if (chart.tooltip) {
+                    chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+                }
+                chart.setActiveElements([]);
+                return false;
             },
         }, {
             // ── Cost-basis line (hover reveal) ──────────────────────────
@@ -1477,6 +1557,20 @@ function setupTimeframeChart(
     // (crosshair) can read it without closure access.
     chart._priceDiffMeasuring = false;
 
+    // Ghost-event window cursor for the touchGhostGuard plugin: the
+    // Date.now() timestamp until which synthetic post-touch mouse events
+    // are swallowed. 0 = never — a desktop mouse never opens a window, so
+    // real mouse hover is completely untouched.
+    chart._ghostEventsUntil = 0;
+
+    // Touch "hover dormant" flag for the touchGhostGuard plugin: true
+    // while NO finger is on the chart, so a rAF-replayed touchstart of a
+    // just-ended gesture stays dead. Flip-FLOPS on real touch events only —
+    // our DIRECT touchstart handler sets it false the moment a genuine
+    // finger lands; our touchend/touchcancel handlers set it true when the
+    // last finger lifts.
+    chart._hoverDormant = false;
+
     // ── Price-difference gesture handlers ─────────────────────────────────
     // Desktop: mousedown → mousemove (live preview) → mouseup (finalize).
     // Mobile: two-finger touchstart → touchmove → touchend (finalize).
@@ -1565,6 +1659,11 @@ function setupTimeframeChart(
 
     // Mobile: detect two-finger touch for measurement.
     canvas.addEventListener("touchstart", (e) => {
+        // A REAL finger just landed on the canvas — the hover is no longer
+        // dormant. (This direct listener only ever fires on a genuine
+        // dispatch; Chart.js's throttled replays never get here, which is
+        // exactly the distinction the touchGhostGuard plugin relies on.)
+        chart._hoverDormant = false;
         if (e.touches.length >= 2) {
             e.preventDefault(); // block Chart.js from processing this
             const t0 = e.touches[0], t1 = e.touches[1];
@@ -1615,6 +1714,37 @@ function setupTimeframeChart(
             chart._priceDiffMeasuring = false;
             chart.draw();
         }
+        // "Hover" on a touch screen means finger-down. The LAST finger
+        // lifting must dismiss the tooltip exactly like a mouse-out does
+        // on desktop — Chart.js deliberately never listens to touchend
+        // (its touch tooltips are meant to pin on tap), so WE clear the
+        // active elements here. touchGhostGuard then swallows the
+        // rAF-replayed touchstart and the synthetic mouse events the
+        // browser fires at the lift spot, which would otherwise resurrect
+        // the tooltip immediately.
+        if (e.touches.length === 0) {
+            chart._hoverDormant = true;
+            chart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
+            if (chart.tooltip) {
+                chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+            }
+            chart.setActiveElements([]);
+            chart.draw();
+        }
+    });
+
+    canvas.addEventListener("touchcancel", () => {
+        // The gesture was interrupted (a scroll took over, Android back,
+        // an incoming call) — the finger is gone exactly as if it lifted,
+        // so run the same "hover ended" cleanup. Without this, a cancelled
+        // drag could leave the tooltip stuck the same way touchend does.
+        chart._hoverDormant = true;
+        chart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
+        if (chart.tooltip) {
+            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        }
+        chart.setActiveElements([]);
+        chart.draw();
     });
 
     // One refresh cycle: GET endpoint?period=... then swap the arrays and
