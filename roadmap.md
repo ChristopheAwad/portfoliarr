@@ -91,6 +91,14 @@ The dashboard's value chart is money-weighted (cost-basis %), so deposits dilute
 
 ---
 
+### 14. TWR Flow-Timing Alignment
+Edge-case refinement to #13's mirror rule (found in PR #45's review round 2, non-blocking). The mirror rule gates per-SYMBOL ("ever priced in the window"), but flows are removed at the transaction's absorption LABEL. If a ticker's first bar in the window lands after its tx's absorption label (Yahoo data gap — plausible for small caps on 5D, or a MAX window where Yahoo's history for the ticker starts later than a logged buy), the flow is removed while the ticker still contributes 0 to values: a one-bar phantom dip that recovers next bar, and in the extreme (flow ≥ rest of portfolio) truncates the whole index at that bar. Fix: hold each symbol's flows in a pending accumulator and flush at the first label where the symbol actually prices — flow removal mirrors value entry per-BAR, not just per-symbol.
+
+**Files:** `app.py` (flow fold in the `portfolio_history` walk), `tests/test_twrr.py` (regression tests)
+**Depends on:** #13 (shipped)
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -133,6 +141,7 @@ Tier 2.5:
   9. Dashboard Period Return ─────────── depends on stock detail page version
   13. TWR Performance Chart ──────────── independent (its rebase-to-100
                                           machinery makes #7 cheaper)
+  14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -155,6 +164,7 @@ For maximum compounding value:
 8. **Multi-Currency** → international expansion
 9. **Dashboard Period Return** → extends stock page pattern to dashboard
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
+14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 
