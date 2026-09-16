@@ -1348,19 +1348,23 @@ function setupTimeframeChart(
                         // Without it (stock page) it's a single line as
                         // before.
                         label(item) {
-                            const valueLine =
-                                `${item.dataset.label}: ${formatPrice(item.parsed.y)}`;
+                            // The dataset-label prefix exists to tell the
+                            // value line apart from the cost line in the
+                            // portfolio chart's two-line body. WITHOUT a
+                            // cost series (the stock page), the tooltip
+                            // stays the bare price it always showed — a
+                            // single line needs no label.
                             if (lastCosts) {
                                 const i = item.dataIndex;
                                 const cost = lastCosts[i];
                                 if (cost !== undefined) {
                                     return [
-                                        valueLine,
+                                        `${item.dataset.label}: ${formatPrice(item.parsed.y)}`,
                                         `Cost Basis (CAD): ${formatPrice(cost)}`,
                                     ];
                                 }
                             }
-                            return valueLine;
+                            return formatPrice(item.parsed.y);
                         },
                         // The GAIN line — portfolio chart only (guarded by
                         // lastCosts): value − netted cost at this bar = the
