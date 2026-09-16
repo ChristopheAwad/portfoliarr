@@ -131,10 +131,10 @@ function prefillPriceForTicker() {
 const usdNativeToggle = document.querySelector("#usd-native-toggle");
 
 // Privacy toggle — the ledger's eye. Masks Qty, Value, Total Gain and
-// Day Gain in transaction and group rows (percentage columns stay
-// visible). State persists in localStorage ("hideLedger") so the
-// preference survives refreshes. (The portfolio header's eye lives in
-// main.js, on the page that owns the portfolio header.)
+// Day Gain on GROUP rows (percentage columns stay visible). Detail rows
+// show no Day Gain to mask. State persists in localStorage ("hideLedger")
+// so the preference survives refreshes. (The portfolio header's eye lives
+// in main.js, on the page that owns the portfolio header.)
 const hideLedgerToggle = document.getElementById("hide-ledger-toggle");
 
 // Restore persisted privacy state from localStorage. Strings "true"/"false"
@@ -423,10 +423,13 @@ function buildTxRow(tx) {
     gainPctCell.className = "num ledger-live";
     // Day gain/pct cells exist to keep the row aligned with the 11 columns
     // (and the group rows that DO show daily returns) but stay empty here.
+    // Deliberately NO .ledger-live class: markLedgerUnavailable() stamps "—"
+    // into every .ledger-live cell on a failed refresh, which would leak a
+    // dash into a column the detail row never shows.
     const dayGainCell = document.createElement("td");
-    dayGainCell.className = "num ledger-live";
+    dayGainCell.className = "num";
     const dayPctCell = document.createElement("td");
-    dayPctCell.className = "num ledger-live";
+    dayPctCell.className = "num";
 
     if (hasLive) {
         // The live cells are in display_currency: CAD when the row was

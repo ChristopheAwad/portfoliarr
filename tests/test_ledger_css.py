@@ -12,7 +12,9 @@ honest:
 
   1. the wrap-proofing rule names all four short columns by data-col,
   2. the card-mode block keys its cell rules on data-col too,
-  3. the [hidden] !important guard survives — it's what makes collapsed
+  3. the detail rows hide Day Gain / Day Gain % entirely in card mode,
+  4. buildTxRow never writes those two cells (no daily returns on a record),
+  5. the [hidden] !important guard survives — it's what makes collapsed
      detail rows actually collapse in card mode, where an author
      `display: block` on tr would otherwise outrank the browser's
      built-in [hidden] rule.
@@ -27,6 +29,21 @@ ROOT = Path(__file__).resolve().parent.parent
 def css() -> str:
     """style.css as one string — same read-the-file pattern as test_docker."""
     return (ROOT / "static" / "style.css").read_text()
+
+
+def ledger_js() -> str:
+    """ledger.js as one string — for locking buildTxRow's cell behavior."""
+    return (ROOT / "static" / "js" / "ledger.js").read_text()
+
+
+def function_body(js: str, signature: str) -> str:
+    """A top-level JS function's text: from its signature to the closing
+    brace at column 0 (same helper pattern as test_privacy_toggles)."""
+    start = js.find(signature)
+    assert start != -1, f"{signature} not found in ledger.js"
+    end = js.find("\n}", start)
+    assert end != -1, f"{signature} has no closing brace"
+    return js[start:end]
 
 
 def rule_containing(needle: str) -> str:
@@ -100,6 +117,22 @@ def test_detail_rows_hide_day_gain_in_card_mode():
         r'tr\.tx-detail td\[data-col="day_gain_pct"\]\s*\{\s*display:\s*none',
         block,
     ), "detail day-gain cells must be display: none in card mode"
+
+
+def test_build_tx_row_never_writes_day_gain_cells():
+    """The detail row shows NO daily returns: buildTxRow must never write
+    content into its day_gain / day_gain_pct cells. They exist only to keep
+    the row's 11-column alignment — the day-gain figure belongs to the
+    group summary row (buildGroupRow). Re-adding a dayGainCell.textContent
+    assignment would silently undo the feature (the CSS hide is mobile-only
+    and the privacy test only checks the mask line), so lock the absence."""
+    body = function_body(ledger_js(), "function buildTxRow(")
+    assert "dayGainCell.textContent" not in body, (
+        "buildTxRow must not write dayGainCell — detail rows show no day gain"
+    )
+    assert "dayPctCell.textContent" not in body, (
+        "buildTxRow must not write dayPctCell — detail rows show no day gain"
+    )
 
 
 def test_hidden_attribute_guard_unchanged():
