@@ -271,3 +271,108 @@ def test_pixel_to_data_returns_label():
         "pixelToData must return the date label from chart.data.labels "
         "for the snapped data point"
     )
+
+
+# ── Tooltip dismissal on touch (the fix) ─────────────────────────────────────
+
+
+def _hook_bodies(js: str, signature: str) -> list[str]:
+    """Extract the body of every JS function whose header contains
+    `signature`, matching braces so a hook that never resolves can't let
+    the NEXT hook's code satisfy an assertion."""
+    bodies = []
+    start = 0
+    while True:
+        idx = js.find(signature, start)
+        if idx == -1:
+            break
+        brace = js.find("{", idx)
+        depth = 1
+        i = brace + 1
+        while i < len(js) and depth:
+            if js[i] == "{":
+                depth += 1
+            elif js[i] == "}":
+                depth -= 1
+            i += 1
+        bodies.append(js[brace + 1:i - 1])
+        start = i
+    return bodies
+
+
+def test_touch_ghost_guard_plugin_exists():
+    """common.js must register a chart-local 'touchGhostGuard' plugin that
+    swallows the platform's post-touch ghost events (synthetic mouse
+    events, and any rAF-replayed touchstart) which would otherwise
+    resurrect a tooltip the user just dismissed."""
+    js = common_js()
+    assert 'id: "touchGhostGuard"' in js, (
+        "common.js must define a touchGhostGuard chart plugin"
+    )
+
+
+def test_before_event_hooks_cancel_with_return_false():
+    """Both beforeEvent hooks (priceDiff measurement suppression and
+    touchGhostGuard) must cancel by RETURNING false. Chart.js's
+    core.plugins.js `_notify` aborts the hook chain only on a false
+    return; `args.cancel = true` is never read, so it silently fails to
+    cancel and the tooltip re-activates."""
+    js = common_js()
+    bodies = _hook_bodies(js, "beforeEvent(chart, args)")
+    assert len(bodies) == 2, (
+        "expected both beforeEvent hooks (priceDiff + touchGhostGuard)"
+    )
+    for body in bodies:
+        assert "return false" in body, (
+            "every beforeEvent hook must cancel by returning false"
+        )
+
+
+def test_args_cancel_is_not_used_in_code():
+    """Guards against reintroducing the dead `args.cancel = true` API —
+    comments may mention it, executable code must not."""
+    js = common_js()
+    code = "\n".join(
+        line for line in js.splitlines()
+        if not line.lstrip().startswith("//")
+    )
+    assert "args.cancel" not in code, (
+        "args.cancel is dead API — cancel a beforeEvent hook by returning "
+        "false instead"
+    )
+
+
+def test_touch_cancel_listener_attached():
+    """An interrupted gesture (scroll takeover, Android back, incoming
+    call) fires touchcancel, not touchend — a listener must exist so the
+    hover still ends and the tooltip can't stay pinned."""
+    js = common_js()
+    assert '"touchcancel"' in js, (
+        "setupTimeframeChart must attach a touchcancel listener"
+    )
+
+
+def test_touch_cancel_finalizes_measurement():
+    """touchcancel must also reset the measuring flag: a cancelled
+    two-finger gesture never gets its touchend, so leaving it set would
+    strand a phantom ruler and keep the tooltip/crosshair suppressed."""
+    js = common_js()
+    bodies = _hook_bodies(js, 'addEventListener("touchcancel"')
+    assert bodies, "touchcancel listener must exist"
+    assert "_priceDiffMeasuring = false" in bodies[0], (
+        "touchcancel must reset _priceDiffMeasuring when measuring"
+    )
+
+
+def test_last_finger_lift_marks_hover_dormant():
+    """touchend on the last finger must clear the tooltip and mark the
+    hover dormant, arming touchGhostGuard to swallow the ghost events the
+    platform fires right after."""
+    js = common_js()
+    assert "_hoverDormant = true" in js, (
+        "touchend/touchcancel must set _hoverDormant to true"
+    )
+    assert "_ghostEventsUntil" in js, (
+        "the ghost-event window must be armed on last-finger lift"
+    )
+
