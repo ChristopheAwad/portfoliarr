@@ -971,6 +971,16 @@ function setupTimeframeChart(
     // re-fetching data from the backend.
     let lastLabels = [];
 
+    // The portfolio chart's cost-basis series (net money put in at each
+    // bar), fed by refresh(). The STOCK page's endpoint sends NO costs —
+    // lastCosts stays null there, which is the switch that keeps that
+    // chart plain: no tooltip cost/gain lines and no hover cost line (the
+    // "money in" story is a portfolio concept). The cost line is drawn
+    // ONLY while hovering (see the costLine plugin below), never as a
+    // persistent dataset — so the y-axis stays sized to the value line
+    // alone and the chart looks unchanged when you're not inspecting a bar.
+    let lastCosts = null;
+
     // ── Frontend chart cache ──────────────────────────────────────────
     // Avoids redundant network requests when the user toggles back and
     // forth between timeframes. Keyed by period string, stores the
@@ -1175,6 +1185,53 @@ function setupTimeframeChart(
                 chart.setActiveElements([]);
                 args.cancel = true;
             },
+        }, {
+            // ── Cost-basis line (hover reveal) ──────────────────────────
+            // The portfolio chart's netted cost basis is drawn ONLY while
+            // the user hovers: a faint dashed polyline that pops in with
+            // the tooltip and vanishes on mouse-out (or tap-away on
+            // touch). It is a canvas DECORATION, not a Chart.js dataset —
+            // so the y-axis is sized to the value line alone and never
+            // reflows as the line appears/disappears (a toggled dataset
+            // would recompute the scale and make the value line jump under
+            // the cursor). Same pattern as the crosshair and price-diff
+            // ruler: draw after the datasets, read the CSS var per frame
+            // for theme safety. Skipped while measuring (the crosshair
+            // rule too), and absent entirely on the stock page — lastCosts
+            // is null there.
+            id: "costLine",
+            afterDatasetsDraw(chart) {
+                if (chart._priceDiffMeasuring) return;
+                if (!lastCosts || lastCosts.length === 0) return;
+                const active = chart.tooltip?.getActiveElements();
+                if (!active || active.length === 0) return;   // not hovering
+                const xScale = chart.scales.x;
+                const yScale = chart.scales.y;
+                const { left, right, top, bottom } = chart.chartArea;
+                const ctx = chart.ctx;
+                ctx.save();
+                // Clip to the plot so a cost point above/below the value
+                // range doesn't bleed into the title or tick areas.
+                ctx.beginPath();
+                ctx.rect(left, top, right - left, bottom - top);
+                ctx.clip();
+                // Map every (label, cost) pair through the SAME scales the
+                // value line uses — one flat coordinate space.
+                ctx.beginPath();
+                ctx.setLineDash([5, 3]);
+                ctx.strokeStyle = getComputedStyle(document.documentElement)
+                    .getPropertyValue("--text-secondary").trim();
+                ctx.lineWidth = 1.5;
+                const n = Math.min(lastLabels.length, lastCosts.length);
+                for (let i = 0; i < n; i++) {
+                    const x = xScale.getPixelForValue(lastLabels[i]);
+                    const y = yScale.getPixelForValue(lastCosts[i]);
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                ctx.restore();
+            },
         }],
 
         // Empty by design — refresh() fills these in. The dataset object is
@@ -1282,9 +1339,51 @@ function setupTimeframeChart(
                         },
                         // Same formatting rule as everywhere else in the
                         // app: the backend sends raw floats, the browser
-                        // formats ("7711.759" -> "7,711.76").
+                        // formats ("7711.759" -> "7,711.76"). The value
+                        // line is prefixed with its dataset label (callers
+                        // set it per page). WITH a cost series (portfolio
+                        // chart only) an array of TWO lines comes back, and
+                        // Chart.js renders each entry as its own body line:
+                        // "Portfolio Value (CAD): $X / Cost Basis (CAD): $Y".
+                        // Without it (stock page) it's a single line as
+                        // before.
                         label(item) {
-                            return formatPrice(item.parsed.y);
+                            const valueLine =
+                                `${item.dataset.label}: ${formatPrice(item.parsed.y)}`;
+                            if (lastCosts) {
+                                const i = item.dataIndex;
+                                const cost = lastCosts[i];
+                                if (cost !== undefined) {
+                                    return [
+                                        valueLine,
+                                        `Cost Basis (CAD): ${formatPrice(cost)}`,
+                                    ];
+                                }
+                            }
+                            return valueLine;
+                        },
+                        // The GAIN line — portfolio chart only (guarded by
+                        // lastCosts): value − netted cost at this bar = the
+                        // blended realized+unrealized gain-to-date, the same
+                        // definition as the summary strip's total return.
+                        // footerColor below paints it green/red by sign.
+                        footer(items) {
+                            if (!lastCosts) return [];
+                            const i = items[0].dataIndex;
+                            const cost = lastCosts[i];
+                            if (cost === undefined) return [];
+                            return [
+                                `Gain: ${formatPrice(items[0].parsed.y - cost)}`,
+                            ];
+                        },
+                        footerColor(items) {
+                            if (!lastCosts) return "#fff";
+                            const i = items[0].dataIndex;
+                            const cost = lastCosts[i];
+                            if (cost === undefined) return "#fff";
+                            return (items[0].parsed.y - cost) >= 0
+                                ? CHART_COLORS.up.line
+                                : CHART_COLORS.down.line;
                         },
                     },
                 },
@@ -1515,6 +1614,13 @@ function setupTimeframeChart(
             }
             chart.data.labels = data.labels;
             chart.data.datasets[0].data = data.values;
+            // Cost-basis series: present ONLY on the portfolio endpoint
+            // (data.costs) — the stock page's reply lacks it, so lastCosts
+            // stays null and the chart stays a single line. The cost LINE
+            // is drawn by the costLine plugin (afterDatasetsDraw), not a
+            // Chart.js dataset, so the y-axis never reflows when it
+            // appears/disappears.
+            lastCosts = Array.isArray(data.costs) ? data.costs : null;
             // Rebuild the axis-text plan BEFORE the redraw: the tick
             // callback reads xTickLabels at draw time, so it must
             // describe the NEW series, not the previous one. The target
