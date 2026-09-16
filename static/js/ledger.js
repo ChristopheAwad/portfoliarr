@@ -22,9 +22,12 @@
 // new ones. Same philosophy as the watchlist: the HTML ships an EMPTY
 // <tbody>, and this code rebuilds the rows from /api/transactions every
 // cycle. The backend returns each row's immutable facts PLUS live math
-// (price_now, value, total_gain/pct, day_gain/pct — raw floats: its job is
-// numbers, ours is formatting), so all this section does is place text and
-// colours.
+// (price_now, value, total_gain/pct and day_gain/pct on every row, the
+// ticker's group_* aggregates alongside — raw floats: its job is numbers,
+// ours is formatting), so all this section does is place text and colours.
+// Day gain/pct are rendered only on the group summary row; detail rows
+// leave those two columns blank (the individual transaction's daily move
+// is redundant noise — see buildTxRow).
 //
 // Presentation: transactions GROUP BY TICKER — one collapsed summary row
 // per ticker (backend-computed holdings math — sells net out), expandable
@@ -128,10 +131,10 @@ function prefillPriceForTicker() {
 const usdNativeToggle = document.querySelector("#usd-native-toggle");
 
 // Privacy toggle — the ledger's eye. Masks Qty, Value, Total Gain and
-// Day Gain in transaction and group rows (percentage columns stay
-// visible). State persists in localStorage ("hideLedger") so the
-// preference survives refreshes. (The portfolio header's eye lives in
-// main.js, on the page that owns the portfolio header.)
+// Day Gain on GROUP rows (percentage columns stay visible). Detail rows
+// show no Day Gain to mask. State persists in localStorage ("hideLedger")
+// so the preference survives refreshes. (The portfolio header's eye lives
+// in main.js, on the page that owns the portfolio header.)
 const hideLedgerToggle = document.getElementById("hide-ledger-toggle");
 
 // Restore persisted privacy state from localStorage. Strings "true"/"false"
@@ -368,6 +371,14 @@ function stampCell(col, cells) {
 // its group's summary row. Facts are always present; live cells
 // (value/gain) exist only when the backend could quote that ticker —
 // otherwise they gap-fill to "—".
+//
+// Day Gain / Day Gain % are deliberately NOT painted here: a single
+// transaction is a record, not a position — its "today's move" is noise
+// (the ticker's daily move is identical on every row, and the dollar
+// amount is just that move scaled by one lot's qty). Those two belong to
+// the group summary row, which measures the NET position. The cells still
+// exist (stampCell and the 11-column contract need them) but render empty;
+// on phones the whole line is removed by style.css's card-mode rule.
 function buildTxRow(tx) {
     const row = document.createElement("tr");
     row.className = "ledger-row"; // refreshLedger's failure check keys on this class
@@ -410,16 +421,21 @@ function buildTxRow(tx) {
     gainCell.className = "num ledger-live";
     const gainPctCell = document.createElement("td");
     gainPctCell.className = "num ledger-live";
+    // Day gain/pct cells exist to keep the row aligned with the 11 columns
+    // (and the group rows that DO show daily returns) but stay empty here.
+    // Deliberately NO .ledger-live class: markLedgerUnavailable() stamps "—"
+    // into every .ledger-live cell on a failed refresh, which would leak a
+    // dash into a column the detail row never shows.
     const dayGainCell = document.createElement("td");
-    dayGainCell.className = "num ledger-live";
+    dayGainCell.className = "num";
     const dayPctCell = document.createElement("td");
-    dayPctCell.className = "num ledger-live";
+    dayPctCell.className = "num";
 
     if (hasLive) {
         // The live cells are in display_currency: CAD when the row was
-        // converted (value & day gain at the LIVE rate, the cost side at
-        // the stored rate — the backend's two-rate contract), native
-        // otherwise. Raw floats in, text out, as always.
+        // converted (value at the LIVE rate, the cost side at the stored
+        // rate — the backend's two-rate contract), native otherwise. Raw
+        // floats in, text out, as always.
         valueCell.textContent = `${formatNumber(tx.value)} ${displayCurrency}`;
 
         // Total gain/pct: the position's whole lifetime since purchase.
@@ -427,20 +443,13 @@ function buildTxRow(tx) {
         gainPctCell.textContent =
             `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
 
-        // Day gain/pct: TODAY's move only. The % is the ticker's daily
-        // move itself — the same for any position size or currency.
-        dayGainCell.textContent = formatSigned(tx.day_gain, displayCurrency);
-        dayPctCell.textContent =
-            `${tx.day_gain_pct >= 0 ? "+" : ""}${tx.day_gain_pct.toFixed(2)}%`;
-
         // Green for gains, red for losses — the shared pos/neg classes.
         // Each pair colours independently: a position can be up overall
-        // (green Total) while today is red (neg Day).
+        // (green Total) while today is red (neg Day). Day gain rides on
+        // the group row only, so only the Total pair is coloured here.
         for (const [cell, value] of [
             [gainCell, tx.total_gain],
             [gainPctCell, tx.total_gain_pct],
-            [dayGainCell, tx.day_gain],
-            [dayPctCell, tx.day_gain_pct],
         ]) {
             cell.classList.toggle("pos", value >= 0);
             cell.classList.toggle("neg", value < 0);
@@ -451,22 +460,19 @@ function buildTxRow(tx) {
         valueCell.textContent = "—";
         gainCell.textContent = "—";
         gainPctCell.textContent = "—";
-        dayGainCell.textContent = "—";
-        dayPctCell.textContent = "—";
     }
 
     // Privacy masking: when the ledger privacy toggle is active, replace
-    // Qty, Value, Total Gain, and Day Gain with asterisks. Percentage
-    // columns (Total Gain %, Day Gain %) stay visible — they show relative
-    // performance without revealing absolute amounts.
+    // Qty, Value, and Total Gain with asterisks. Percentage columns
+    // (Total Gain %, and the group row's Day Gain %) stay visible — they
+    // show relative performance without revealing absolute amounts. Day
+    // Gain is not masked here: the detail row never shows it.
     if (hideLedgerToggle && hideLedgerToggle.dataset.hidden === "true") {
         qtyCell.textContent = "****";
         valueCell.textContent = "****";
         gainCell.textContent = "****";
-        dayGainCell.textContent = "****";
         // Remove pos/neg coloring from masked cells
         gainCell.classList.remove("pos", "neg");
-        dayGainCell.classList.remove("pos", "neg");
     }
 
     // --- Actions: edit + delete. They live ONLY on detail rows — a group

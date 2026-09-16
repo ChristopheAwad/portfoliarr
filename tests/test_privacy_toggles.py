@@ -296,21 +296,35 @@ def test_js_masks_qty_in_ledger_when_hidden():
 
 def test_js_masks_ledger_values_when_hidden():
     """ledger.js's buildTxRow AND buildGroupRow must BOTH gate their mask
-    block on the ledger toggle state and mask Value, Total Gain and Day
-    Gain cells (plus strip pos/neg). The original version of this test
-    only asserted the string 'hideLedgerToggle' existed anywhere in the
-    file — it would have passed even if both mask blocks were emptied
-    out."""
+    block on the ledger toggle state and mask Value, Total Gain and Qty
+    cells (plus strip pos/neg). The original version of this test only
+    asserted the string 'hideLedgerToggle' existed anywhere in the file —
+    it would have passed even if both mask blocks were emptied out.
+
+    Day Gain is masked on the GROUP row only: detail rows never render it
+    (buildTxRow leaves those cells empty), so masking it there would be a
+    "****" over a value that isn't shown — the row shows no daily returns
+    at all. buildGroupRow still owns the position's daily move, so its
+    mask block keeps the dayGainCell assignment."""
     js = _read_ledger_js()
-    for fn in ("function buildTxRow(", "function buildGroupRow("):
+    expected = {
+        "function buildTxRow(": ("qtyCell", "valueCell", "gainCell"),
+        "function buildGroupRow(": ("qtyCell", "valueCell", "gainCell",
+                                   "dayGainCell"),
+    }
+    for fn, cells in expected.items():
         body = _function_body(js, fn)
         assert 'hideLedgerToggle.dataset.hidden === "true"' in body, \
             f"{fn}...) must gate its mask block on the ledger toggle state"
-        for cell in ("qtyCell", "valueCell", "gainCell", "dayGainCell"):
+        for cell in cells:
             assert f'{cell}.textContent = "****"' in body, \
                 f"{fn}...) must mask {cell} with asterisks"
         assert 'gainCell.classList.remove("pos", "neg")' in body, \
             f"{fn}...) must strip pos/neg from the masked gain cells"
+    # The detail row must NOT mask a day-gain cell — it shows none.
+    tx_body = _function_body(js, "function buildTxRow(")
+    assert 'dayGainCell.textContent = "****"' not in tx_body, \
+        "buildTxRow must not mask dayGainCell — it never renders day gain"
 
 
 # ── CSS tests ─────────────────────────────────────────────────────────
