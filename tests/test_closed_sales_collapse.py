@@ -80,7 +80,7 @@ def test_ledger_js_wires_closed_sales_toggle():
     js = LEDGER_JS.read_text()
     assert '#closed-sales-toggle"' in js or "closed-sales-toggle" in js
     assert '"#closed-sales-wrap"' in js or "closed-sales-wrap" in js
-    assert "ClosedSalesWrap.hidden" in js or "closedSalesWrap.hidden" in js
+    assert "closedSalesWrap.hidden" in js
     assert "aria-expanded" in js
     assert "Enter" in js and '" "' in js
 
