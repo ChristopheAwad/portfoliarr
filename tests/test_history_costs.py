@@ -32,7 +32,11 @@ def test_history_costs_empty_ledger(client, fake_market):
     the frontend needs all three arrays to have the same length."""
     res = client.get("/api/portfolio/history")
     assert res.status_code == 200
-    assert res.get_json() == {"labels": [], "values": [], "costs": []}
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        # TWR keys: null here — nothing to measure (never 0/0).
+        "index_values": None, "twrr_pct": None,
+    }
 
 
 def test_costs_length_matches_labels(client, fake_market):

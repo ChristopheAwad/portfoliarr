@@ -235,13 +235,75 @@ def index_quotes():
 # against the same dict, keeping the label-to-fetch mapping in one place.
 # ---------------------------------------------------------------------------
 
+def _time_weighted_return(values, flows):
+    """Chain per-bar returns into a growth-of-$100 TWR index.
+
+    THE two portfolio questions, one line apart:
+      * VALUE line (money-weighted cost basis) — "all the money I ever put
+        in vs. what it's worth now". A deposit grows it; a deposit after a
+        good run DILUTES the cost-basis % it headlines.
+      * THIS index (time-weighted) — "how well did the picks do?" Cash
+        flows are removed so deposits can neither fake nor dilute a gain.
+
+    The method is the fund industry's "daily valuation" chaining: each
+    bar's return is measured against the PREVIOUS bar's value, then the
+    bars multiply together (compounding), the way real money grows.
+
+        r_i    = (V_i − F_i − V_{i−1}) / V_{i−1}     (flows at bar close)
+        index  = 100 × Π(1 + r_i);  twrr_pct = chained − 1, as a %.
+
+    `flows` is the net cash CONTRIBUTION absorbed at each bar (buys minus
+    sells) — portfoliarr has no separate cash account, so transactions ARE
+    the cash movements. Bar 0's flow is DELIBERATELY ignored: it was
+    already inside V_0 (the route trims the axis to the first logged
+    investment, so the first buy IS bar 0), and removing it again would
+    double-report the first bar's return.
+
+    Honest degradation — never a confident-looking fake:
+      * Fewer than two bars → (None, None): nothing to compare.
+      * A bar whose BASE (the previous value) is ≤ 0 ends the chain:
+        that is the ledger's oversell fold gone net-short, a fully
+        withdrawn portfolio, or nothing priced. The index is TRUNCATED to
+        the bars that had a real, positive base — performance is reported
+        while the portfolio was worth measuring.
+      * A bar whose value-minus-flow is ≤ 0 (the position turned short
+        THAT bar) also ends it — 1 + r would flip the index's sign and
+        report a gain as a loss.
+      * If not one pair survives → (None, None), never a 0/0 NaN.
+    """
+    if len(values) < 2:
+        return None, None
+    index = [100.0]
+    for i in range(1, len(values)):
+        prev = values[i - 1]
+        post_flow_value = values[i] - flows[i]
+        if prev <= 0 or post_flow_value <= 0:
+            break
+        r = (post_flow_value - prev) / prev
+        index.append(index[-1] * (1 + r))
+    if len(index) < 2:
+        return None, None
+    return index, (index[-1] / 100.0 - 1.0) * 100.0
+
+
 @app.route("/api/portfolio/history")
 def portfolio_history():
-    """Return the portfolio's value over time as {labels, values}.
+    """Return the portfolio's value over time as
+    {labels, values, costs, index_values, twrr_pct}.
 
     Query param `period` is a PERIOD_MAP key ("5D", "1M"...); defaults
     to "5D" (the chart's default view, matching the 5D button's `active`
     class in index.html). Anything else gets a 400.
+
+    The first three keys: labels/values (the CAD value line) and costs
+    (the netted cost basis) — see the section comment in this module.
+    The last two power the TWR "Performance" chart view:
+      index_values — a growth-of-$100 index (100 at bar 0), chained from
+        per-bar returns with cash flows removed (see
+        _time_weighted_return). May be SHORTER than labels (the chain
+        truncates at a non-positive base) or null (nothing computable).
+      twrr_pct     — the time-weighted % over the SAME span the index
+        covers (= index end as a %). null when the index is null.
 
 Algorithm: walk every trading day in the range forward, keeping a
     running "net quantity held" per ticker (buys add, sells subtract),
@@ -275,7 +337,8 @@ Algorithm: walk every trading day in the range forward, keeping a
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
     if not transactions:
-        return jsonify({"labels": [], "values": [], "costs": []})
+        return jsonify({"labels": [], "values": [], "costs": [],
+                        "index_values": None, "twrr_pct": None})
 
     # Fetch each ticker's price history once — but IN PARALLEL. The
     # serial version paid "sum of every Yahoo call" before the chart
@@ -407,14 +470,16 @@ Algorithm: walk every trading day in the range forward, keeping a
     first_tx_date = transactions[0]["transaction_date"]
     if is_intraday:
         if first_tx_date > label_date_today:
-            return jsonify({"labels": [], "values": [], "costs": []})
+            return jsonify({"labels": [], "values": [], "costs": [],
+                            "index_values": None, "twrr_pct": None})
     else:
         labels = [label for label in labels if label >= first_tx_date]
         if not labels:
             # Every fetched bar predates the first logged investment —
             # the live case being a future-dated transaction vs. the
             # period's fixed window. Nothing plottable, not an error.
-            return jsonify({"labels": [], "values": [], "costs": []})
+            return jsonify({"labels": [], "values": [], "costs": [],
+                            "index_values": None, "twrr_pct": None})
 
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
@@ -462,11 +527,69 @@ Algorithm: walk every trading day in the range forward, keeping a
         sign = 1 if tx["transaction_type"] == "BUY" else -1
         return sign * tx["price"] * tx["qty"] * rate
 
+    # THE TWR FLOW — the walk's third accumulator. The cost side answers
+    # "what did I pay"; the flow side removes the CASH that moved in/out,
+    # turning the value line into a PERFORMANCE line (see
+    # _time_weighted_return). A BUY injects (positive flow), a SELL
+    # withdraws (negative) — there is no separate cash account, so
+    # transactions ARE the cash movements.
+    #
+    # THE MIRROR RULE: a transaction's flow is removed ONLY if its value
+    # entered the series. A dead ticker (get_history raised → empty dict)
+    # contributes 0 to values, so removing its buy would "return" money
+    # that never actually arrived — that would fake a LOSS. Same for a
+    # USD row with no live rate, or an unsupported currency. Flow removal
+    # is the exact mirror of the value walk: no value, no flow.
+    #
+    # Non-empty is not enough: a ticker whose ENTIRE history predates the
+    # window (delisted before the first transaction; another holding
+    # anchors the labels) also never enters the series — its bars are all
+    # trimmed away, so the walk never prices it and it contributes 0 to
+    # values. Requiring its last bar to reach labels[0] is what keeps the
+    # gate equivalent to the invariant above. Safe for the intraday walk
+    # too: all flows land on bar 0 there and are ignored anyway (and
+    # history keys and labels share one format — both come from
+    # get_history for the same period).
+    flowable_symbols = {
+        symbol for symbol, history in histories.items()
+        if history
+        and max(history) >= labels[0]
+        and (currency_by_symbol.get(symbol) == "CAD"
+             or (currency_by_symbol.get(symbol) == "USD"
+                 and live_rate is not None))
+    }
+
+    def tx_flow(tx):
+        """This transaction's cash contribution to TWR (BUY positive,
+        SELL negative), in the series' OWN units — the flat live rate
+        for USD, 1.0 for CAD. DELIBERATELY not the stored fx_rate: a
+        flow must be measured in the same units as the value it's
+        removed from, or a USD buy would leave a phantom FX gain on its
+        own bar. (The COST side above keeps the stored rate — that's a
+        frozen fact about the past; this is a removal amount in today's
+        units, and the two must match or the books don't close.)"""
+        if tx["ticker"] not in flowable_symbols:
+            return 0.0   # mirror rule — no value in the series, no flow
+        if tx["currency"] == "USD":
+            # The flowable gate already proves live_rate exists for a
+            # USD-CLASSIFIED ticker — but a first-seen-CAD symbol can
+            # still carry a stray USD row (classification is per first
+            # tx, app-created data never mixes). Degrade to 0 like the
+            # cost side above rather than multiply by None.
+            rate = live_rate
+            if rate is None:
+                return 0.0   # unconvertible — contributes no flow
+        else:
+            rate = 1.0
+        sign = 1 if tx["transaction_type"] == "BUY" else -1
+        return sign * tx["price"] * tx["qty"] * rate
+
     net_qty = {}
     net_cost = {}  # symbol → netted CAD cost, folded with net_qty below
     last_closes = {}  # symbol → its most recent known close (forward-fill)
     values = []
     costs = []
+    flows_by_label = {}  # label → net CAD cash contribution absorbed there
     tx_index = 0        # next un-applied daily transaction (advances through
                         # the sorted list); unused in the intraday branch
     today_applied = False  # intraday: have today's transactions been applied?
@@ -491,6 +614,9 @@ Algorithm: walk every trading day in the range forward, keeping a
                             net_cost.get(tx["ticker"], 0.0)
                             + tx_cad_cost(tx)
                         )
+                        flows_by_label[label] = (
+                            flows_by_label.get(label, 0.0) + tx_flow(tx)
+                        )
         else:
             # Daily: transactions are sorted by date, so as long as the
             # transaction's date is still on-or-before this label, it
@@ -505,6 +631,9 @@ Algorithm: walk every trading day in the range forward, keeping a
                 )
                 net_cost[tx["ticker"]] = (
                     net_cost.get(tx["ticker"], 0.0) + tx_cad_cost(tx)
+                )
+                flows_by_label[label] = (
+                    flows_by_label.get(label, 0.0) + tx_flow(tx)
                 )
 
         # Sum each ticker's held quantity × its close price at this label
@@ -552,7 +681,19 @@ Algorithm: walk every trading day in the range forward, keeping a
         # the summary strip's own negative-cost-basis semantics.
         costs.append(sum(net_cost.values()))
 
-    return jsonify({"labels": labels, "values": values, "costs": costs})
+    # Time-weighted return: chain the value line with each bar's cash
+    # flow removed. Label-keyed flows are aligned to the label order,
+    # then the pure helper does the chaining — bar 0's flow is the
+    # BASE and is ignored by design. index_values may be SHORTER than
+    # labels (truncation) or null (nothing computable) — honest states,
+    # never a 0/0 NaN.
+    flows = [flows_by_label.get(label, 0.0) for label in labels]
+    index_values, twrr_pct = _time_weighted_return(values, flows)
+
+    return jsonify({
+        "labels": labels, "values": values, "costs": costs,
+        "index_values": index_values, "twrr_pct": twrr_pct,
+    })
 
 
 # ---------------------------------------------------------------------------

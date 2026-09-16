@@ -148,6 +148,19 @@
                         <canvas id="portfolioChart"></canvas>
                     </div>
 
+                    <!-- View toggle (Value vs Performance) — portfolio chart
+                         only. Value = the money-weighted CAD line (what you
+                         actually have, deposits included); Performance = the
+                         time-weighted growth-of-$100 index with cash flows
+                         removed (how the picks did on their own). main.js
+                         passes this tray to setupTimeframeChart, which owns
+                         the swapping + persistence; the buttons' active
+                         state is synced from the saved view at load. -->
+                    <div class="chart-mode-selectors">
+                        <button class="time-btn active" data-chart-mode="value">Value</button>
+                        <button class="time-btn" data-chart-mode="performance">Performance</button>
+                    </div>
+
                     <!-- Timeframe selector. The first button keeps `active`
                          (the default chart view on load is 5D — main.js
                          matches its default period to this). main.js reads

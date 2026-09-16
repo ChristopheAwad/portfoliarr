@@ -934,7 +934,8 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
 }
 
 function setupTimeframeChart(
-    { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData }
+    { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
+      modeBar }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -980,6 +981,28 @@ function setupTimeframeChart(
     // persistent dataset — so the y-axis stays sized to the value line
     // alone and the chart looks unchanged when you're not inspecting a bar.
     let lastCosts = null;
+
+    // ── Value / Performance view state (PORTFOLIO chart only) ────────────
+    // The portfolio endpoint answers BOTH a money-weighted value line
+    // (values/costs — "all the money I put in vs. what it's worth now")
+    // and a time-weighted growth-of-$100 index (index_values — cash flows
+    // removed, so deposits can't fake or dilute a gain). `mode` picks
+    // which one paints. modeBar is the Value/Performance button tray in
+    // index.html; the STOCK page passes no modeBar, so its chart stays on
+    // "value" forever — zero extra branches on its code path.
+    //
+    // Persisted like every other user preference (allocationDimension,
+    // ledgerDefaultSort…), so the chart reopens on the view you left.
+    let mode = "value";
+    if (modeBar) {
+        const savedMode = localStorage.getItem("chartMode");
+        if (savedMode === "value" || savedMode === "performance") {
+            mode = savedMode;
+        }
+    }
+    // The last fetched reply, kept whole — a view swap repaints from it
+    // with NO second network request (both series ride one fetch).
+    let lastReply = null;
 
     // ── Frontend chart cache ──────────────────────────────────────────
     // Avoids redundant network requests when the user toggles back and
@@ -1028,6 +1051,7 @@ function setupTimeframeChart(
             // beforeDraw is too late: the pixel mapping is already baked.
             afterDataLimits(chart, { scale }) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
+                if (mode === "performance") return;
                 if (scale.id !== "y") return;
                 const lo = scale.min;
                 const hi = scale.max;
@@ -1040,6 +1064,7 @@ function setupTimeframeChart(
             },
             afterDraw(chart) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
+                if (mode === "performance") return;
                 const y = chart.scales.y.getPixelForValue(prevClose);
                 const { left, right, top } = chart.chartArea;
                 const ctx = chart.ctx;
@@ -1348,6 +1373,14 @@ function setupTimeframeChart(
                         // Without it (stock page) it's a single line as
                         // before.
                         label(item) {
+                            // Performance view: a growth-of-$100 line, so
+                            // show it as itself — the dataset label names
+                            // the unit, the number is the index level.
+                            if (mode === "performance") {
+                                return [
+                                    `${item.dataset.label}: ${formatPrice(item.parsed.y)}`,
+                                ];
+                            }
                             // The dataset-label prefix exists to tell the
                             // value line apart from the cost line in the
                             // portfolio chart's two-line body. WITHOUT a
@@ -1372,6 +1405,16 @@ function setupTimeframeChart(
                         // definition as the summary strip's total return.
                         // footerColor below paints it green/red by sign.
                         footer(items) {
+                            // Performance view: the index is anchored at
+                            // 100, so the % return from the start is just
+                            // level/100 − 1 — no cost basis to subtract.
+                            if (mode === "performance") {
+                                const v = items[0]?.parsed.y;
+                                if (v === undefined) return [];
+                                const pct = (v / 100 - 1) * 100;
+                                const sign = pct >= 0 ? "+" : "";
+                                return [`Return: ${sign}${pct.toFixed(2)}%`];
+                            }
                             if (!lastCosts) return [];
                             const i = items[0].dataIndex;
                             const cost = lastCosts[i];
@@ -1381,6 +1424,13 @@ function setupTimeframeChart(
                             ];
                         },
                         footerColor(items) {
+                            if (mode === "performance") {
+                                const v = items[0]?.parsed.y;
+                                if (v === undefined) return "#fff";
+                                return v >= 100
+                                    ? CHART_COLORS.up.line
+                                    : CHART_COLORS.down.line;
+                            }
                             if (!lastCosts) return "#fff";
                             const i = items[0].dataIndex;
                             const cost = lastCosts[i];
@@ -1606,51 +1656,83 @@ function setupTimeframeChart(
             // causing the visible chart to jump between timeframes.
             if (silent) return;
 
-            // Green for a gaining period, red for a losing one: compare
-            // the FIRST and LAST close. values.at(-1) is the LAST element;
-            // the length guard keeps an empty reply from NaN-comparing
-            // (empty data just keeps the previous color).
-            const values = data.values;
-            if (values.length > 0) {
-                direction = values.at(-1) >= values[0] ? "up" : "down";
-                chart.data.datasets[0].borderColor =
-                    CHART_COLORS[direction].line;
-            }
-            chart.data.labels = data.labels;
-            chart.data.datasets[0].data = data.values;
-            // Cost-basis series: present ONLY on the portfolio endpoint
-            // (data.costs) — the stock page's reply lacks it, so lastCosts
-            // stays null and the chart stays a single line. The cost LINE
-            // is drawn by the costLine plugin (afterDatasetsDraw), not a
-            // Chart.js dataset, so the y-axis never reflows when it
-            // appears/disappears.
-            lastCosts = Array.isArray(data.costs) ? data.costs : null;
-            // Rebuild the axis-text plan BEFORE the redraw: the tick
-            // callback reads xTickLabels at draw time, so it must
-            // describe the NEW series, not the previous one. The target
-            // adapts to the chart's current width (fewer labels on phones).
-            lastLabels = data.labels;
-            const target = tickTargetForWidth(canvas.parentElement.clientWidth);
-            xTickLabels = buildXTickLabels(data.labels, target);
-            // Set currentPeriod BEFORE chart.update() so the prevCloseLine
-            // plugin sees the correct period during the synchronous redraw.
-            // If the fetch failed, we never reach here (the throw skips
-            // this line), so the period stays correct for the old data.
-            currentPeriod = period;
-            chart.update();
-            // Hand the period's first/last values back to the caller so
-            // page scripts can derive a period return (e.g. the stock
-            // page's change pill). Only fires when there are at least two
-            // points — a single bar can't define a direction.
-            if (onPeriodData && values.length > 1) {
-                onPeriodData({
-                    firstValue: values[0],
-                    lastValue: values.at(-1),
-                    period,
-                });
-            }
+            // Repaint with this reply — the render half of a refresh
+            // lives in paint() below so the view toggle can reuse it
+            // without refetching.
+            paint(data, period);
         } catch (err) {
             console.error("chart refresh failed:", err);
+        }
+    }
+
+    // ── The render half of a refresh ────────────────────────────────────
+    // Picks which series the ACTIVE VIEW paints and repaints. Extracted
+    // from refresh() because the Value/Performance toggle swaps views
+    // without a network round-trip: both series arrived in the same
+    // reply, so a swap is a pure repaint of what we already hold.
+    function paint(data, period) {
+        lastReply = data;  // kept for instant view swaps (see modeBar)
+
+        // Green for a gaining period, red for a losing one: compare the
+        // FIRST and LAST point of whatever series is on screen. The
+        // length guard keeps an empty reply from NaN-comparing (empty
+        // data just keeps the previous color). Performance view compares
+        // the growth index; value view the CAD line.
+        const plottingIndex = mode === "performance";
+        const plotValues = plottingIndex ? data.index_values : data.values;
+        // The TWR index may be TRUNCATED (the backend stops chaining at a
+        // non-positive base — an oversold short, a withdrawn portfolio).
+        // The x-axis must end where the line ends, so labels are sliced
+        // to match; an absent/null index paints nothing (honest, not a
+        // confident wrong line).
+        const plotLabels = Array.isArray(plotValues)
+            ? data.labels.slice(0, plotValues.length)
+            : [];
+        if (Array.isArray(plotValues) && plotValues.length > 0) {
+            direction = plotValues.at(-1) >= plotValues[0] ? "up" : "down";
+            chart.data.datasets[0].borderColor =
+                CHART_COLORS[direction].line;
+        }
+        chart.data.labels = plotLabels;
+        chart.data.datasets[0].data =
+            Array.isArray(plotValues) ? plotValues : [];
+        chart.data.datasets[0].label = plottingIndex
+            ? "Growth of $100 (TWR)"
+            : datasetLabel;
+        // Cost-basis series: present ONLY on the portfolio endpoint
+        // (data.costs) — the stock page's reply lacks it, so lastCosts
+        // stays null and the chart stays a single line. The cost LINE
+        // is drawn by the costLine plugin (afterDatasetsDraw), not a
+        // Chart.js dataset, so the y-axis never reflows when it
+        // appears/disappears. Performance view SUPPRESSES it too: a
+        // growth index has no "cost basis" left to compare — the flows
+        // were already removed, so showing one would double-count.
+        lastCosts = (!plottingIndex && Array.isArray(data.costs))
+            ? data.costs : null;
+        // Rebuild the axis-text plan BEFORE the redraw: the tick
+        // callback reads xTickLabels at draw time, so it must
+        // describe the NEW series, not the previous one. The target
+        // adapts to the chart's current width (fewer labels on phones).
+        lastLabels = plotLabels;
+        const target = tickTargetForWidth(canvas.parentElement.clientWidth);
+        xTickLabels = buildXTickLabels(plotLabels, target);
+        // Set currentPeriod BEFORE chart.update() so the prevCloseLine
+        // plugin sees the correct period during the synchronous redraw.
+        // If the fetch failed, we never reach here (the throw skips
+        // this line), so the period stays correct for the old data.
+        currentPeriod = period;
+        chart.update();
+        // Hand the period's first/last values back to the caller so
+        // page scripts can derive a period return (e.g. the stock
+        // page's change pill). Only fires when there are at least two
+        // points — a single bar can't define a direction.
+        if (onPeriodData && Array.isArray(plotValues)
+                && plotValues.length > 1) {
+            onPeriodData({
+                firstValue: plotValues[0],
+                lastValue: plotValues.at(-1),
+                period,
+            });
         }
     }
 
@@ -1675,6 +1757,30 @@ function setupTimeframeChart(
         btn.classList.add("active");
         refresh(period);
     });
+
+    // ── View toggle (portfolio chart only) ─────────────────────────────
+    // The stock page passes no modeBar, so this whole block never exists
+    // there. Swapping Value ⇄ Performance NEVER re-fetches — the value
+    // line and the growth index arrived in the same reply, so a swap is
+    // a pure repaint. The choice is persisted (like every preference),
+    // so the chart reopens on the view you left open.
+    if (modeBar) {
+        // Sync the buttons to the view we START on (localStorage, default
+        // "value") so the toggle never disagrees with the line it owns.
+        modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
+            b.classList.toggle("active", b.dataset.chartMode === mode));
+        modeBar.addEventListener("click", (event) => {
+            const btn = event.target.closest("[data-chart-mode]");
+            if (!btn || btn.dataset.chartMode === mode) return;
+            mode = btn.dataset.chartMode;
+            localStorage.setItem("chartMode", mode);
+            modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
+                b.classList.toggle("active", b.dataset.chartMode === mode));
+            // Nothing fetched yet (first load failed) → just the buttons
+            // are switched; the next successful refresh paints the view.
+            if (lastReply) paint(lastReply, currentPeriod);
+        });
+    }
 
     return {
         chart,

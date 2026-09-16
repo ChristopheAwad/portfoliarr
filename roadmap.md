@@ -82,6 +82,23 @@ Extend the stock detail page's dynamic period return (shipped separately) to the
 
 ---
 
+### 13. Time-Weighted Return (TWR) Performance Chart
+The dashboard's value chart is money-weighted (cost-basis %), so deposits dilute a real gain. Add a toggleable second view: a growth-of-$100 index computed by per-bar chaining with flows removed (every BUY = injection, SELL = withdrawal — there is no cash account). Reuses `portfolio_history`'s existing tx-absorption walk (flows fold where shares already fold); the reply gains `index_values` + `twrr_pct`. Full plan in `feature.md`. The rebase-to-100 + multi-dataset machinery built here is exactly what #7 (Benchmark Line) needs — doing this first makes #7 mostly plumbing.
+
+**Files:** `app.py` (history route + pure helper), `static/js/common.js` (chart factory toggle), `static/js/main.js`, `templates/index.html`
+**Depends on:** Nothing
+**Status:** shipped 2026-09-16 (PR #45)
+
+---
+
+### 14. TWR Flow-Timing Alignment
+Edge-case refinement to #13's mirror rule (found in PR #45's review round 2, non-blocking). The mirror rule gates per-SYMBOL ("ever priced in the window"), but flows are removed at the transaction's absorption LABEL. If a ticker's first bar in the window lands after its tx's absorption label (Yahoo data gap — plausible for small caps on 5D, or a MAX window where Yahoo's history for the ticker starts later than a logged buy), the flow is removed while the ticker still contributes 0 to values: a one-bar phantom dip that recovers next bar, and in the extreme (flow ≥ rest of portfolio) truncates the whole index at that bar. Fix: hold each symbol's flows in a pending accumulator and flush at the first label where the symbol actually prices — flow removal mirrors value entry per-BAR, not just per-symbol.
+
+**Files:** `app.py` (flow fold in the `portfolio_history` walk), `tests/test_twrr.py` (regression tests)
+**Depends on:** #13 (shipped)
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -122,6 +139,9 @@ Tier 2 (all independent of each other):
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on stock detail page version
+  13. TWR Performance Chart ──────────── independent (its rebase-to-100
+                                          machinery makes #7 cheaper)
+  14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -143,6 +163,8 @@ For maximum compounding value:
 7. **Benchmark Line** → context for performance
 8. **Multi-Currency** → international expansion
 9. **Dashboard Period Return** → extends stock page pattern to dashboard
+13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
+14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

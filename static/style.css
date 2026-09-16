@@ -923,6 +923,29 @@ a.logo { text-decoration: none; }
     width: fit-content;
 }
 
+/* View toggle (portfolio chart only): Value / Performance — a second,
+   smaller segmented tray above the timeframe buttons. Shares the tray
+   recipe (inset background, pill segments) so the two controls read as
+   siblings; the gap above the timeframe tray keeps them distinct. The
+   ACTIVE segment uses the accent fill — this selects a VIEW, not a
+   period, so the paper-card highlight that marks the period tray's
+   active segment would overstate it here. */
+.chart-mode-selectors {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+    width: fit-content;
+    margin-bottom: 6px;
+}
+
+.chart-mode-selectors .time-btn.active {
+    background: var(--accent);
+    color: var(--btn-text);
+    box-shadow: var(--shadow-sm);
+}
+
 .time-btn {
     border: none;
     background: none;

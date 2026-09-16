@@ -327,6 +327,13 @@ def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
         "costs": [
             100.0, 100.0, 100.0, 100.0, 300.0, 300.0, 300.0,
         ],
+        # TWR index: bar 0's +100 flow is the BASE (ignored). The 09-03
+        # buy (+200 flow) removes its principal at that bar → chain:
+        # 100→105→110→112→160→166.67→173.33, twrr ≈ +73.33%.
+        "index_values": pytest.approx([
+            100.0, 105.0, 110.0, 112.0, 160.0, 500 / 3, 520 / 3,
+        ]),
+        "twrr_pct": pytest.approx(220 / 3),
     }
 
 
@@ -387,6 +394,11 @@ def test_3m_portfolio_chart_is_daily_shaped(client, fake_yf):
         "values": [100.0, 105.0, 330.0, 336.0],
         # Cost is what was PAID (1@100, then +2@100 on 09-03), not value.
         "costs": [100.0, 100.0, 300.0, 300.0],
+        # TWR: the 09-03 buy lifts value by 225 but removes only its
+        # +200 principal → that bar nets +25 on a 105 base:
+        # 100→105→130→132.36, twrr ≈ +32.36%.
+        "index_values": pytest.approx([100.0, 105.0, 130.0, 4368 / 33]),
+        "twrr_pct": pytest.approx(1068 / 33),
     }
 
 
@@ -431,6 +443,10 @@ def test_5y_portfolio_chart_stays_daily_shaped(client, fake_yf):
         "labels": ["2026-08-28", "2026-09-04"],
         "values": [110.0, 120.0],
         "costs": [100.0, 100.0],
+        # TWR: single buy absorbed into the base (bar 0) → pure market
+        # move 110→120 = +9.09%, index [100, 109.09].
+        "index_values": pytest.approx([100.0, 100.0 + 100.0 / 11.0]),
+        "twrr_pct": pytest.approx(100.0 / 11.0),
     }
 
 
@@ -502,4 +518,9 @@ def test_parallel_fetch_failure_isolation(client, monkeypatch):
         # a dead ticker can't be priced (the route's documented divergence:
         # cost side = stored facts, value side = prices).
         "costs": [2000.0, 2000.0],
+        # TWR mirror rule: BAD's BUY is excluded from flows — removing a
+        # contribution that never entered the series would fake a loss.
+        "index_values": pytest.approx(
+            [100.0, 100.0 + 100.0 / 11.0]),
+        "twrr_pct": pytest.approx(100.0 / 11.0),
     }
