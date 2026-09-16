@@ -75,6 +75,33 @@ def test_card_mode_cell_rules_key_on_data_col():
     assert dead is None, f"dead class selector in style.css: td.{dead.group(1)}"
 
 
+def test_detail_rows_hide_day_gain_in_card_mode():
+    """buildTxRow leaves Day Gain / Day Gain % blank on individual
+    transaction rows — a single record has no meaningful daily move; that
+    number is the POSITION's, shown on the group card. In the ≤600px card
+    layout a blank cell still draws its caption line ("Day Gain" over
+    nothing), so the two cells are removed entirely on detail cards. The
+    hide must live INSIDE the media block: the desktop table keeps the
+    columns aligned with the group rows that DO show daily returns."""
+    text = css()
+    start = text.find("@media (max-width: 600px)")
+    assert start != -1, "@media (max-width: 600px) block not found"
+    end = text.find("@media", start + 10)
+    if end == -1:
+        end = len(text)
+    block = text[start:end]
+    for col in ("day_gain", "day_gain_pct"):
+        assert f'tr.tx-detail td[data-col="{col}"]' in block, (
+            f"card mode must hide the detail row's {col} cell"
+        )
+    # …and it must be an actual display:none rule, not a stray mention.
+    assert re.search(
+        r'tr\.tx-detail td\[data-col="day_gain"\],\s*'
+        r'tr\.tx-detail td\[data-col="day_gain_pct"\]\s*\{\s*display:\s*none',
+        block,
+    ), "detail day-gain cells must be display: none in card mode"
+
+
 def test_hidden_attribute_guard_unchanged():
     """[hidden] { display: none !important } is load-bearing: in card mode an
     author rule sets tr { display: block }, which outranks the browser's

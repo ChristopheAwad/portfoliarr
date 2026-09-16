@@ -2342,6 +2342,14 @@ input[type="date"]::-moz-placeholder {
        carry attributes, not classes. */
     tr.tx-detail td[data-col="ticker"] { display: none; }
 
+    /* Day Gain / Day Gain % are a POSITION's daily move, not a record's:
+       buildTxRow leaves them blank on detail rows, and a card line with a
+       caption ("Day Gain") but no value is pure clutter. Remove the whole
+       line in card mode. The GROUP card above keeps its daily returns —
+       same columns, different data-col scope (tr.ledger-group). */
+    tr.tx-detail td[data-col="day_gain"],
+    tr.tx-detail td[data-col="day_gain_pct"] { display: none; }
+
     tr.tx-detail td[data-col="actions"]::before { content: none; }
     tr.tx-detail td[data-col="actions"] {
         justify-content: flex-end;  /* buttons on the right, not flex-spread */
