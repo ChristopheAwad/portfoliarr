@@ -324,6 +324,9 @@ def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
             "2026-09-04 09:30",
         ],
         "values": [100.0, 105.0, 110.0, 112.0, 360.0, 375.0, 390.0],
+        "costs": [
+            100.0, 100.0, 100.0, 100.0, 300.0, 300.0, 300.0,
+        ],
     }
 
 
@@ -382,6 +385,8 @@ def test_3m_portfolio_chart_is_daily_shaped(client, fake_yf):
     assert body == {
         "labels": ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"],
         "values": [100.0, 105.0, 330.0, 336.0],
+        # Cost is what was PAID (1@100, then +2@100 on 09-03), not value.
+        "costs": [100.0, 100.0, 300.0, 300.0],
     }
 
 
@@ -425,6 +430,7 @@ def test_5y_portfolio_chart_stays_daily_shaped(client, fake_yf):
     assert body == {
         "labels": ["2026-08-28", "2026-09-04"],
         "values": [110.0, 120.0],
+        "costs": [100.0, 100.0],
     }
 
 
@@ -492,4 +498,8 @@ def test_parallel_fetch_failure_isolation(client, monkeypatch):
     assert res.get_json() == {
         "labels": ["2026-08-28", "2026-08-31"],
         "values": [1100.0, 1200.0],   # AAPL only; BAD contributes 0
+        # COST still counts BAD's 10@100 — money paid is a fact even when
+        # a dead ticker can't be priced (the route's documented divergence:
+        # cost side = stored facts, value side = prices).
+        "costs": [2000.0, 2000.0],
     }

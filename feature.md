@@ -1,59 +1,142 @@
-# Feature: Closed sales collapsed by default; Realized to date always visible
+# Feature: Cost basis on the portfolio chart (hover tooltip + dashed line)
 
 ## Status
-Implemented; FULL suite green (466 passed). NEXT STEP: user GUI check of
-the collapsible Closed sales card, then commit gate on explicit yes.
+Implemented. FULL suite green (476 passed). NEXT STEP: user GUI check of
+the dashboard chart (hover shows Value / Cost Basis / Gain in the tooltip
++ a faint dashed cost line that appears ONLY while hovering and vanishes
+on mouse-out; the y-axis never reflows; stock page chart unchanged), then
+commit gate on explicit yes.
 
-## Decision
-The Closed sales card's table ships COLLAPSED on every page load; the card
-header — "Closed sales" + "Realized to date: X" — stays fully visible, so
-the realized-to-date total is always on screen. Clicking anywhere on the
-header toggles the table, with a right-pointing caret that rotates when
-expanded (the ledger-group-row visual language).
-- NO persistence: every load starts collapsed (explicit user choice).
-- Backend untouched: `refreshClosedSales()` still fetches + renders every
-  60s regardless of collapsed state; collapsing is pure visibility, so
-  expanding always reveals freshly-fetched rows instantly.
-- A11y: the header is `role="button"`, `tabindex="0"`, `aria-expanded` (JS
-  keeps it in sync), Enter/Space keyboard parity (sortable-`<th>` precedent).
+NOTE (post-implementation refinement): the dashed cost line is a hover
+DECORATION, not a Chart.js dataset — drawn by the `costLine` plugin in
+`afterDatasetsDraw` only while the tooltip is active. A real dataset was
+tried first but toggling its `hidden` recomputed the y-axis on every
+mouse-in/out (the value line jumped under the cursor). The decoration
+keeps the axis sized to the value line only.
+
+## The idea
+The dashboard's value chart hover currently shows only the portfolio value
+at each bar. Add the cost basis (netted contributions) at that same point,
+so the hover answers "what did I pay vs what is it worth — and by how
+much?" — i.e. the portfolio's gain-to-date AT ANY HISTORICAL MOMENT.
+
+Three user decisions (locked):
+1. **Tooltip + faint dashed second line** — cost basis is also plotted
+   (dashed, muted), not just tooltip text.
+2. **Netted cost basis** — buys paid minus sells recouped, the SAME
+   definition as `/api/portfolio/summary`'s `cost_basis` (app.py:544).
+   Value − cost at any label = blended realized+unrealized gain to that
+   date, so the tooltip reconciles with the summary strip's total return.
+3. **Third tooltip line "Gain"** — value − cost, green/red by sign.
+
+## Why it's cheap (the design insight)
+`portfolio_history` (app.py:238) already walks the ledger forward label by
+label maintaining `net_qty`. Cost basis is FROZEN LEDGER MATH —
+`Σ ±(price × qty × fx_rate)`, no quotes, no network — so a second
+accumulator (`net_cost`) folds into the SAME walk for free. No new
+endpoint, no new caching, no PERIOD_MAP changes, no template changes,
+no db changes.
 
 ## Test plan (FIRST — must fail until implemented)
-New file `tests/test_closed_sales_collapse.py`:
-1. `test_ledger_ships_closed_sales_collapsed_by_default` — rendered
-   `/ledger` carries the closed-sales table wrapper with the `hidden`
-   attribute (`id="closed-sales-wrap"`), i.e. collapsed-by-default lives in
-   HTML, no boot JS required.
-2. `test_ledger_ships_closed_sales_toggle_header` — the header carries the
-   toggle hooks: `id="closed-sales-toggle"`, `role="button"`,
-   `aria-expanded="false"`, `tabindex="0"`.
-3. `test_realized_total_always_visible` — `id="realized-total"` renders and
-   sits BEFORE the hidden wrapper in the HTML (order assertion: total is in
-   the always-visible header, never inside the collapsible region).
-4. `test_ledger_js_wires_closed_sales_toggle` — ledger.js reads
-   `#closed-sales-toggle` and `#closed-sales-wrap`, toggles `wrapper.hidden`
-   and `.open`, updates `aria-expanded`, and handles Enter/Space.
-5. `test_closed_sales_toggle_css` — style.css has the caret rotate rule and
-   pointer cursor for `.closed-sales-toggle`.
 
-Existing locks stay valid: `closed-sales-body`, the 8 `data-cs-col` hooks,
-and `realized-total` still render (hidden ≠ removed).
+### A. Update existing exact-shape assertions (portfolio history gains `costs`)
+Every portfolio-history reply now carries THREE keys, so these exact-shape
+asserts gain `"costs"`:
+- `tests/test_routes.py:575` (empty ledger)
+- `tests/test_routes.py:654`
+- `tests/test_routes.py:831`
+- `tests/test_chart_speed.py:319` (5D intraday-with-buys shape)
+- `tests/test_chart_speed.py:382` (3M)
+- `tests/test_chart_speed.py:425` (5Y)
+NOT touched: `tests/test_stock.py:196` — the STOCK history endpoint keeps
+`{labels, values}` (its page has no cost line; this stays the lock proving
+the shared chart factory degrades cleanly).
+
+### B. New file `tests/test_history_costs.py`
+1. `test_history_costs_empty_ledger` — empty ledger →
+   `{"labels": [], "values": [], "costs": []}`.
+2. `test_costs_constant_between_buys` — CAD buy 10 @ 100; closes 100→110→120:
+   `values` move, `costs` stays `[1000.0, 1000.0, 1000.0]` (cost is what
+   was PAID, not what it's worth).
+3. `test_sell_nets_cost_basis` — buy 10 @ 100 (cost 1000), sell 4 @ 120:
+   from the sell's label on, cost = 1000 − 480 = **520** (sells subtract
+   what they recouped — summary-strip parity).
+4. `test_usd_cost_uses_stored_fx_not_live` — THE differentiator. USD row
+   with stored `fx_rate=1.4`, live `USDCAD=1.5`:
+   cost = 10 × 100 × **1.4 = 1400** (frozen fact), while the value side
+   uses the LIVE rate (10 × close × 1.5). Locks that the two sides
+   deliberately use different rates (value = live, cost = stored).
+5. `test_null_fx_usd_row_falls_back_to_live_rate` — USD row with
+   `fx_rate=None` (pre-feature row) → cost converts at the LIVE rate,
+   the documented per-request fallback.
+6. `test_null_fx_usd_row_live_rate_down_contributes_zero` — USD row with
+   `fx_rate=None` AND no USDCAD answer → that row contributes 0 to cost
+   (never a fake 1:1), same honesty rule as the value side.
+7. `test_oversell_negative_cost_is_honest` — buy 5 @ 100 (500), sell
+   10 @ 120: netted cost goes **−700** from the sell on. A short's
+   "contributions" are negative by the netted definition (matches
+   test_portfolio_summary's negative-cost-basis semantics); no clamping.
+8. `test_intraday_1d_walked_in_cost_applies_at_first_bar` — 1D period:
+   a buy from a PAST day + today's buy both fold into `costs` at today's
+   FIRST bar, then cost stays flat for the rest of the day (mirrors the
+   value branch's `today_applied` semantics).
+9. `test_saturday_buy_applies_cost_next_trading_label` — a buy dated a
+   non-trading day folds its cost at the NEXT trading bar (same
+   transaction-pointer rule the qty fold uses — parity lock).
+
+No pytest for the JS half (house rule: JS is GUI-gated).
 
 ## Implementation (after tests exist and fail)
-1. `templates/ledger.html` — closed-sales card:
-   - header: `id="closed-sales-toggle"` `role="button"` `tabindex="0"`
-     `aria-expanded="false"`; `.caret` span with inline right-chevron SVG
-     (template icon precedent) inside the `<h3>`.
-   - `.table-wrap`: `id="closed-sales-wrap"` + `hidden` attribute.
-2. `static/js/ledger.js` (CLOSED SALES section) — grab toggle + wrap;
-   click handler toggles `wrap.hidden`, `.open` on header, `aria-expanded`;
-   keydown handler for Enter/Space.
-3. `static/style.css` — `.closed-sales-toggle` cursor: pointer + subtle
-   hover tint; `.closed-sales-toggle .caret` rotate-on-`.open` (mirrors
-   `.ledger-group`).
+
+### 1. `app.py` — `portfolio_history` (~30 LOC)
+- New `net_cost` dict alongside `net_qty`, folded in BOTH transaction
+  branches (daily `while tx_index` loop AND the intraday
+  `today_applied` first-bar block):
+  `sign × price × qty × rate`, where rate =
+  - USD + stored `fx_rate` → that stored rate (frozen fact)
+  - USD + `fx_rate is None` → `live_rate` (already fetched when any USD
+    ticker exists); if `live_rate is None` → 0
+  - CAD → 1.0 (rows store exactly that)
+  - any other currency → skip (0), same rule as the value side
+- Per label: `costs.append(sum(net_cost.values()))` — same length as
+  `values` by construction (flat between trades, steps at each tx).
+- The three early-return `jsonify`s (empty ledger, intraday-future tx,
+  all-labels-trimmed) gain `"costs": []`; final return gains `"costs"`.
+- Comment to leave in code (permanent rationale): the cost side uses each
+  transaction's STORED fx_rate while the value side uses the flat live
+  rate — deliberate, mirroring the summary strip (value = a potential
+  sell at today's rate; past costs = frozen facts). Dead tickers: value
+  freezes at last close / contributes 0, cost stays a ledger fact —
+  consistent with the route's "the ledger is the truth" stance.
+
+### 2. `static/js/common.js` — `setupTimeframeChart` (~35 LOC)
+- Second dataset at chart creation: `data: []`, `label: "Cost Basis (CAD)"`,
+  `borderColor` scriptable (reads `--text-secondary` CSS var per draw so
+  theme flips stay correct), `borderDash: [5, 3]`, `borderWidth: 1`,
+  `fill: false`, `pointRadius: 0`.
+- `let lastCosts = null;` — set in `refresh()`:
+  `lastCosts = Array.isArray(data.costs) ? data.costs : null;`
+  `chart.data.datasets[1].data = lastCosts ?? [];` → the STOCK page's
+  endpoint sends no `costs`, so its second dataset stays empty: nothing
+  drawn, no scale effect, no tooltip item (mode "index" only emits items
+  for datasets with data at that index) → stock page pixel-identical.
+- Tooltip rework (shared factory, both pages):
+  - `label(item)` → `` `${item.dataset.label}: ${formatPrice(item.parsed.y)}` ``
+    — dataset label already differs per page ("Portfolio Value (CAD)" vs
+    the stock page's own label), so no new config key.
+  - `footer(items)` → when `lastCosts` exists at `items[0].dataIndex`:
+    `Gain: $X` where X = value − cost; `footerColor` scriptable by sign
+    (green/red). Returns nothing on the stock page.
+- Price-diff measuring stays pinned to `datasets[0]` (the VALUE line) —
+  add a comment; measurement semantics deliberately unchanged.
+- `displayColors: false` stays; text prefixes distinguish the lines.
 
 ## Notes
-- Collapsed state is HTML-default; JS never resets at boot.
-- No effect on mobile card-mode CSS (hidden wrapper is display:none
-  absolutely; the header renders normally at every width).
-- Gates after implementation: full `python -m pytest` green → user GUI
-  check → commit only on explicit yes.
+- Ledger column counts, PERIOD_MAP, importer, realized replay: untouched.
+- Privacy: chart tooltips already show raw numbers by design; the cost
+  line adds no new category of exposure. No masking work.
+- Backend sends raw floats; formatting/pos-neg coloring stays
+  frontend-only (existing contract).
+- Gates after implementation: FULL `python -m pytest` green → user GUI
+  check (dashboard hover shows 3 lines + dashed line renders; stock page
+  unchanged) → commit only on explicit yes.

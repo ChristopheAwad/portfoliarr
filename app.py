@@ -275,7 +275,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
     if not transactions:
-        return jsonify({"labels": [], "values": []})
+        return jsonify({"labels": [], "values": [], "costs": []})
 
     # Fetch each ticker's price history once — but IN PARALLEL. The
     # serial version paid "sum of every Yahoo call" before the chart
@@ -407,20 +407,15 @@ Algorithm: walk every trading day in the range forward, keeping a
     first_tx_date = transactions[0]["transaction_date"]
     if is_intraday:
         if first_tx_date > label_date_today:
-            return jsonify({"labels": [], "values": []})
+            return jsonify({"labels": [], "values": [], "costs": []})
     else:
         labels = [label for label in labels if label >= first_tx_date]
         if not labels:
             # Every fetched bar predates the first logged investment —
             # the live case being a future-dated transaction vs. the
             # period's fixed window. Nothing plottable, not an error.
-            return jsonify({"labels": [], "values": []})
+            return jsonify({"labels": [], "values": [], "costs": []})
 
-    # Walk each label forward, maintaining quantity per ticker. This is
-    # the heart of the chart: buying shares must push the line up from
-    # that point on; selling must pull it down. We only add/sell, never
-    # average cost — that (more nuanced) math is a later feature.
-    #
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
     # user logs a "Saturday" buy). So we use a POINTER into the
@@ -428,9 +423,50 @@ Algorithm: walk every trading day in the range forward, keeping a
     # transaction whose date is on-or-before it that we haven't applied
     # yet. A Saturday buy therefore lands on the NEXT trading day's bar,
     # which is the honest approximation available to us.
+    #
+    # Walk each label forward, maintaining quantity per ticker. This is
+    # the heart of the chart: buying shares must push the line up from
+    # that point on; selling must pull it down. We only add/sell, never
+    # average cost — that (more nuanced) math is a later feature.
+    #
+    # Alongside quantity we fold a COST accumulator — the chart's hover
+    # shows what was PAID at each point (netted cost basis), not just
+    # what it's worth. The rule mirrors /api/portfolio/summary (app.py):
+    # a buy adds what was paid, a sell subtracts what was recouped, and
+    # the per-transaction rate is the one true divergence from the value
+    # side by design:
+    #   VALUE side  → the FLAT LIVE rate (a potential sell today).
+    #   COST side   → each transaction's STORED fx_rate (a frozen fact,
+    #                 captured at its own date; USD rows with a NULL rate
+    #                 — pre-feature rows — fall back to the live rate, 0
+    #                 when even that is unavailable, never a fake 1:1).
+    #   Dead/delisted tickers: their VALUE freezes at the last close or
+    #   contributes 0 (above), but their COST stays a ledger fact — money
+    #   genuinely paid is real regardless of pricing. The gap the tooltip
+    #   shows is therefore the honest, blended gain-to-date.
+    # The cost side needs no network — it is all stored facts, so it
+    # rides this existing walk for free.
+    def tx_cad_cost(tx):
+        """This transaction's CAD cost contribution (negative for a sell
+        = money recouped). CAD rows carry rate 1.0; unsupported
+        currencies contribute 0, the same exclusion the value side
+        applies, so the line never mints a currency that doesn't exist."""
+        if tx["currency"] == "CAD":
+            rate = 1.0
+        elif tx["currency"] == "USD":
+            rate = tx["fx_rate"] if tx["fx_rate"] is not None else live_rate
+            if rate is None:
+                return 0.0   # unconvertible — contributes 0 (see above)
+        else:
+            return 0.0       # unsupported currency — contributes 0
+        sign = 1 if tx["transaction_type"] == "BUY" else -1
+        return sign * tx["price"] * tx["qty"] * rate
+
     net_qty = {}
+    net_cost = {}  # symbol → netted CAD cost, folded with net_qty below
     last_closes = {}  # symbol → its most recent known close (forward-fill)
     values = []
+    costs = []
     tx_index = 0        # next un-applied daily transaction (advances through
                         # the sorted list); unused in the intraday branch
     today_applied = False  # intraday: have today's transactions been applied?
@@ -451,6 +487,10 @@ Algorithm: walk every trading day in the range forward, keeping a
                             + (tx["qty"]
                                if tx["transaction_type"] == "BUY" else -tx["qty"])
                         )
+                        net_cost[tx["ticker"]] = (
+                            net_cost.get(tx["ticker"], 0.0)
+                            + tx_cad_cost(tx)
+                        )
         else:
             # Daily: transactions are sorted by date, so as long as the
             # transaction's date is still on-or-before this label, it
@@ -462,6 +502,9 @@ Algorithm: walk every trading day in the range forward, keeping a
                 tx_index += 1
                 net_qty[tx["ticker"]] = net_qty.get(tx["ticker"], 0) + (
                     tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
+                )
+                net_cost[tx["ticker"]] = (
+                    net_cost.get(tx["ticker"], 0.0) + tx_cad_cost(tx)
                 )
 
         # Sum each ticker's held quantity × its close price at this label
@@ -502,7 +545,14 @@ Algorithm: walk every trading day in the range forward, keeping a
             total += held * close
         values.append(total)
 
-    return jsonify({"labels": labels, "values": values})
+        # Netted cost basis at this LABEL = the sum of every ticker's
+        # fold so far. Flat between transactions, steps at each buy/sell
+        # — a buy pushes it up, a sell pulls it down. A short's cost can
+        # go negative (recouped more than paid); that's honest, matching
+        # the summary strip's own negative-cost-basis semantics.
+        costs.append(sum(net_cost.values()))
+
+    return jsonify({"labels": labels, "values": values, "costs": costs})
 
 
 # ---------------------------------------------------------------------------
