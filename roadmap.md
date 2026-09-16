@@ -87,7 +87,7 @@ The dashboard's value chart is money-weighted (cost-basis %), so deposits dilute
 
 **Files:** `app.py` (history route + pure helper), `static/js/common.js` (chart factory toggle), `static/js/main.js`, `templates/index.html`
 **Depends on:** Nothing
-**Status:** in progress — planned 2026-09-16; implementation paused at user gate
+**Status:** shipped 2026-09-16 (PR #45)
 
 ---
 
