@@ -48,7 +48,8 @@ const txDateInput = txForm.elements.date;
 // navbar uses, via the shared setupTickerSuggestions factory from
 // common.js (loaded before this file). Typing in the Ticker field shows
 // suggestions; clicking one (or pressing Enter while the dropdown shows)
-// fills the field with the picked symbol, so the user flows straight into
+// fills the field with the picked symbol AND prefills the latest price
+// (prefillPriceForTicker below), so the user flows straight into
 // Price → Qty → Log with a real Yahoo symbol, never a typo. The factory
 // hides the dropdown after a pick and keeps focus in the field.
 //
@@ -62,7 +63,59 @@ const txTickerResultsEl = document.querySelector("#tx-ticker-results");
 setupTickerSuggestions(txForm.elements.ticker, txTickerResultsEl,
     (symbol) => {
         txForm.elements.ticker.value = symbol;
+        prefillPriceForTicker();
     });
+
+// Prefill the Price field with the picked ticker's LATEST price, from the
+// lightweight /api/quote/<symbol> endpoint (the get_quote dict WITHOUT the
+// heavy name fetch — see app.py). Called from BOTH ways a ticker lands in
+// the field: the suggestion dropdown's onPick above, and the deep-link
+// prefill (/ledger?ticker=... from the stock page's "Log Transaction"
+// button). One helper, one behavior, so the two paths can never drift.
+//
+// Why native currency: the ledger stores native facts (price, currency)
+// and converts at display time — so the number dropped HERE must be what
+// the security actually trades at (Yahoo's quoted price), not a CAD
+// conversion. The submit route derives the currency from the same quote.
+//
+// Why clear first: a stale price from a PRIOR pick must never sit under a
+// different ticker. We clear at pick time and only fill on a successful,
+// still-current fetch — a failed fetch leaves the field EMPTY (honest;
+// the price input is required, so the user types it, and the backend
+// re-validates the ticker at submit anyway). Quiet on failure — a no-fill
+// needs no error toast, console.error is the audit trail.
+//
+// The stale-guard: while this fetch is in flight the user may have picked
+// a second ticker. Rare, but a SLOWER EARLIER reply must not overwrite a
+// newer pick — same rule as the search dropdown's stale-guard, applied to
+// the fill.
+function prefillPriceForTicker() {
+    const symbol = txForm.elements.ticker.value.trim().toUpperCase();
+    if (!symbol) return; // nothing picked — nothing to fetch
+
+    txForm.elements.price.value = ""; // never leave a prior pick's price
+    fetch(`/api/quote/${encodeURIComponent(symbol)}`)
+        .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        })
+        .then((quote) => {
+            if (txForm.elements.ticker.value.trim().toUpperCase() !== symbol) {
+                return; // stale reply — a newer pick superseded this one
+            }
+            // Keep the FULL quote price for the ledger (autofillPrice), and
+            // show only 2 decimals in the field — the app's "store accurate,
+            // paint 2 decimals" rule applied to the form. toFixed(2) is safe
+            // here: the value is a display, the accurate number rides in
+            // autofillPrice, and the submit handler picks it up untouched.
+            autofillPrice = quote.price;
+            priceEdited = false;
+            txForm.elements.price.value = quote.price.toFixed(2);
+        })
+        .catch((err) => {
+            console.error("price prefill failed:", err);
+        });
+}
 
 // The ledger's display currency, read fresh from the toggle on EVERY
 // fetch (not cached in a variable — the checkbox is the single source of
@@ -107,6 +160,30 @@ let editingTxId = null;
 // The freshest GET result. Action clicks (edit/delete) look rows up HERE,
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
+
+// The Price field's accurate-value state — the split between what the EYE
+// sees and what the LEDGER stores:
+//   autofillPrice — the FULL-precision price behind a cosmetic 2-decimal
+//                   display (a programmatic fill on the field, or the exact
+//                   stored fact in edit mode). null = no fill in effect.
+//   priceEdited   — true once the USER types in the Price field. Their
+//                   typed value then wins at submit; only an untouched
+//                   display falls back to autofillPrice.
+// Why the split at all: the ledger's permanent rule is "store the accurate
+// number, paint 2 decimals" — a filled-in price field must obey the same
+// rule. A `toFixed(2)` value dropped straight into the input would ROUND the
+// stored fact (a problem for multi-decimal instruments), and `input
+// type="number"` has no display-vs-value split of its own — so this is the
+// mechanism that gives the field one. Programmatic `.value` sets never fire
+// the `input` event, which is exactly why the listener below can be the
+// reliable "did the user touch it?" signal.
+let autofillPrice = null;
+let priceEdited = false;
+// The dirty signal: any real keystroke/editor gesture in the Price field
+// marks it edited. A refreshLedger() re-render never touches the form, so
+// this flag cannot be reset by the page's 60s poll — only by a programmatic
+// fill (which sets it back to false) or exitEditMode.
+txForm.elements.price.addEventListener("input", () => { priceEdited = true; });
 
 // Local "today" as YYYY-MM-DD — the date input's default value.
 // Why not new Date().toISOString().slice(0, 10)? toISOString() is UTC: in
@@ -650,7 +727,14 @@ function enterEditMode(tx) {
     // contract is exactly the 4 editable fields.
     txForm.elements.ticker.disabled = true;
     txForm.elements.date.value = tx.transaction_date;
-    txForm.elements.price.value = tx.price;
+    // The stored price is the EXACT fact — never a live quote (edit mode
+    // keeps the submitted value, as it always has). autofillPrice carries
+    // full precision so the later submit saves the untouched row unchanged;
+    // only the DISPLAY rounds to 2 decimals (the app's paint rule). Mark
+    // it untouched: the user hasn't edited this fill yet.
+    autofillPrice = tx.price;
+    priceEdited = false;
+    txForm.elements.price.value = tx.price.toFixed(2);
     txForm.elements.qty.value = tx.qty;
     txForm.elements.type.value = tx.transaction_type;
     txSubmitBtn.textContent = "Save";
@@ -671,6 +755,12 @@ function exitEditMode() {
     editingTxId = null;
     txForm.reset();
     txForm.elements.ticker.disabled = false;
+    // The accurate backing dies with the fill it described: after a reset
+    // the field is empty, so a leftover autofillPrice must never resurface
+    // on the NEXT row's submit (and priceEdited resets too — the empty
+    // field is a fresh, untouched slate).
+    autofillPrice = null;
+    priceEdited = false;
     txDateInput.value = todayLocalISO(); // reset() restores HTML defaults;
                                          // the JS-set date must be re-applied
     txSubmitBtn.textContent = "Log";
@@ -1175,10 +1265,20 @@ txForm.addEventListener("submit", async (event) => {
     // turns it into a plain object. Numbers arrive as STRINGS from inputs
     // — Number() converts them to real JSON numbers before shipping.
     const fields = Object.fromEntries(new FormData(txForm));
+    // The price question had a split: the field SHOWS 2 decimals of the
+    // accurate value (autofillPrice), but the ledger must store full
+    // precision. Resolution rule: if the user EDITED the field, their typed
+    // value is the fact; if it was left untouched after a programmatic
+    // fill (pick / deep-link / edit-mode), the exact autofillPrice is. When
+    // there was never a fill (autofillPrice null — the user typed a price
+    // without ever picking a ticker), the typed value is the fact.
+    const price = priceEdited
+        ? Number(fields.price)
+        : (autofillPrice ?? Number(fields.price));
     const body = {
         ticker: String(fields.ticker || "").trim().toUpperCase(),
         date: fields.date,
-        price: Number(fields.price),
+        price: price,
         qty: Number(fields.qty),
         type: fields.type,
     };
@@ -1258,6 +1358,7 @@ const prefillTicker =
     new URLSearchParams(window.location.search).get("ticker");
 if (prefillTicker) {
     txForm.elements.ticker.value = prefillTicker.trim().toUpperCase();
+    prefillPriceForTicker();
     txForm.elements.ticker.focus();
 }
 
