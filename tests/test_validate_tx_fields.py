@@ -164,6 +164,20 @@ def test_rejects_negative_price():
     assert "greater than 0" in error[0].get_json()["error"].lower()
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["price", "qty"])
+def test_rejects_non_finite_numbers(field, value):
+    """NaN and infinity are numbers to Python but not valid ledger facts."""
+    body = {
+        "date": "2026-01-01", "price": 10.0, "qty": 1.0, "type": "buy",
+    }
+    body[field] = value
+    fields, error = check(body)
+    assert fields is None
+    assert error[1] == 400
+    assert "finite" in error[0].get_json()["error"].lower()
+
+
 # ── Type failures ─────────────────────────────────────────────────────
 # Only BUY and SELL are ledger verbs.  Anything else — including missing
 # — must be rejected.  The database has a CHECK constraint as a second

@@ -35,21 +35,6 @@ import market_data
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def clean_caches():
-    """Empty the module-level caches before EVERY test in this file.
-
-    WHY: _cache and _name_cache are plain dicts that live as long as the
-    process — including across tests! Without this, a quote cached by an
-    earlier test would be served to a later one, and cache tests would
-    depend on execution ORDER (the classic isolation bug). autouse=True
-    means tests don't even have to ask for it.
-    """
-    market_data._cache.clear()
-    market_data._name_cache.clear()
-    yield  # the test runs here; nothing to clean up after
-
-
 @pytest.fixture
 def fake_yf(monkeypatch):
     """Replace market_data's `yf` with a controllable fake.
@@ -123,13 +108,13 @@ def test_get_quote_builds_payload_with_correct_math(fake_yf):
 
 def test_quote_within_ttl_is_served_from_cache(fake_yf):
     """Second call inside the 120s window must NOT re-fetch — the whole
-    point of the cache (Yahoo rate limits). Bonus proof: the cache serves
-    the SAME dict object, which is exactly why the watchlist route copies
-    it before decorating (see app.py's get_quote comment)."""
+    point of the cache (Yahoo rate limits). Callers receive independent
+    dicts so one route cannot mutate data seen by another."""
     first = market_data.get_quote("AAPL")
     second = market_data.get_quote("AAPL")
     assert fake_yf.calls == ["AAPL"]   # constructed once = one "network" call
-    assert first is second
+    assert first == second
+    assert first is not second
 
 
 def test_quote_after_ttl_expires_refetches(fake_yf):
@@ -170,6 +155,22 @@ def test_quote_rejects_nan_previous_close(fake_yf):
     fake_yf.state["fast_info"]["previousClose"] = float("nan")
     with pytest.raises(ValueError):
         market_data.get_quote("AAPL")
+
+
+@pytest.mark.parametrize("field", ["lastPrice", "previousClose"])
+@pytest.mark.parametrize("value", [float("inf"), float("-inf")])
+def test_quote_rejects_infinite_values(fake_yf, field, value):
+    fake_yf.state["fast_info"][field] = value
+    with pytest.raises(ValueError):
+        market_data.get_quote("AAPL")
+
+
+def test_quote_cache_returns_defensive_copies(fake_yf):
+    first = market_data.get_quote("AAPL")
+    first["price"] = -1
+    second = market_data.get_quote("AAPL")
+    assert second["price"] == 150.0
+    assert fake_yf.calls == ["AAPL"]
 
 
 # ── get_name: permanent cache ─────────────────────────────────────────
@@ -268,6 +269,18 @@ def test_history_all_nan_bars_yield_empty_dict(fake_yf):
     assert market_data.get_history("AAPL", "5D") == {}
 
 
+def test_history_skips_infinite_close_bars(fake_yf):
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [100.0, float("inf"), float("-inf"), 110.0]},
+        index=pd.to_datetime([
+            "2026-08-28", "2026-08-31", "2026-09-01", "2026-09-02",
+        ]),
+    )
+    assert market_data.get_history("AAPL", "1M") == {
+        "2026-08-28": 100.0, "2026-09-02": 110.0,
+    }
+
+
 def test_history_empty_dataframe_returns_empty_dict(fake_yf):
     """A truly empty DataFrame (zero rows from yfinance — a delisted
     ticker, a Yahoo hiccup, or a period with no data) returns {} without
@@ -345,6 +358,23 @@ def test_get_stats_missing_fields_become_none(fake_yf):
                 "fifty_day_average", "two_hundred_day_average", "avg_volume",
                 "target_price", "recommendation", "sector", "industry"):
         assert stats[key] is None
+
+
+@pytest.mark.parametrize(
+    "provider_key,result_key",
+    [
+        ("open", "open"),
+        ("regularMarketPreviousClose", "prev_close"),
+        ("volume", "volume"),
+        ("marketCap", "market_cap"),
+        ("trailingPE", "pe_ratio"),
+    ],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_get_stats_non_finite_numbers_become_none(
+        fake_yf, provider_key, result_key, value):
+    fake_yf.state["info"] = {provider_key: value}
+    assert market_data.get_stats("AAPL")[result_key] is None
 
 
 def test_get_stats_prev_close_falls_back_to_alt_spelling(fake_yf):
@@ -447,6 +477,17 @@ def test_fx_rate_on_raises_when_no_bar_covers_the_date(fake_yf):
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": [1.398]},
         index=pd.to_datetime(["2026-09-08"]),   # strictly AFTER the date
+    )
+    with pytest.raises(ValueError):
+        market_data.get_fx_rate_on("USD", "CAD", "2026-08-31")
+
+
+@pytest.mark.parametrize(
+    "rate", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0]
+)
+def test_fx_rate_on_rejects_invalid_rates(fake_yf, rate):
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [rate]}, index=pd.to_datetime(["2026-08-31"]),
     )
     with pytest.raises(ValueError):
         market_data.get_fx_rate_on("USD", "CAD", "2026-08-31")

@@ -55,21 +55,6 @@ def make_profile(sector=None, country=None, quote_type=None,
     }
 
 
-@pytest.fixture(autouse=True)
-def clean_caches():
-    """Empty market_data's module-level caches before EVERY test in this
-    file — same isolation rule as test_market_data.py's clean_caches."""
-    market_data._cache.clear()
-    market_data._name_cache.clear()
-    if hasattr(market_data, "_profile_cache"):
-        market_data._profile_cache.clear()
-    yield
-    market_data._cache.clear()
-    market_data._name_cache.clear()
-    if hasattr(market_data, "_profile_cache"):
-        market_data._profile_cache.clear()
-
-
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     """Point the db layer at a throwaway SQLite file for one test."""
@@ -189,6 +174,23 @@ def test_get_profile_empty_profile_raises(fake_yf):
     fake_yf.state["info"] = {}
     with pytest.raises(ValueError, match="no profile data"):
         market_data.get_profile("DEAD")
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_get_profile_non_finite_market_cap_becomes_none(fake_yf, value):
+    fake_yf.state["info"] = {"sector": "Technology", "marketCap": value}
+    profile = market_data.get_profile("AAPL")
+    assert profile["market_cap"] is None
+
+
+def test_profile_cache_returns_defensive_copies(fake_yf):
+    fake_yf.state["info"] = {
+        "sector": "Technology", "marketCap": 100_000_000,
+    }
+    first = market_data.get_profile("AAPL")
+    first["sector"] = "Mutated"
+    second = market_data.get_profile("AAPL")
+    assert second["sector"] == "Technology"
 
 
 # ── Allocation route: validation ────────────────────────────────────────

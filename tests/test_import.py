@@ -158,6 +158,18 @@ def test_parse_rejects_non_positive_numbers(price, qty):
     assert row["error"] is not None
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize("column", ["price", "qty"])
+def test_parse_rejects_non_finite_numbers(column, value):
+    """float() accepts these spellings, but JSON and SQLite facts must not."""
+    price, qty = (value, "1") if column == "price" else ("10", value)
+    (row,) = app_module.parse_import_text(
+        f"CM\t16 Mar 2026\t{price}\t{qty}"
+    )
+    assert row["error"] is not None
+    assert "finite" in row["error"].lower()
+
+
 # ── Preview route ─────────────────────────────────────────────────────
 
 def test_preview_reports_rows_and_derived_currency(client, fake_market):
@@ -303,6 +315,38 @@ def test_commit_200_even_when_nothing_qualifies(client, fake_market):
     assert body["imported"] == 0
     assert len(body["failed"]) == 1
     assert db.get_transactions() == []
+
+
+def test_commit_database_failure_is_reported_per_row(
+        client, fake_market, monkeypatch):
+    """One failed insert must not abort valid neighboring import rows."""
+    text = (
+        "AAPL\t16 Mar 2026\t100\t1\n"
+        "MSFT\t16 Mar 2026\t200\t1\n"
+        "NVDA\t16 Mar 2026\t300\t1"
+    )
+    for symbol in ("AAPL", "MSFT", "NVDA"):
+        fake_market.quotes[symbol] = make_quote(symbol, currency="CAD")
+
+    original_add = db.add_transaction
+    calls = 0
+
+    def fail_second(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated write failure")
+        return original_add(*args, **kwargs)
+
+    monkeypatch.setattr(db, "add_transaction", fail_second)
+    res = client.post("/api/transactions/import/commit", json={"text": text})
+    body = res.get_json()
+    assert res.status_code == 200
+    assert body["imported"] == 2
+    assert len(body["failed"]) == 1
+    assert body["failed"][0]["ticker"] == "MSFT"
+    assert body["failed"][0]["error"] == "database write failed"
+    assert {tx["ticker"] for tx in db.get_transactions()} == {"AAPL", "NVDA"}
 
 
 def test_commit_recommitting_duplicates_by_design(client, fake_market):

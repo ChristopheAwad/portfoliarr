@@ -23,6 +23,7 @@
 # Indentation-sensitive asserts below are anchored on exact lines, which
 # doubles as a basic syntax check.
 
+import json
 import re
 from pathlib import Path
 
@@ -95,6 +96,19 @@ def test_dockerfile_runs_gunicorn_not_dev_server():
     assert dockerfile.rstrip().splitlines()[-1].startswith("CMD"), (
         "CMD must be the last instruction so the entrypoint execs it"
     )
+
+
+def test_dockerfile_locks_single_process_eight_thread_contract():
+    """Caches and SQLite require one Gunicorn process with eight threads."""
+    dockerfile = _read("Dockerfile")
+    cmd_line = next(
+        line for line in dockerfile.splitlines() if line.startswith("CMD ")
+    )
+    command = json.loads(cmd_line.removeprefix("CMD "))
+    assert command == [
+        "gunicorn", "--bind", "0.0.0.0:5000",
+        "--workers", "1", "--threads", "8", "app:app",
+    ]
 
 
 def test_dockerfile_installs_gosu_and_wires_entrypoint():
@@ -195,6 +209,14 @@ def test_dockerignore_excludes_dev_files():
         assert entry in dockerignore, f".dockerignore must exclude {entry}"
 
 
+def test_dockerignore_excludes_android_project():
+    """The Python production image must not contain Android build inputs."""
+    dockerignore = _read(".dockerignore")
+    assert re.search(r"(?m)^android/\s*$", dockerignore), (
+        ".dockerignore must exclude the android/ project"
+    )
+
+
 # ---------------------------------------------------------------------------
 # requirements.txt
 # ---------------------------------------------------------------------------
@@ -272,6 +294,22 @@ def test_workflow_tags_latest_and_sha():
     workflow = _read(".github/workflows/docker.yml")
     assert f"{IMAGE}:latest" in workflow, "missing :latest tag"
     assert "github.sha" in workflow, "missing the git-SHA tag"
+
+
+def test_workflow_smoke_tests_exact_image_before_push():
+    """CI must run the built image successfully before publishing it."""
+    workflow = _read(".github/workflows/docker.yml")
+    smoke_at = workflow.index("Smoke test image")
+    push_at = workflow.index("Push tested image")
+    assert smoke_at < push_at
+    for contract in (
+        "docker run", "/preferences", "id -u", "/app/instance",
+        "docker restart", "docker stop",
+    ):
+        assert contract in workflow, f"smoke test must include {contract}"
+    assert "load: true" in workflow, (
+        "the image under test must be loaded into Docker"
+    )
 
 
 # ---------------------------------------------------------------------------

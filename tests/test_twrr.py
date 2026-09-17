@@ -330,6 +330,23 @@ def test_all_unpriced_nulls_index(client, monkeypatch):
     assert body["twrr_pct"] is None
 
 
+def test_all_unpriced_intraday_returns_empty_shape(client, monkeypatch):
+    """The 1D path must handle an empty label union just like daily paths."""
+    seed_transaction(ticker="AAPL", date=date.today().isoformat(), qty=10,
+                     currency="CAD")
+
+    def fake_get_history(symbol, period):
+        raise ValueError("delisted (fake)")
+
+    monkeypatch.setattr(app_module, "get_history", fake_get_history)
+    res = client.get("/api/portfolio/history?period=1D")
+    assert res.status_code == 200
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        "index_values": None, "twrr_pct": None,
+    }
+
+
 # ── Intraday (1D) degenerates naturally ───────────────────────────────
 
 def test_1d_degenerates_to_simple_return(client, fake_market):

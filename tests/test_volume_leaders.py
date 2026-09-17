@@ -35,13 +35,6 @@ def _make_info(name, price, prev_close, volume, sector="Technology"):
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def clean_volume_cache():
-    """Empty the volume cache before EVERY test."""
-    market_data._volume_cache.clear()
-    yield
-
-
 @pytest.fixture
 def fake_yf_for_volume(monkeypatch):
     """Replace yfinance with a fake that returns canned info per symbol.
@@ -156,13 +149,17 @@ def test_leader_math(fake_yf_for_volume):
 # ── get_volume_leaders: caching ────────────────────────────────────────
 
 def test_second_call_within_ttl_returns_cached(fake_yf_for_volume):
-    """Volume data changes slowly — second call must NOT re-fetch."""
+    """Volume data is cached, but callers receive independent objects."""
     fake_yf_for_volume.info_data.update({
         "AAPL": _make_info("Apple", 190.0, 188.0, 100_000_000),
     })
     first = market_data.get_volume_leaders()
     second = market_data.get_volume_leaders()
-    assert first is second  # same object = served from cache
+    assert first == second
+    assert first is not second
+    assert len(fake_yf_for_volume.calls) == sum(
+        len(symbols) for symbols in market_data.SECTOR_LEADERS.values()
+    )
 
 
 def test_cache_expires_after_ttl(fake_yf_for_volume):
@@ -237,6 +234,48 @@ def test_missing_volume_field_skips_ticker(fake_yf_for_volume):
     })
     leaders = market_data.get_volume_leaders()
     assert [l["symbol"] for l in leaders] == ["NVDA"]
+
+
+def test_unusable_high_volume_candidate_falls_back_to_sibling(
+        fake_yf_for_volume):
+    """Validate the complete candidate before selecting a sector winner."""
+    fake_yf_for_volume.info_data.update({
+        "AAPL": _make_info("Apple", None, 188.0, 900_000_000),
+        "NVDA": _make_info("NVIDIA", 120.0, 118.0, 500_000_000),
+    })
+    leaders = market_data.get_volume_leaders()
+    assert [leader["symbol"] for leader in leaders] == ["NVDA"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("volume", "many"),
+        ("volume", float("inf")),
+        ("regularMarketPrice", float("nan")),
+        ("regularMarketPreviousClose", float("-inf")),
+    ],
+)
+def test_malformed_candidate_does_not_abort_other_sectors(
+        fake_yf_for_volume, field, value):
+    bad = _make_info("Apple", 190.0, 188.0, 100_000_000)
+    bad[field] = value
+    fake_yf_for_volume.info_data.update({
+        "AAPL": bad,
+        "XOM": _make_info("Exxon", 110.0, 108.0, 300_000_000),
+    })
+    leaders = market_data.get_volume_leaders()
+    assert [leader["symbol"] for leader in leaders] == ["XOM"]
+
+
+def test_volume_cache_returns_defensive_copies(fake_yf_for_volume):
+    fake_yf_for_volume.info_data["AAPL"] = _make_info(
+        "Apple", 190.0, 188.0, 100_000_000
+    )
+    first = market_data.get_volume_leaders()
+    first[0]["price"] = -1
+    second = market_data.get_volume_leaders()
+    assert second[0]["price"] == 190.0
 
 
 # ── Route tests ────────────────────────────────────────────────────────
