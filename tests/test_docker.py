@@ -310,6 +310,9 @@ def test_workflow_smoke_tests_exact_image_before_push():
     assert "load: true" in workflow, (
         "the image under test must be loaded into Docker"
     )
+    assert workflow.count('docker port "$container" 5000/tcp') == 2, (
+        "the random host port must be rediscovered after container restart"
+    )
 
 
 # ---------------------------------------------------------------------------
