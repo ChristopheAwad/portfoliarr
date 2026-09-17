@@ -303,7 +303,7 @@ def test_workflow_smoke_tests_exact_image_before_push():
     push_at = workflow.index("Push tested image")
     assert smoke_at < push_at
     for contract in (
-        "docker run", "/preferences", "id -u", "/app/instance",
+        "docker run", "/preferences", "/proc/1/status", "/app/instance",
         "docker restart", "docker stop",
     ):
         assert contract in workflow, f"smoke test must include {contract}"

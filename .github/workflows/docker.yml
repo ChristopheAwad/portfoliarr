@@ -94,7 +94,11 @@ jobs:
             sleep 1
           done
 
-          test "$(docker exec "$container" id -u)" = "1000"
+          pid_one_uid=$(docker exec "$container" sh -c \
+            'while read -r key real rest; do
+               [ "$key" = "Uid:" ] && { echo "$real"; break; }
+             done < /proc/1/status')
+          test "$pid_one_uid" = "1000"
           docker exec "$container" touch /app/instance/.smoke-persisted
 
           docker restart "$container"
