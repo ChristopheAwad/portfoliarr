@@ -1599,15 +1599,18 @@ function setupTimeframeChart(
                             if (m) {
                                 const p = { y: +m[1], mo: +m[2], d: +m[3] };
                                 // If the series spans two calendar years,
-                                // show the year instead of the day — mirrors
-                                // the x-axis tick logic in buildXTickLabels.
+                                // add the year without dropping the exact day.
+                                // The sparse x-axis may show only "Sep 2025",
+                                // but a tooltip identifies one actual bar.
                                 const first = lastLabels.find(
                                     (l) => DATE_RE.test(l));
                                 const last = lastLabels.findLast(
                                     (l) => DATE_RE.test(l));
                                 const spansYears = first && last
                                     && first.slice(0, 4) !== last.slice(0, 4);
-                                return spansYears ? monthYear(p) : monthDay(p);
+                                return spansYears
+                                    ? `${monthDay(p)}, ${p.y}`
+                                    : monthDay(p);
                             }
                             return raw;
                         },
