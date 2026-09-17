@@ -99,6 +99,20 @@ Edge-case refinement to #13's mirror rule (found in PR #45's review round 2, non
 
 ---
 
+### 15. Allocation Carousel Pagination
+Turn the dashboard's existing six-view allocation donut switcher into a clear
+carousel: add clickable pagination dots, a current/total counter, accessible
+active-page state, and a subtle reduced-motion-safe crossfade. Keep the current
+single-canvas architecture, arrows, touch swipe, and saved position. Also load
+a restored non-ticker view immediately and prevent stale async responses from
+painting after rapid navigation.
+
+**Files:** `templates/index.html`, `static/js/main.js`, `static/style.css`, `tests/test_allocation_ui.py`
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -140,8 +154,9 @@ Tier 2 (all independent of each other):
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on stock detail page version
   13. TWR Performance Chart ──────────── independent (its rebase-to-100
-                                          machinery makes #7 cheaper)
+                                           machinery makes #7 cheaper)
   14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
+  15. Allocation Carousel Pagination ─── independent frontend quick extend
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -165,6 +180,7 @@ For maximum compounding value:
 9. **Dashboard Period Return** → extends stock page pattern to dashboard
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
+15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

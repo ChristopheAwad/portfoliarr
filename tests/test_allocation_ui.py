@@ -36,6 +36,11 @@ def _read_template(relpath: str) -> str:
     return path.read_text()
 
 
+def _read_css() -> str:
+    """Read the shared stylesheet for carousel visual-state contracts."""
+    return (ROOT / "static/style.css").read_text()
+
+
 # ---------------------------------------------------------------------------
 # Template: donut card structure
 # ---------------------------------------------------------------------------
@@ -58,6 +63,17 @@ def test_excluded_note_element_exists():
     """The donut card must have a container for the excluded-tickers note."""
     html = _read_html(app.test_client())
     assert 'id="alloc-excluded"' in html
+
+
+def test_donut_card_has_pagination_and_position_counter():
+    """The carousel exposes both page dots and an explicit current/total."""
+    html = _read_html(app.test_client())
+    assert 'id="alloc-pagination"' in html
+    assert 'aria-label="Allocation views"' in html
+    assert 'id="alloc-dots"' in html
+    assert 'id="alloc-position"' in html
+    assert 'aria-live="polite"' in html
+    assert ">1 / 6<" in html
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +125,43 @@ def test_main_js_persists_dimension_to_localstorage():
     assert "allocationDimension" in src
 
 
+def test_main_js_builds_clickable_dots_from_allocation_views():
+    """Dots derive from the view source of truth and share navigation."""
+    src = _read_js("static/js/main.js")
+    assert "function buildAllocDots()" in src
+    assert "ALLOCATION_VIEWS.forEach" in src
+    assert 'dot.type = "button"' in src
+    assert "switchAllocView(index)" in src
+    assert "slide ${index + 1} of ${ALLOCATION_VIEWS.length}" in src
+
+
+def test_main_js_synchronizes_carousel_status():
+    """One sync path owns the label, counter, and active dot state."""
+    src = _read_js("static/js/main.js")
+    assert "function syncAllocCarousel()" in src
+    assert "allocPositionEl.textContent" in src
+    assert "allocDotsEl.querySelectorAll" in src
+    assert 'classList.toggle("active"' in src
+    assert 'toggleAttribute("aria-current"' in src
+    switch_body = src.split("function switchAllocView(newIndex)", 1)[1]
+    assert "syncAllocCarousel();" in switch_body.split("}", 1)[0]
+
+
+def test_saved_non_ticker_view_loads_on_startup():
+    """A restored dimension must not stay blank until the first poll."""
+    src = _read_js("static/js/main.js")
+    assert "function initializeAllocCarousel()" in src
+    assert "syncAllocCarousel();" in src
+    assert "fetchAllocDimension(view.key" in src
+
+
+def test_stale_allocation_response_cannot_replace_active_slide():
+    """Rapid navigation must ignore replies for a no-longer-active key."""
+    src = _read_js("static/js/main.js")
+    assert "isActiveAllocView(by)" in src
+    assert "if (isActiveAllocView(by))" in src
+
+
 # ---------------------------------------------------------------------------
 # JS: swipe wiring
 # ---------------------------------------------------------------------------
@@ -133,3 +186,33 @@ def test_poll_refreshes_active_dimension_only():
     # The allocation fetch should be conditional — only when a non-ticker
     # dimension is active.
     assert "/api/portfolio/allocation" in src
+
+
+def test_navigation_crossfade_respects_reduced_motion():
+    """Only navigation paints crossfade, and CSS disables reduced motion."""
+    src = _read_js("static/js/main.js")
+    css = _read_css()
+    assert "animateNextAllocationPaint" in src
+    assert 'classList.add("alloc-crossfade")' in src
+    assert ".alloc-crossfade" in css
+    assert "@keyframes alloc-crossfade" in css
+    reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+    assert ".alloc-crossfade" in reduced_motion
+
+
+def test_allocation_dots_have_active_hover_and_focus_states():
+    """Dots remain legible for mouse, keyboard, and active-page users."""
+    css = _read_css()
+    assert ".alloc-dot.active" in css
+    assert ".alloc-dot:hover" in css
+    assert ".alloc-dot:focus-visible" in css
+
+
+def test_inactive_allocation_dots_use_visible_theme_token():
+    """Inactive dots must not disappear through an undefined CSS variable."""
+    css = _read_css()
+    dot_rule = css.split(".alloc-dot {", 1)[1].split("}", 1)[0]
+    hover_rule = css.split(".alloc-dot:hover {", 1)[1].split("}", 1)[0]
+    assert "var(--border)" not in dot_rule
+    assert "background: var(--text-secondary);" in dot_rule
+    assert "background: var(--text-primary);" in hover_rule
