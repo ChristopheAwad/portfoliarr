@@ -26,6 +26,16 @@ def tooltip_options_body() -> str:
     return text[tooltip_at:callbacks_at]
 
 
+def tooltip_title_callback_body() -> str:
+    """Return the shared tooltip's title callback source."""
+    text = common_js()
+    title_at = text.find("title(items)", text.find("callbacks:"))
+    assert title_at != -1, "shared tooltip lost its title callback"
+    label_at = text.find("label(item)", title_at)
+    assert label_at != -1, "shared tooltip title callback lost its boundary"
+    return text[title_at:label_at]
+
+
 def test_opposite_positioner_pins_tooltip_to_far_edge():
     """The box must use the plot edge opposite the active crosshair."""
     js = common_js()
@@ -55,3 +65,14 @@ def test_shared_tooltip_uses_opposite_positioner_without_caret():
     assert "animations:" in body
     assert "numbers:" in body
     assert "duration: 0" in body
+
+
+def test_year_spanning_tooltip_keeps_exact_trading_date():
+    """Crossing New Year must not reduce a hovered daily bar to month/year.
+
+    The x-axis may use compact labels such as "Sep 2025", but the tooltip
+    identifies one actual price point and must retain its day as well.
+    """
+    body = tooltip_title_callback_body()
+    assert "monthYear(p)" not in body
+    assert "`${monthDay(p)}, ${p.y}`" in body
