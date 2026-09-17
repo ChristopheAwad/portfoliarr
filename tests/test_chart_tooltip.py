@@ -43,7 +43,15 @@ def test_opposite_positioner_is_registered():
 
 
 def test_shared_tooltip_uses_opposite_positioner_without_caret():
-    """Both shared line charts opt in and hide the disconnected caret."""
+    """Both line charts opt in, hide the caret, and jump between edges.
+
+    Chart.js otherwise animates numeric tooltip geometry for 400ms, which
+    would sweep the card across the crosshair whenever its target edge flips.
+    Opacity may still fade, but position and size must update immediately.
+    """
     body = tooltip_options_body()
     assert 'position: "opposite"' in body
     assert "caretSize: 0" in body
+    assert "animations:" in body
+    assert "numbers:" in body
+    assert "duration: 0" in body

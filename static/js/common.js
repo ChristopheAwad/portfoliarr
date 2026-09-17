@@ -1557,6 +1557,22 @@ function setupTimeframeChart(
                     // instead of at the hovered point — the crosshair already
                     // marks the point, so the card reads cleanly without it.
                     caretSize: 0,
+                    // Chart.js normally animates tooltip coordinates for
+                    // 400ms. Here that would drag the card ACROSS the plot
+                    // when the crosshair crosses the midpoint and the chosen
+                    // edge flips — briefly covering the exact line this
+                    // positioner exists to keep clear. Numeric geometry must
+                    // jump immediately; the separate opacity animation still
+                    // provides the normal fade in/out.
+                    animations: {
+                        numbers: {
+                            duration: 0,
+                            properties: [
+                                "x", "y", "width", "height",
+                                "caretX", "caretY",
+                            ],
+                        },
+                    },
                     displayColors: false,
                     // Fixed dark tooltip with white text — consistent contrast
                     // in both light and dark mode.
