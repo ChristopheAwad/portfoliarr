@@ -943,6 +943,84 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     return axisText;
 }
 
+// ---------------------------------------------------------------------------
+// CUSTOM TOOLTIP POSITIONER — "opposite".
+//
+// Chart.js's built-in positioners ("average", "nearest") only decide the
+// ANCHOR of the tooltip; the BOX is then aligned automatically right beside
+// that anchor. On a line chart the anchor IS the hovered point, so the box
+// ends up sitting on top of the crosshair/line — the exact spot the eye is
+// tracking. Shifting it one side or the other doesn't help: the line runs
+// horizontally, so it's covered whichever side the box takes.
+//
+// This positioner instead parks the box at the plot EDGE farthest from the
+// crosshair: a point in the left half gets its box pinned to the RIGHT edge,
+// a point in the right half to the LEFT edge. The tooltip and the vertical
+// hover line end up as far apart as the plot allows, with the box still on
+// the chart. It reads the ANCHOR (the active data point), never the pointer,
+// so the choice is stable: on dense 1D/5D series, where every pixel of mouse
+// travel changes the active bar, a pointer-keyed rule would flip constantly
+// and jitter. The side only flips when the crosshair crosses the plot's
+// midpoint — one clean jump per sweep.
+//
+// The crosshair is NOT moved by this: the crosshair plugin draws at
+// `active[0].element.x` (the real data point's x), independent of where the
+// tooltip anchor sits. So the vertical line stays glued to the point while
+// the readout lives at the far edge.
+//
+// Chart.js calls a positioner as `positioners[name].call(this, elements,
+// eventPosition)`, so `this` is the Tooltip. A returned xAlign / yAlign
+// overrides the built-in alignment (chart.js's Tooltip.update:
+// `Object.assign({}, position, size)`). xAlign names the box edge the anchor
+// sits on: "left" grows the box rightward from the anchor, "right" grows it
+// leftward. We set x at the chosen edge plus the matching xAlign, and keep
+// y = the point's y so the card sits at the hovered height; yAlign is left
+// unset so Chart.js still nudges the box top/bottom near the edges and keeps
+// it in bounds. The caret is suppressed by the tooltip options (caretSize 0),
+// because an arrow pointing from the far edge into empty space reads wrong.
+//
+// Registered once on the global Chart.Tooltip.positioners map (the documented
+// extension point) under the name "opposite"; only this factory's charts opt
+// in, so no other chart on any page is affected.
+// ---------------------------------------------------------------------------
+function oppositePositioner(items) {
+    if (!items.length) return false;
+    // Chart.js invokes positioners via `.call(this, ...)`, so `this` is the
+    // Tooltip — its `.chart` is how we reach the chart area's edges.
+    const chart = this.chart;
+    const { left, right } = chart.chartArea;
+    const midX = (left + right) / 2;
+
+    // Same anchor math as Chart.js's own "average" positioner: average every
+    // element that actually carries a value (a gap-filled / null point has
+    // none, and would otherwise drag the anchor off the line).
+    let x = 0;
+    let y = 0;
+    let count = 0;
+    for (const item of items) {
+        const el = item.element;
+        if (el && el.hasValue()) {
+            const pos = el.tooltipPosition();
+            x += pos.x;
+            y += pos.y;
+            count++;
+        }
+    }
+    if (count === 0) return false;
+    x /= count;
+    y /= count;
+
+    // Crosshair on the left half -> park the box at the RIGHT edge, growing
+    // leftward ("right"). Crosshair on the right half -> LEFT edge, growing
+    // rightward ("left"). y stays the point's height.
+    const crosshairLeft = x <= midX;
+    return {
+        x: crosshairLeft ? right : left,
+        y,
+        xAlign: crosshairLeft ? "right" : "left",
+    };
+}
+
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
       modeBar }
@@ -954,6 +1032,13 @@ function setupTimeframeChart(
         console.error("Chart.js failed to load from the CDN — chart skipped");
         return null;
     }
+
+    // Register the custom "opposite" tooltip positioner (defined above) on
+    // Chart.js's global positioner map. Done HERE, past the guard, so a CDN
+    // outage can't throw on a missing `Chart`; re-assigning on every call is
+    // idempotent and keeps the factory self-contained. The tooltip config
+    // below opts in with position: "opposite".
+    Chart.Tooltip.positioners.opposite = oppositePositioner;
 
     // Which way the CURRENT period moved — "up" (green) or "down" (red).
     // refresh() recomputes it from the data and BOTH presentational
@@ -1462,6 +1547,32 @@ function setupTimeframeChart(
                 // With only one dataset, the legend swatch adds nothing.
                 legend: { display: false },
                 tooltip: {
+                    // Custom positioner (registered above): park the box at
+                    // the plot edge farthest from the crosshair, so the
+                    // readout and the hover line stay as far apart as the
+                    // chart allows.
+                    position: "opposite",
+                    // Suppress the caret. The positioner anchors at the far
+                    // edge, so an arrow there would point into empty space
+                    // instead of at the hovered point — the crosshair already
+                    // marks the point, so the card reads cleanly without it.
+                    caretSize: 0,
+                    // Chart.js normally animates tooltip coordinates for
+                    // 400ms. Here that would drag the card ACROSS the plot
+                    // when the crosshair crosses the midpoint and the chosen
+                    // edge flips — briefly covering the exact line this
+                    // positioner exists to keep clear. Numeric geometry must
+                    // jump immediately; the separate opacity animation still
+                    // provides the normal fade in/out.
+                    animations: {
+                        numbers: {
+                            duration: 0,
+                            properties: [
+                                "x", "y", "width", "height",
+                                "caretX", "caretY",
+                            ],
+                        },
+                    },
                     displayColors: false,
                     // Fixed dark tooltip with white text — consistent contrast
                     // in both light and dark mode.
