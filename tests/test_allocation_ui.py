@@ -162,6 +162,15 @@ def test_stale_allocation_response_cannot_replace_active_slide():
     assert "if (isActiveAllocView(by))" in src
 
 
+def test_same_dimension_requests_only_accept_latest_response():
+    """An older request for the active key cannot overwrite a newer one."""
+    src = _read_js("static/js/main.js")
+    assert "const allocRequestGenerations = {};" in src
+    assert "allocRequestGenerations[by] = requestGeneration;" in src
+    assert "function isLatestAllocRequest(by, requestGeneration)" in src
+    assert src.count("isLatestAllocRequest(by, requestGeneration)") >= 3
+
+
 # ---------------------------------------------------------------------------
 # JS: swipe wiring
 # ---------------------------------------------------------------------------
@@ -208,11 +217,22 @@ def test_allocation_dots_have_active_hover_and_focus_states():
     assert ".alloc-dot:focus-visible" in css
 
 
+def test_allocation_dots_have_touch_friendly_hit_targets():
+    """The 7px marks sit inside buttons large enough to click and tap."""
+    css = _read_css()
+    dot_rule = css.split(".alloc-dot {", 1)[1].split("}", 1)[0]
+    marker_rule = css.split(".alloc-dot::before {", 1)[1].split("}", 1)[0]
+    assert "width: 24px;" in dot_rule
+    assert "height: 24px;" in dot_rule
+    assert "width: 7px;" in marker_rule
+    assert "height: 7px;" in marker_rule
+
+
 def test_inactive_allocation_dots_use_visible_theme_token():
     """Inactive dots must not disappear through an undefined CSS variable."""
     css = _read_css()
-    dot_rule = css.split(".alloc-dot {", 1)[1].split("}", 1)[0]
-    hover_rule = css.split(".alloc-dot:hover {", 1)[1].split("}", 1)[0]
-    assert "var(--border)" not in dot_rule
-    assert "background: var(--text-secondary);" in dot_rule
+    marker_rule = css.split(".alloc-dot::before {", 1)[1].split("}", 1)[0]
+    hover_rule = css.split(".alloc-dot:hover::before {", 1)[1].split("}", 1)[0]
+    assert "var(--border)" not in marker_rule
+    assert "background: var(--text-secondary);" in marker_rule
     assert "background: var(--text-primary);" in hover_rule

@@ -1,7 +1,7 @@
 # Feature: Allocation Carousel Pagination
 
 ## Status
-IMPLEMENTED — focused tests and the full 567-test suite pass. Browser GUI
+IMPLEMENTED — focused tests and the full 569-test suite pass. Browser GUI
 approved by the user; ready for the approved PR workflow. Roadmap entry: #15.
 
 ## Goal

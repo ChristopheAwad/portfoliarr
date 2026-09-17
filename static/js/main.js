@@ -844,6 +844,7 @@ try {
 // The ticker view (key null) uses the summary poll directly — no
 // cache entry needed.
 const allocCache = {};
+const allocRequestGenerations = {};
 const ALLOC_CACHE_TTL = REFRESH_MS; // refresh alongside the poll
 
 function allocCacheStale(key) {
@@ -885,6 +886,10 @@ function syncAllocCarousel() {
 
 function isActiveAllocView(by) {
     return ALLOCATION_VIEWS[allocViewIndex].key === by;
+}
+
+function isLatestAllocRequest(by, requestGeneration) {
+    return allocRequestGenerations[by] === requestGeneration;
 }
 
 function runAllocationCrossfade() {
@@ -934,17 +939,21 @@ async function fetchAllocDimension(by) {
         }
         return;
     }
+    const requestGeneration = (allocRequestGenerations[by] || 0) + 1;
+    allocRequestGenerations[by] = requestGeneration;
     try {
         const response = await fetch(
             `/api/portfolio/allocation?by=${encodeURIComponent(by)}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
+        if (!isLatestAllocRequest(by, requestGeneration)) return;
         allocCache[by] = { data, fetchedAt: Date.now() };
         if (isActiveAllocView(by)) {
             paintAllocation(data.slices, data.excluded);
         }
     } catch (err) {
+        if (!isLatestAllocRequest(by, requestGeneration)) return;
         console.error(`allocation fetch (${by}) failed:`, err);
         if (isActiveAllocView(by)) paintAllocation([], []);
     }

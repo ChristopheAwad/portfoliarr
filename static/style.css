@@ -914,21 +914,30 @@ a.logo { text-decoration: none; }
 }
 
 .alloc-dot {
-    width: 7px;
-    height: 7px;
+    display: grid;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border: 0;
+    place-items: center;
+    background: transparent;
+    cursor: pointer;
+}
+
+.alloc-dot::before {
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--text-secondary);
-    cursor: pointer;
+    content: "";
     transition: width 0.15s, border-radius 0.15s, background 0.15s;
 }
 
-.alloc-dot:hover {
+.alloc-dot:hover::before {
     background: var(--text-primary);
 }
 
-.alloc-dot.active {
+.alloc-dot.active::before {
     width: 18px;
     border-radius: 999px;
     background: var(--accent);
@@ -2558,7 +2567,7 @@ input[type="date"]::-moz-placeholder {
     .fx-toggle,
     .fx-switch,
     .fx-knob,
-    .alloc-dot {
+    .alloc-dot::before {
         transition: none;
     }
 }
