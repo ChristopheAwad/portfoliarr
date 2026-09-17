@@ -1,5 +1,7 @@
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
+import math
+import sqlite3
 import time
 
 # ThreadPoolExecutor runs one callable across MANY OS threads and
@@ -431,6 +433,9 @@ Algorithm: walk every trading day in the range forward, keeping a
     for history in histories.values():
         all_labels.update(history)
     labels = sorted(all_labels)
+    if not labels:
+        return jsonify({"labels": [], "values": [], "costs": [],
+                        "index_values": None, "twrr_pct": None})
 
     # Intraday (1D) labels are times ("09:30"), not dates ("2026-08-31") —
     # see get_history. So "which label applies which transaction" differs:
@@ -1493,15 +1498,16 @@ def portfolio_allocation():
 def watchlist_quotes():
     # The DB read is the source of truth for what should be displayed.
     symbols = db.get_symbols()
+    if not symbols:
+        return jsonify({"symbols": [], "quotes": []})
 
     # Fetch all watchlist symbols in parallel — each needs a quote + name,
     # both independent yfinance calls. Threading cuts wall time from
     # N×(quote+name) sequential to ~1×slowest pair.
     def fetch_watchlist_symbol(symbol):
         try:
-            # get_quote returns the object SHARED with the cache — mutating
-            # it here would leak our edits into every future cache hit. So
-            # copy it first, then decorate the copy with the name.
+            # Keep route decoration local even though the market layer also
+            # returns defensive copies; this makes ownership explicit here.
             quote = dict(get_quote(symbol))
         except Exception:
             # Same per-symbol resilience as the indices bar: a dead symbol
@@ -1574,17 +1580,11 @@ def add_to_watchlist():
 
     try:
         db.add_symbol(symbol)
-    except Exception:
-        # The most likely DB failure here is the PRIMARY KEY violation from
-        # adding a duplicate — report it as 409 Conflict ("it's already
-        # there"), which is more precise than a generic 500. TIER 1: the
-        # 409 reply can't tell a harmless duplicate from a REAL database
-        # problem (locked file, full disk) — the traceback in the log can,
-        # which is why a wide catch here logs at warning with exc_info.
-        app.logger.warning(
-            "watchlist insert failed for %s — serving 409", symbol,
-            exc_info=True,
-        )
+    except sqlite3.IntegrityError:
+        # The watchlist symbol is its primary key, so this specific database
+        # error means the normalized ticker already exists. Operational
+        # failures (locked/full/unwritable DB) must escape to the JSON 500
+        # handler instead of being mislabeled as a harmless duplicate.
         return jsonify({"error": f"{symbol} is already on the watchlist"}), 409
 
     # 201 Created: standard status for "a new resource now exists".
@@ -1653,6 +1653,8 @@ def validate_tx_fields(body):
     def positive_number(value, field):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return jsonify({"error": f"{field} must be a number"}), 400
+        if not math.isfinite(value):
+            return jsonify({"error": f"{field} must be finite"}), 400
         if value <= 0:
             return jsonify({"error": f"{field} must be greater than 0"}), 400
         return None
@@ -2296,6 +2298,13 @@ def parse_import_text(text):
             row["error"] = f"qty must be a number, got '{qty_text}'"
             continue
 
+        if not math.isfinite(row["price"]):
+            row["error"] = f"price must be finite, got '{price_text}'"
+            continue
+        if not math.isfinite(row["qty"]):
+            row["error"] = f"qty must be finite, got '{qty_text}'"
+            continue
+
         # Same > 0 rule as validate_tx_fields: however well "0" or "-3"
         # parses, it's nonsense in a ledger.
         if row["price"] <= 0:
@@ -2437,15 +2446,24 @@ def import_commit():
         # parser; currency from the quote; fx_rate from the row's OWN
         # date — commit trusts the re-parse, never the preview).
         row["currency"] = quote["currency"]
-        row["id"] = db.add_transaction(
-            ticker=row["ticker"],
-            transaction_date=row["transaction_date"],
-            price=row["price"],
-            qty=row["qty"],
-            currency=quote["currency"],
-            transaction_type=row["transaction_type"],
-            fx_rate=row["fx_rate"],
-        )
+        try:
+            row["id"] = db.add_transaction(
+                ticker=row["ticker"],
+                transaction_date=row["transaction_date"],
+                price=row["price"],
+                qty=row["qty"],
+                currency=quote["currency"],
+                transaction_type=row["transaction_type"],
+                fx_rate=row["fx_rate"],
+            )
+        except Exception:
+            app.logger.warning(
+                "import database write failed for line %s", row["line"],
+                exc_info=True,
+            )
+            row["error"] = "database write failed"
+            failed.append(row)
+            continue
         imported_count += 1
 
     # TIER 1 at INFO: a batch with failures is normal client behavior (a
@@ -2581,9 +2599,8 @@ def quote(symbol):
     symbol = symbol.strip().upper()
 
     try:
-        # COPY before returning: get_quote hands back the object SHARED with
-        # the cache — the route layer must never hand shared state to a
-        # caller that could mutate it (same rule as stock_quote).
+        # Keep the route's response object independent from the data-layer
+        # result, matching the decoration pattern used by stock_quote.
         return jsonify(dict(get_quote(symbol)))
     except Exception:
         # TIER 1 at INFO — same expected-client-behavior rule as stock_quote:
@@ -2607,10 +2624,8 @@ def stock_quote(symbol):
     symbol = symbol.strip().upper()
 
     try:
-        # COPY before decorating: get_quote hands back the object SHARED
-        # with the cache — mutating it (adding "name") would leak our edit
-        # into every future cache hit (the watchlist route learned this
-        # first; same rule, new caller).
+        # Decorate a route-owned object. The market layer already returns a
+        # defensive copy, and this keeps that ownership boundary explicit.
         quote = dict(get_quote(symbol))
     except Exception:
         # TIER 1 at INFO, no traceback: an unquotable symbol on a page the

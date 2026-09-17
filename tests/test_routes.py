@@ -65,6 +65,13 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
 
 # ── Watchlist ─────────────────────────────────────────────────────────
 
+def test_empty_watchlist_returns_empty_payload(client):
+    """A new installation has no symbols; that is a normal 200 state."""
+    res = client.get("/api/watchlist")
+    assert res.status_code == 200
+    assert res.get_json() == {"symbols": [], "quotes": []}
+
+
 def test_add_to_watchlist_201_stores_normalized(client, fake_market):
     """Happy path: lowercase input → stored AND echoed as uppercase.
     The 201 body uses {"symbol": ...}; the truth is checked in the DB."""
@@ -81,6 +88,21 @@ def test_add_duplicate_returns_409(client, fake_market):
     res = client.post("/api/watchlist", json={"symbol": "AAPL"})
     assert res.status_code == 409
     assert "already" in res.get_json()["error"]
+
+
+def test_add_watchlist_database_failure_returns_json_500(
+        client, fake_market, monkeypatch):
+    """Only a unique-key collision is a duplicate; other DB failures are 500."""
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
+    monkeypatch.setitem(app_module.app.config, "PROPAGATE_EXCEPTIONS", False)
+
+    def fail_insert(symbol):
+        raise RuntimeError("simulated disk failure")
+
+    monkeypatch.setattr(db, "add_symbol", fail_insert)
+    res = client.post("/api/watchlist", json={"symbol": "AAPL"})
+    assert res.status_code == 500
+    assert res.get_json() == {"error": "internal server error"}
 
 
 def test_add_unknown_symbol_returns_404(client, fake_market):

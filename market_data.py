@@ -10,6 +10,7 @@ This module knows nothing about Flask or HTTP — routes decide that.
 
 import math
 import time
+from numbers import Real
 
 import yfinance as yf
 
@@ -82,6 +83,35 @@ def clear_profile_cache():
     profile test would inherit an entry a previous test cached and call
     counts would depend on execution order."""
     _profile_cache.clear()
+
+
+def clear_market_caches():
+    """Clear every process-memory market cache for deterministic tests."""
+    _cache.clear()
+    _name_cache.clear()
+    _history_cache.clear()
+    _profile_cache.clear()
+    _volume_cache.clear()
+
+
+def _finite_number(value):
+    """Return a real finite provider value, otherwise None."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _positive_finite_number(value):
+    value = _finite_number(value)
+    return value if value is not None and value > 0 else None
+
+
+def _first_positive_finite(*values):
+    for value in values:
+        valid = _positive_finite_number(value)
+        if valid is not None:
+            return valid
+    return None
 
 
 # The page's timeframe buttons map to a Yahoo "period" + "interval" pair.
@@ -157,7 +187,7 @@ def get_quote(symbol):
     now = time.time()
     entry = _cache.get(symbol)
     if entry and (now - entry["fetched_at"]) < TTL_SECONDS:
-        return entry["data"]  # cache hit: no network involved
+        return dict(entry["data"])  # callers cannot mutate the cache
 
     # 2. Cache miss — pay the network cost, exactly as in the scratch script
     fi = yf.Ticker(symbol).fast_info
@@ -172,8 +202,9 @@ def get_quote(symbol):
     #    INVALID JSON for browsers (their JSON.parse throws and the whole
     #    section degrades). A NaN here means Yahoo answered nonsense, not
     #    "price = 0" — raise, and the route layer degrades per its rules.
-    if (not price or not previous_close
-            or math.isnan(price) or math.isnan(previous_close)):
+    price = _positive_finite_number(price)
+    previous_close = _positive_finite_number(previous_close)
+    if price is None or previous_close is None:
         raise ValueError(f"incomplete quote data for {symbol}")
 
     # 4. Build the payload — raw floats only; formatting is the frontend's job
@@ -188,7 +219,7 @@ def get_quote(symbol):
 
     # 5. Remember it (with its timestamp), then hand it back
     _cache[symbol] = {"data": data, "fetched_at": now}
-    return data
+    return dict(data)
 
 
 def get_name(symbol):
@@ -273,29 +304,30 @@ def get_stats(symbol):
     # most tickers carry "regularMarketPreviousClose", a few only
     # "previousClose". (Same `or` fallback pattern as get_name.)
     return {
-        "open": info.get("open"),
-        "day_high": info.get("dayHigh"),
-        "day_low": info.get("dayLow"),
-        "prev_close": (
-            info.get("regularMarketPreviousClose")
-            or info.get("previousClose")
+        "open": _finite_number(info.get("open")),
+        "day_high": _finite_number(info.get("dayHigh")),
+        "day_low": _finite_number(info.get("dayLow")),
+        "prev_close": _first_positive_finite(
+            info.get("regularMarketPreviousClose"), info.get("previousClose")
         ),
-        "volume": info.get("volume"),
-        "week52_low": info.get("fiftyTwoWeekLow"),
-        "week52_high": info.get("fiftyTwoWeekHigh"),
-        "market_cap": info.get("marketCap"),
-        "pe_ratio": info.get("trailingPE"),
-        "eps": info.get("trailingEps"),
+        "volume": _finite_number(info.get("volume")),
+        "week52_low": _finite_number(info.get("fiftyTwoWeekLow")),
+        "week52_high": _finite_number(info.get("fiftyTwoWeekHigh")),
+        "market_cap": _finite_number(info.get("marketCap")),
+        "pe_ratio": _finite_number(info.get("trailingPE")),
+        "eps": _finite_number(info.get("trailingEps")),
         # Verbatim pass-through: Yahoo ships this already as a percent
         # figure (2.63 → 2.63%), so any ×100 here is the double-scaling
         # bug that showed CM.TO at 263%. "No dividend" → .get() → None →
         # the grid shows "—", never a fabricated 0.0%.
-        "dividend_yield": info.get("dividendYield"),
-        "beta": info.get("beta"),
-        "fifty_day_average": info.get("fiftyDayAverage"),
-        "two_hundred_day_average": info.get("twoHundredDayAverage"),
-        "avg_volume": info.get("avgVolume10days"),
-        "target_price": info.get("targetMeanPrice"),
+        "dividend_yield": _finite_number(info.get("dividendYield")),
+        "beta": _finite_number(info.get("beta")),
+        "fifty_day_average": _finite_number(info.get("fiftyDayAverage")),
+        "two_hundred_day_average": _finite_number(
+            info.get("twoHundredDayAverage")
+        ),
+        "avg_volume": _finite_number(info.get("avgVolume10days")),
+        "target_price": _finite_number(info.get("targetMeanPrice")),
         "recommendation": info.get("recommendationKey"),
         "sector": info.get("sector"),
         "industry": info.get("industry"),
@@ -329,7 +361,7 @@ def get_profile(symbol):
     """
     # Cache check: after the first success this is a pure dict lookup.
     if symbol in _profile_cache:
-        return _profile_cache[symbol]
+        return dict(_profile_cache[symbol])
 
     # Cache miss: pay the (slow) network cost once.
     info = yf.Ticker(symbol).info
@@ -344,11 +376,11 @@ def get_profile(symbol):
         "sector": info.get("sector"),
         "country": info.get("country"),
         "quote_type": info.get("quoteType"),
-        "market_cap": info.get("marketCap"),
+        "market_cap": _finite_number(info.get("marketCap")),
     }
 
     _profile_cache[symbol] = profile
-    return profile
+    return dict(profile)
 
 
 def get_history(symbol, period_key):
@@ -414,6 +446,7 @@ def get_history(symbol, period_key):
     # dropna() removes NaN closes (same as the old continue), then
     # strftime on the index builds all labels at once.
     valid = df["Close"].dropna()
+    valid = valid[valid.map(lambda value: _finite_number(value) is not None)]
     labels = valid.index.strftime(label_format)
     result = dict(zip(labels, valid))
 
@@ -488,7 +521,9 @@ def get_fx_rate_on(base, target, date_iso):
     rate = None
     for ts, row in df.iterrows():
         if ts.date() <= d:
-            rate = float(row["Close"])
+            candidate = _positive_finite_number(row["Close"])
+            if candidate is not None:
+                rate = float(candidate)
         else:
             break
 
@@ -596,7 +631,7 @@ def get_volume_leaders():
     now = time.time()
     entry = _volume_cache.get("data")
     if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
-        return entry["leaders"]
+        return [dict(leader) for leader in entry["leaders"]]
 
     # Flatten all candidate symbols (deduplicated — a ticker might appear
     # in multiple sectors, though our list avoids that).
@@ -621,10 +656,25 @@ def get_volume_leaders():
         # NOTHING survives, and never caches that failure.
         try:
             info = yf.Ticker(symbol).info
-            volume = info.get("volume")
-            if not volume:
-                return None  # skip tickers with no volume data
-            return (symbol, sector, info)
+            volume = _positive_finite_number(info.get("volume"))
+            price = _first_positive_finite(
+                info.get("regularMarketPrice"), info.get("currentPrice")
+            )
+            prev_close = _first_positive_finite(
+                info.get("regularMarketPreviousClose"),
+                info.get("previousClose"),
+            )
+            if volume is None or price is None or prev_close is None:
+                return None
+            change = price - prev_close
+            return (symbol, sector, {
+                "symbol": symbol,
+                "name": info.get("shortName") or info.get("longName"),
+                "price": price,
+                "change": change,
+                "change_pct": change / prev_close * 100,
+                "volume": volume,
+            })
         except Exception:
             return None  # skip failed tickers; counted as "sector didn't answer"
 
@@ -637,35 +687,18 @@ def get_volume_leaders():
             result = future.result()
             if result is None:
                 continue
-            symbol, sector, info = result
+            symbol, sector, leader = result
             # If we already have a leader for this sector, keep the one
             # with higher volume.
             if sector in results:
-                existing_vol = results[sector]["info"].get("volume", 0)
-                if (info.get("volume", 0)) <= existing_vol:
+                existing_vol = results[sector]["volume"]
+                if leader["volume"] <= existing_vol:
                     continue
-            results[sector] = {"symbol": symbol, "info": info}
+            results[sector] = leader
 
     # Build leader dicts, sorted by volume descending, capped at 10
-    leaders = []
-    for sector, data in results.items():
-        info = data["info"]
-        price = info.get("regularMarketPrice") or info.get("currentPrice")
-        prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose")
-        if not price or not prev_close:
-            continue  # skip if we can't compute change
-        change = price - prev_close
-        change_pct = change / prev_close * 100 if prev_close else 0
-        leaders.append({
-            "symbol": data["symbol"],
-            "name": info.get("shortName") or info.get("longName"),
-            "price": price,
-            "change": change,
-            "change_pct": change_pct,
-            "volume": info.get("volume", 0),
-        })
-
-    leaders.sort(key=lambda x: x["volume"], reverse=True)
+    leaders = list(results.values())
+    leaders.sort(key=lambda item: (-item["volume"], item["symbol"]))
     leaders = leaders[:10]
 
     # Successes-only cache rule: an EMPTY result means Yahoo answered for
@@ -677,5 +710,7 @@ def get_volume_leaders():
         raise ValueError("no volume leaders resolved from any sector")
 
     # Cache the result
-    _volume_cache["data"] = {"leaders": leaders, "fetched_at": now}
-    return leaders
+    _volume_cache["data"] = {
+        "leaders": leaders, "fetched_at": time.time(),
+    }
+    return [dict(leader) for leader in leaders]
