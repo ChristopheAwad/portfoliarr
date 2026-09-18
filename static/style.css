@@ -898,6 +898,72 @@ a.logo { text-decoration: none; }
     white-space: nowrap;
 }
 
+.alloc-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 24px;
+    margin: 4px 0 8px;
+}
+
+.alloc-dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.alloc-dot {
+    display: grid;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    place-items: center;
+    background: transparent;
+    cursor: pointer;
+}
+
+.alloc-dot::before {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    content: "";
+    transition: width 0.15s, border-radius 0.15s, background 0.15s;
+}
+
+.alloc-dot:hover::before {
+    background: var(--text-primary);
+}
+
+.alloc-dot.active::before {
+    width: 18px;
+    border-radius: 999px;
+    background: var(--accent);
+}
+
+.alloc-dot:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.alloc-position {
+    min-width: 28px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.donut-box.alloc-crossfade {
+    animation: alloc-crossfade 180ms ease-out;
+}
+
+@keyframes alloc-crossfade {
+    from { opacity: 0.35; }
+    to { opacity: 1; }
+}
+
 /* Excluded-tickers note below the donut — a small, muted line listing
    any holdings that couldn't be classified. Hidden when empty. */
 .alloc-excluded {
@@ -2478,7 +2544,8 @@ input[type="date"]::-moz-placeholder {
 
     .modal-overlay,
     .modal,
-    .toast {
+    .toast,
+    .alloc-crossfade {
         animation: none;
         transition: none;
     }
@@ -2499,7 +2566,8 @@ input[type="date"]::-moz-placeholder {
     .ledger-group .caret,
     .fx-toggle,
     .fx-switch,
-    .fx-knob {
+    .fx-knob,
+    .alloc-dot::before {
         transition: none;
     }
 }

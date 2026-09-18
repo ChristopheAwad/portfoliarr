@@ -726,8 +726,8 @@ document.addEventListener("themechange", () => {
 
 // ---------------------------------------------------------------------------
 // ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
-// OF, cycled through 6 views with arrow buttons (and touch-swipe on the
-// donut box). The "By Ticker" view reads the summary reply's `holdings`
+// OF, cycled through 6 views with arrows, dots, and touch-swipe on the
+// donut box. The "By Ticker" view reads the summary reply's `holdings`
 // slice; the other 5 views fetch /api/portfolio/allocation?by=<key>.
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
@@ -746,6 +746,8 @@ const allocPrevBtn = document.getElementById("alloc-prev");
 const allocNextBtn = document.getElementById("alloc-next");
 const allocLabelEl = document.getElementById("alloc-label");
 const allocExcludedEl = document.getElementById("alloc-excluded");
+const allocDotsEl = document.getElementById("alloc-dots");
+const allocPositionEl = document.getElementById("alloc-position");
 
 // The holdings/slices array the donut currently plots. The tooltip
 // callbacks need each wedge's CAD value, but Chart.js hands a tooltip
@@ -758,6 +760,7 @@ let currentHoldings = [];
 // empty portfolio has no wedges, and building a zero-wedge chart just to
 // destroy it on the next poll is waste.
 let allocationChart = null;
+let animateNextAllocationPaint = false;
 
 // The empty-state line. Created ONCE and shown/hidden by moving it in and
 // out of the card (the watchlist rebuilds its rows every cycle because the
@@ -841,6 +844,7 @@ try {
 // The ticker view (key null) uses the summary poll directly — no
 // cache entry needed.
 const allocCache = {};
+const allocRequestGenerations = {};
 const ALLOC_CACHE_TTL = REFRESH_MS; // refresh alongside the poll
 
 function allocCacheStale(key) {
@@ -848,19 +852,71 @@ function allocCacheStale(key) {
     return !entry || (Date.now() - entry.fetchedAt) > ALLOC_CACHE_TTL;
 }
 
+function buildAllocDots() {
+    if (!allocDotsEl) return;
+    allocDotsEl.replaceChildren();
+    ALLOCATION_VIEWS.forEach((view, index) => {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "alloc-dot";
+        dot.setAttribute(
+            "aria-label",
+            `Show ${view.label} allocation, slide ${index + 1} of ${ALLOCATION_VIEWS.length}`
+        );
+        dot.addEventListener("click", () => switchAllocView(index));
+        allocDotsEl.append(dot);
+    });
+}
+
+function syncAllocCarousel() {
+    const view = ALLOCATION_VIEWS[allocViewIndex];
+    if (allocLabelEl) allocLabelEl.textContent = view.label;
+    if (allocPositionEl) {
+        allocPositionEl.textContent =
+            `${allocViewIndex + 1} / ${ALLOCATION_VIEWS.length}`;
+    }
+    if (!allocDotsEl) return;
+    allocDotsEl.querySelectorAll(".alloc-dot").forEach((dot, index) => {
+        const active = index === allocViewIndex;
+        dot.classList.toggle("active", active);
+        dot.toggleAttribute("aria-current", active);
+        if (active) dot.setAttribute("aria-current", "page");
+    });
+}
+
+function isActiveAllocView(by) {
+    return ALLOCATION_VIEWS[allocViewIndex].key === by;
+}
+
+function isLatestAllocRequest(by, requestGeneration) {
+    return allocRequestGenerations[by] === requestGeneration;
+}
+
+function runAllocationCrossfade() {
+    const shouldAnimate = animateNextAllocationPaint && !REDUCED_MOTION;
+    animateNextAllocationPaint = false;
+    if (!shouldAnimate || !donutBoxEl) return;
+    donutBoxEl.classList.remove("alloc-crossfade");
+    // Restart the one-shot animation even when navigation happens quickly.
+    void donutBoxEl.offsetWidth;
+    donutBoxEl.classList.add("alloc-crossfade");
+}
+
 // Navigate the carousel to a new index (with wrap-around) and fetch
 // the new view's data.
 function switchAllocView(newIndex) {
     // Wrap: prev on 0 → last; next on last → 0.
-    allocViewIndex = (newIndex + ALLOCATION_VIEWS.length) % ALLOCATION_VIEWS.length;
+    const nextIndex =
+        (newIndex + ALLOCATION_VIEWS.length) % ALLOCATION_VIEWS.length;
+    animateNextAllocationPaint = nextIndex !== allocViewIndex;
+    allocViewIndex = nextIndex;
+    syncAllocCarousel();
 
     // Persist the choice.
     try { localStorage.setItem("allocationDimension", allocViewIndex); }
     catch { /* private browsing, ignore */ }
 
-    // Update the label + button state.
     const view = ALLOCATION_VIEWS[allocViewIndex];
-    if (allocLabelEl) allocLabelEl.textContent = view.label;
 
     // Fetch the data for this view (ticker views use the summary's
     // holdings; others fetch the allocation endpoint).
@@ -878,20 +934,28 @@ async function fetchAllocDimension(by) {
     if (!allocCacheStale(by)) {
         // Cache hit: paint instantly.
         const entry = allocCache[by];
-        paintAllocation(entry.data.slices, entry.data.excluded);
+        if (isActiveAllocView(by)) {
+            paintAllocation(entry.data.slices, entry.data.excluded);
+        }
         return;
     }
+    const requestGeneration = (allocRequestGenerations[by] || 0) + 1;
+    allocRequestGenerations[by] = requestGeneration;
     try {
         const response = await fetch(
             `/api/portfolio/allocation?by=${encodeURIComponent(by)}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
+        if (!isLatestAllocRequest(by, requestGeneration)) return;
         allocCache[by] = { data, fetchedAt: Date.now() };
-        paintAllocation(data.slices, data.excluded);
+        if (isActiveAllocView(by)) {
+            paintAllocation(data.slices, data.excluded);
+        }
     } catch (err) {
+        if (!isLatestAllocRequest(by, requestGeneration)) return;
         console.error(`allocation fetch (${by}) failed:`, err);
-        paintAllocation([], []);
+        if (isActiveAllocView(by)) paintAllocation([], []);
     }
 }
 
@@ -928,10 +992,14 @@ if (donutBoxEl) {
 // ticker view is active.
 let lastSummaryHoldings = [];
 
-// Update the label on first load.
-if (allocLabelEl) {
-    allocLabelEl.textContent = ALLOCATION_VIEWS[allocViewIndex].label;
+function initializeAllocCarousel() {
+    buildAllocDots();
+    syncAllocCarousel();
+    const view = ALLOCATION_VIEWS[allocViewIndex];
+    if (view.key !== null) fetchAllocDimension(view.key);
 }
+
+initializeAllocCarousel();
 
 // ---------------------------------------------------------------------------
 // PAINT ALLOCATION — build or update the donut from one payload.
@@ -950,6 +1018,7 @@ function paintAllocation(slices, excluded) {
         return;
     }
     currentHoldings = slices;
+    runAllocationCrossfade();
 
     // Update the excluded note.
     if (allocExcludedEl) {
