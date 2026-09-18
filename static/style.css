@@ -837,9 +837,20 @@ a.logo { text-decoration: none; }
    maintainAspectRatio:false the canvas stretches to exactly fill this
    box. */
 .chart-box {
+    width: 100%;
+    min-width: 0;
     height: 300px;
     position: relative;
     margin-bottom: 16px;
+}
+
+/* Keep the responsive canvas tied to the measured box even after a mobile
+   browser restores a stale tab. The important declarations override stale
+   inline dimensions that Chart.js can leave from its first hidden layout. */
+.chart-box > canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 /* The cost-basis caption under the hero's big number — the brief's

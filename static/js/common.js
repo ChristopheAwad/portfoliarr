@@ -1056,6 +1056,12 @@ function setupTimeframeChart(
     // plugin can short-circuit when the user is on any timeframe except 1D.
     let currentPeriod = defaultPeriod;
 
+    // Which period the user most recently ASKED for. This normally matches
+    // currentPeriod, but stays ahead of it when a request fails: the old line
+    // remains honest while reconnect/foreground recovery retries the selected
+    // button instead of the last successfully painted period.
+    let requestedPeriod = defaultPeriod;
+
     // The x-axis text plan: one entry per bar, "" = paint nothing there.
     // buildXTickLabels (above) rebuilds it inside refresh() BEFORE each
     // redraw; the tick callback below reads it at draw time — which is
@@ -1932,6 +1938,11 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod, { silent = false } = {}) {
+        // Background prefetches warm other periods without changing the
+        // user's selection. Every visible request becomes the recovery target,
+        // even if its network call below fails.
+        if (!silent) requestedPeriod = period;
+
         // Clear any active price-diff measurement — stale points on a new
         // series would be confusing and point to wrong data.
         measureStart = null;
@@ -1980,6 +1991,16 @@ function setupTimeframeChart(
     // from refresh() because the Value/Performance toggle swaps views
     // without a network round-trip: both series arrived in the same
     // reply, so a swap is a pure repaint of what we already hold.
+    function resizeAndUpdateChart() {
+        // A restored mobile tab can report stale or zero geometry until its
+        // first layout frame. Measure again on that frame before drawing so
+        // the canvas cannot remain at its intrinsic 300x150 top-left size.
+        requestAnimationFrame(() => {
+            chart.resize();
+            chart.update();
+        });
+    }
+
     function paint(data, period) {
         lastReply = data;  // kept for instant view swaps (see modeBar)
 
@@ -2031,7 +2052,7 @@ function setupTimeframeChart(
         // If the fetch failed, we never reach here (the throw skips
         // this line), so the period stays correct for the old data.
         currentPeriod = period;
-        chart.update();
+        resizeAndUpdateChart();
         // Hand the period's first/last values back to the caller so
         // page scripts can derive a period return (e.g. the stock
         // page's change pill). Only fires when there are at least two
@@ -2066,6 +2087,18 @@ function setupTimeframeChart(
             b.classList.remove("active"));
         btn.classList.add("active");
         refresh(period);
+    });
+
+    // History is not part of the 60-second quote poll, but a failed initial
+    // request must recover when a stale mobile tab reconnects or returns to
+    // the foreground. A cache hit is useful too: paint() still forces the
+    // layout-aware resize that repairs a canvas measured while hidden.
+    function recoverActiveChart() {
+        refresh(requestedPeriod);
+    }
+    window.addEventListener("online", recoverActiveChart);
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) recoverActiveChart();
     });
 
     // ── View toggle (portfolio chart only) ─────────────────────────────
