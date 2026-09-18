@@ -109,7 +109,7 @@ painting after rapid navigation.
 
 **Files:** `templates/index.html`, `static/js/main.js`, `static/style.css`, `tests/test_allocation_ui.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-18 (PR #54)
 
 ---
 
