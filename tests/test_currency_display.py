@@ -1,7 +1,7 @@
 # tests/test_currency_display.py
 # =================================
 # The ledger's DISPLAY-currency contract: GET /api/transactions?currency=
-# CAD|NATIVE — the one endpoint the dashboard's "Show USD in USD" toggle
+# CAD|NATIVE — the one endpoint the ledger's "Show USD in USD" toggle
 # flips — plus the regression pinning the watchlist to native currency.
 #
 # THE TWO-RATE CONTRACT (feature.md): in CAD mode,
@@ -168,7 +168,7 @@ def test_fx_failure_degrades_usd_rows_to_native(client, fake_market):
 def test_native_param_pins_todays_shape(client, fake_market, monkeypatch):
     """?currency=native is the pre-FX behavior exactly: display fields
     equal the native facts and every live number is native. This is what
-    the dashboard toggle requests — USD securities 'back to USD value'.
+    the ledger toggle requests — USD securities 'back to USD value'.
     Native mode never asks for an FX rate: the exploding patch proves a
     call would fail the test, not just go unseeded."""
     seed_transaction()
@@ -216,8 +216,8 @@ def test_invalid_currency_param_is_400(client, fake_market):
 
 def test_watchlist_quotes_stay_native(client, fake_market):
     """THE scope decision: the watchlist is market data, not portfolio
-    value — its USD quotes display natively no matter what the dashboard
-    toggle or the ledger do. No ?currency= exists on this endpoint."""
+    value — its USD quotes display natively no matter what the ledger
+    toggle does. No ?currency= exists on this endpoint."""
     db.add_symbol("AAPL")
     fake_market.quotes["AAPL"] = make_quote("AAPL", price=229.5,
                                             previous_close=225.0,
