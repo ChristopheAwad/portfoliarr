@@ -13,6 +13,12 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 - **`/stock/<symbol>` Stock detail** — large current price, time-segmented chart (1D · 5D · 1M · 6M · YTD · 1Y · 5Y · MAX), basic stats, and buttons to watch or log a transaction.
 - **`/preferences` Preferences** — privacy toggles and display options.
 
+## More views
+
+| Ledger | Stock detail | Dashboard on mobile |
+|---|---|---|
+| ![Ledger page](portfoliarr-ledger.png) | ![Stock detail page](portfoliarr-stock-detail.png) | ![Dashboard on mobile](portfoliarr-mobile.png) |
+
 ## Tech stack
 
 | Layer | Tool |
