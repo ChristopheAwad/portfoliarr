@@ -8,10 +8,10 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 
 ## Pages
 
-- **`/` Dashboard** — value summary strip, holdings table (qty, avg cost, current price, market value, unrealized P/L), portfolio-value chart with a time-weighted Performance view, an allocation donut carousel (by sector, country, type, cap, currency), index chips, a watchlist, and a ticker search bar.
+- **`/` Dashboard** — value summary strip with cost basis, a grouped transactions table (qty, value, total and day gain per ticker), a portfolio-value chart with a time-weighted Performance view, an allocation donut carousel (by ticker, sector, country, type, cap, currency), index chips, a watchlist, and a ticker search bar.
 - **`/ledger` Ledger** — buy/sell transactions with grouping, sorting, editing, and paste import; plus a Closed Sales table showing each sale's realized result in CAD.
-- **`/stock/<symbol>` Stock detail** — large current price, time-segmented chart (1D · 5D · 1M · 6M · YTD · 1Y · 5Y · MAX), basic stats, and buttons to watch or log a transaction.
-- **`/preferences` Preferences** — privacy toggles and display options.
+- **`/stock/<symbol>` Stock detail** — large current price, time-segmented chart (1D · 5D · 1M · 3M · 6M · YTD · 1Y · 5Y · MAX), basic stats, and buttons to watch or log a transaction.
+- **`/preferences` Preferences** — theme (light/dark/system), default ledger sort, and a show-closed-positions toggle. Privacy eye toggles sit on the dashboard and ledger pages.
 
 ## More views
 
