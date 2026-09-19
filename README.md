@@ -7,10 +7,9 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 ## Dashboard
 
 - Value summary strip: total value, day change, total return, cost basis
-- Grouped transactions table: quantity, value, total gain, and day gain per ticker
 - Portfolio-value-over-time line chart, with a time-weighted Performance (TWR) view
 - Allocation donut carousel by ticker, sector, country, type, cap bucket, and currency
-- Index chips, watchlist sidebar, and ticker search bar
+- Index chips, watchlist and volume-leaders sidebar, and ticker search bar
 - Privacy eye toggle to hide the amounts
 
 ![Dashboard in light theme](portfoliarr-dashboard.png)
@@ -18,7 +17,7 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 
 ## Ledger
 
-- Buy/sell transaction log with grouping, sorting, editing, and paste import
+- Buy/sell transaction log with grouping, sorting, editing, and paste import, showing quantity, value, total gain, and day gain per ticker
 - Closed Sales table showing each sale's realized result in CAD (average-cost basis)
 - "Show USD in USD" display toggle for the ledger rows
 - Privacy eye toggle to hide the amounts
@@ -38,7 +37,7 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 
 ## Mobile
 
-The dashboard at phone width with the same bottom tab bar that links Dashboard, Ledger, and Stock detail.
+The dashboard at phone width with the same bottom tab bar that links Dashboard and Ledger.
 
 ![Dashboard on mobile in light theme](portfoliarr-mobile.png)
 ![Dashboard on mobile in dark theme](portfoliarr-mobile-dark.png)
