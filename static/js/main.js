@@ -1103,6 +1103,9 @@ function paintAllocation(slices, excluded) {
                     callbacks: {
                         label(item) {
                             const slice = currentHoldings[item.dataIndex];
+                            // A view change can briefly leave Chart.js with a
+                            // hover index from the old, longer slice list.
+                            if (!slice) return "";
                             // PRIVACY: the CAD value masks while the eye
                             // is active, but the weight stays visible —
                             // the same rule as the ledger's privacy
@@ -1112,7 +1115,10 @@ function paintAllocation(slices, excluded) {
                             const amount = portfolioMasked()
                                 ? "****"
                                 : `${formatNumber(slice.value)} CAD`;
-                            return `${labels[item.dataIndex]}: ${amount} ` +
+                            // item.label comes from chart.data.labels NOW.
+                            // Do not close over the first build's labels: the
+                            // carousel replaces them in place on every view.
+                            return `${item.label}: ${amount} ` +
                                 `(${(item.parsed * 100).toFixed(1)}%)`;
                         },
                     },

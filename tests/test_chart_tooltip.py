@@ -76,3 +76,15 @@ def test_year_spanning_tooltip_keeps_exact_trading_date():
     body = tooltip_title_callback_body()
     assert "monthYear(p)" not in body
     assert "`${monthDay(p)}, ${p.y}`" in body
+
+
+def test_five_day_tooltip_keeps_the_exact_bar_time():
+    """A 30-minute 5D bar needs its time, not only its trading date."""
+    js = common_js()
+    assert (
+        "const DATETIME_RE = "
+        "/^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})$/;"
+        in js
+    )
+    body = tooltip_title_callback_body()
+    assert "`${monthDay(p)}, ${m[4]}:${m[5]}`" in body

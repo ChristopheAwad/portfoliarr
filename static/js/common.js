@@ -838,7 +838,7 @@ function tickTargetForWidth(width) {
 // clock times, or anything malformed) parses to null and falls through
 // to pass-through. Anchored ($ at the end) so a weird label can't
 // partially match and get mangled — it passes through raw.
-const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) \d{2}:\d{2}$/;
+const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 // One parsed date-ish label -> short text. The numeric month/day also
@@ -1061,6 +1061,17 @@ function setupTimeframeChart(
     // remains honest while reconnect/foreground recovery retries the selected
     // button instead of the last successfully painted period.
     let requestedPeriod = defaultPeriod;
+
+    // Visible requests use one monotonically increasing generation so an
+    // A -> B -> A sequence cannot mistake the first A response for the last.
+    // Per-period generations separately protect each cache entry from an
+    // older request for the same period finishing last.
+    let visibleRequestGeneration = 0;
+    const chartRequestGenerations = {};
+
+    function isLatestChartRequest(period, generation) {
+        return chartRequestGenerations[period] === generation;
+    }
 
     // The x-axis text plan: one entry per bar, "" = paint nothing there.
     // buildXTickLabels (above) rebuilds it inside refresh() BEFORE each
@@ -1592,14 +1603,18 @@ function setupTimeframeChart(
                     callbacks: {
                         // Tooltip title: reformat the raw ISO label
                         // (e.g. "2026-09-13" or "2026-09-13 14:30")
-                        // into human-friendly text ("Sep 13").
-                        // 1D clock times pass through as-is.
+                        // into human-friendly text ("Sep 13, 14:30" for
+                        // 5D; "Sep 13" for daily bars). 1D clock times pass
+                        // through as-is.
                         title(items) {
                             const raw = lastLabels[items[0].dataIndex] || "";
                             let m = DATETIME_RE.exec(raw);
                             if (m) {
                                 const p = { y: +m[1], mo: +m[2], d: +m[3] };
-                                return monthDay(p);
+                                // 5D has several 30-minute bars per day.
+                                // Keep the exact bar time so those points do
+                                // not all appear to be the same observation.
+                                return `${monthDay(p)}, ${m[4]}:${m[5]}`;
                             }
                             m = DATE_RE.exec(raw);
                             if (m) {
@@ -1938,10 +1953,18 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod, { silent = false } = {}) {
+        const requestGeneration =
+            (chartRequestGenerations[period] || 0) + 1;
+        chartRequestGenerations[period] = requestGeneration;
+
         // Background prefetches warm other periods without changing the
         // user's selection. Every visible request becomes the recovery target,
         // even if its network call below fails.
-        if (!silent) requestedPeriod = period;
+        let visibleGeneration = null;
+        if (!silent) {
+            requestedPeriod = period;
+            visibleGeneration = ++visibleRequestGeneration;
+        }
 
         // Clear any active price-diff measurement — stale points on a new
         // series would be confusing and point to wrong data.
@@ -1968,8 +1991,10 @@ function setupTimeframeChart(
                 // drift between the two ends.
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 data = await response.json(); // {labels, values}
-                // Store in cache for future requests of this period.
-                chartCache[period] = { data, fetchedAt: Date.now() };
+                // An older same-period response must not replace fresher data.
+                if (isLatestChartRequest(period, requestGeneration)) {
+                    chartCache[period] = { data, fetchedAt: Date.now() };
+                }
             }
 
             // Silent mode: fetch + cache only, don't repaint the chart.
@@ -1977,10 +2002,15 @@ function setupTimeframeChart(
             // causing the visible chart to jump between timeframes.
             if (silent) return;
 
+            // A slower, older request may finish after any newer visible
+            // request, including another request for the SAME period.
+            if (visibleGeneration !== visibleRequestGeneration) return;
+
             // Repaint with this reply — the render half of a refresh
             // lives in paint() below so the view toggle can reuse it
             // without refetching.
             paint(data, period);
+            syncTimeframeButtons(period);
         } catch (err) {
             console.error("chart refresh failed:", err);
         }
@@ -2067,6 +2097,17 @@ function setupTimeframeChart(
         }
     }
 
+    // The highlighted button describes the data that successfully reached
+    // the canvas, not merely the last button clicked. A failed request leaves
+    // the previous chart and its matching button intact.
+    function syncTimeframeButtons(period) {
+        buttonBar.querySelectorAll(".time-btn").forEach((button) => {
+            button.classList.toggle(
+                "active", button.textContent.trim() === period
+            );
+        });
+    }
+
     // Timeframe buttons: ONE delegated listener on the button bar. The
     // buttons are static HTML (never rebuilt), so a direct listener would
     // work too — delegation simply matches the watchlist/ledger pattern
@@ -2082,10 +2123,8 @@ function setupTimeframeChart(
         // in sync.
         const period = btn.textContent.trim();
 
-        // Swap the active highlight to the clicked button, then fetch+paint.
-        buttonBar.querySelectorAll(".time-btn").forEach((b) =>
-            b.classList.remove("active"));
-        btn.classList.add("active");
+        // Keep the current button selected until this request succeeds. The
+        // refresh path selects the new button only after its data paints.
         refresh(period);
     });
 
