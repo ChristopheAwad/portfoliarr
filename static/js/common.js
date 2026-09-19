@@ -955,13 +955,10 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
 //
 // This positioner instead parks the box at the plot EDGE farthest from the
 // crosshair: a point in the left half gets its box pinned to the RIGHT edge,
-// a point in the right half to the LEFT edge. The tooltip and the vertical
-// hover line end up as far apart as the plot allows, with the box still on
-// the chart. It reads the ANCHOR (the active data point), never the pointer,
-// so the choice is stable: on dense 1D/5D series, where every pixel of mouse
-// travel changes the active bar, a pointer-keyed rule would flip constantly
-// and jitter. The side only flips when the crosshair crosses the plot's
-// midpoint — one clean jump per sweep.
+// a point in the right half to the LEFT edge. A deadband around the midpoint
+// keeps the current edge latched until the crosshair clearly enters the other
+// half. Without it, the two bars nearest the midpoint can alternate sides on
+// a one-pixel mouse movement and send the card across the whole plot.
 //
 // The crosshair is NOT moved by this: the crosshair plugin draws at
 // `active[0].element.x` (the real data point's x), independent of where the
@@ -973,22 +970,23 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
 // overrides the built-in alignment (chart.js's Tooltip.update:
 // `Object.assign({}, position, size)`). xAlign names the box edge the anchor
 // sits on: "left" grows the box rightward from the anchor, "right" grows it
-// leftward. We set x at the chosen edge plus the matching xAlign, and keep
-// y = the point's y so the card sits at the hovered height; yAlign is left
-// unset so Chart.js still nudges the box top/bottom near the edges and keeps
-// it in bounds. The caret is suppressed by the tooltip options (caretSize 0),
-// because an arrow pointing from the far edge into empty space reads wrong.
+// leftward. We set x at the chosen edge plus the matching xAlign. Vertically,
+// the card follows the continuous pointer position rather than hopping among
+// the discrete bar heights; the crosshair still marks the exact data point.
+// Chart.js clamps the resulting box inside the canvas. The caret is suppressed
+// by the tooltip options (caretSize 0), because an arrow pointing from the far
+// edge into empty space reads wrong.
 //
 // Registered once on the global Chart.Tooltip.positioners map (the documented
 // extension point) under the name "opposite"; only this factory's charts opt
 // in, so no other chart on any page is affected.
 // ---------------------------------------------------------------------------
-function oppositePositioner(items) {
+function oppositePositioner(items, eventPosition) {
     if (!items.length) return false;
     // Chart.js invokes positioners via `.call(this, ...)`, so `this` is the
     // Tooltip — its `.chart` is how we reach the chart area's edges.
     const chart = this.chart;
-    const { left, right } = chart.chartArea;
+    const { left, right, top, bottom } = chart.chartArea;
     const midX = (left + right) / 2;
 
     // Same anchor math as Chart.js's own "average" positioner: average every
@@ -1010,14 +1008,24 @@ function oppositePositioner(items) {
     x /= count;
     y /= count;
 
-    // Crosshair on the left half -> park the box at the RIGHT edge, growing
-    // leftward ("right"). Crosshair on the right half -> LEFT edge, growing
-    // rightward ("left"). y stays the point's height.
-    const crosshairLeft = x <= midX;
+    // Crosshair on the left half -> target the RIGHT edge, and vice versa.
+    // Keep the current edge throughout the center deadband so tiny mouse
+    // movements cannot make the card rattle from one side to the other.
+    const targetSide = x <= midX ? "right" : "left";
+    const deadband = Math.max(40, (right - left) * 0.08);
+    let side = chart._tooltipSide;
+    if (!side || Math.abs(x - midX) > deadband) side = targetSide;
+    chart._tooltipSide = side;
+
+    // eventPosition is in the same canvas-pixel coordinate space as the plot.
+    // The fallback protects programmatic tooltip activation without a pointer.
+    const pointerY = eventPosition
+        ? Math.max(top, Math.min(eventPosition.y, bottom))
+        : y;
     return {
-        x: crosshairLeft ? right : left,
-        y,
-        xAlign: crosshairLeft ? "right" : "left",
+        x: side === "right" ? right : left,
+        y: pointerY,
+        xAlign: side === "right" ? "right" : "left",
     };
 }
 
@@ -1756,6 +1764,11 @@ function setupTimeframeChart(
     // real mouse hover is completely untouched.
     chart._ghostEventsUntil = 0;
 
+    // Which plot edge the tooltip currently occupies. The positioner keeps
+    // this latched through its midpoint deadband to prevent side-to-side
+    // chatter from one-pixel mouse movements.
+    chart._tooltipSide = null;
+
     // Touch "hover dormant" flag for the touchGhostGuard plugin: true
     // while NO finger is on the chart, so a rAF-replayed touchstart of a
     // just-ended gesture stays dead. Flip-FLOPS on real touch events only —
@@ -2033,6 +2046,10 @@ function setupTimeframeChart(
 
     function paint(data, period) {
         lastReply = data;  // kept for instant view swaps (see modeBar)
+
+        // A new series can have different geometry. Let its first hover pick
+        // the correct edge rather than inheriting the previous series' latch.
+        chart._tooltipSide = null;
 
         // Green for a gaining period, red for a losing one: compare the
         // FIRST and LAST point of whatever series is on screen. The

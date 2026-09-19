@@ -36,12 +36,21 @@ def tooltip_title_callback_body() -> str:
     return text[title_at:label_at]
 
 
-def test_opposite_positioner_pins_tooltip_to_far_edge():
-    """The box must use the plot edge opposite the active crosshair."""
+def test_opposite_positioner_latches_tooltip_to_far_edge():
+    """The box must stay at its edge while the crosshair is near center."""
     js = common_js()
-    assert "function oppositePositioner(items)" in js
-    assert "x: crosshairLeft ? right : left" in js
-    assert 'xAlign: crosshairLeft ? "right" : "left"' in js
+    assert "function oppositePositioner(items, eventPosition)" in js
+    assert "chart._tooltipSide" in js
+    assert "Math.abs(x - midX) > deadband" in js
+    assert 'const targetSide = x <= midX ? "right" : "left";' in js
+    assert 'x: side === "right" ? right : left' in js
+    assert 'xAlign: side === "right" ? "right" : "left"' in js
+
+
+def test_opposite_positioner_uses_continuous_pointer_y():
+    """The tooltip must glide with the mouse instead of hopping by bar value."""
+    js = common_js()
+    assert "Math.max(top, Math.min(eventPosition.y, bottom))" in js
 
 
 def test_opposite_positioner_is_registered():
