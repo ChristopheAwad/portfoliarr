@@ -2235,7 +2235,6 @@ input[type="date"]::-moz-placeholder {
     .chart-timeframe-selectors {
         max-width: 100%;
         overflow-x: auto;
-        scrollbar-width: thin;
     }
 
     /* Keep each segment at its natural width: a flex child shrinks by
@@ -2642,4 +2641,22 @@ input[type="date"]::-moz-placeholder {
 
 .tx-badge.sell {
     border-color: color-mix(in srgb, var(--red-neg) 35%, transparent);
+}
+
+/* ── Hidden scrollbars on the two horizontal trays ────────────────────
+   The dashboard index chips and the chart timeframe buttons both scroll
+   sideways. Both still respond to touch, trackpad, and drag; a painted
+   bar on a phone just adds a stray line under the cards. "Hidden" is a
+   different decision from the thin-scrollbar group far above, so it
+   lives apart. Kept at the very end of the file so the phone tray media
+   query stays the SECOND .chart-timeframe-selectors rule that
+   tests/test_ui_redesign.py identifies. */
+.indices-bar,
+.chart-timeframe-selectors {
+    scrollbar-width: none;
+}
+
+.indices-bar::-webkit-scrollbar,
+.chart-timeframe-selectors::-webkit-scrollbar {
+    display: none;
 }
