@@ -22,6 +22,7 @@ AGENTS.md
 
 # Screenshots (local captures, not part of the app)
 *.png
+!portfoliarr-dashboard.png
 
 # Test framework
 .pytest_cache/
