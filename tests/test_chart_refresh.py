@@ -32,25 +32,44 @@ def timeframe_click_body() -> str:
 
 def test_visible_request_becomes_the_recovery_target():
     """The latest user request remains retryable after an offline failure."""
-    assert "if (!silent) requestedPeriod = period;" in refresh_body()
+    body = refresh_body()
+    visible_branch = body.index("if (!silent) {")
+    recovery_target = body.index("requestedPeriod = period;")
+    visible_generation = body.index(
+        "visibleGeneration = ++visibleRequestGeneration;"
+    )
+    assert visible_branch < recovery_target < visible_generation
 
 
 def test_silent_prefetch_never_changes_or_paints_the_selection():
     """Cache warming must return before latest-selection checks and painting."""
     body = refresh_body()
     silent_return = body.index("if (silent) return;")
-    latest_guard = body.index("if (period !== requestedPeriod) return;")
+    latest_guard = body.index(
+        "if (visibleGeneration !== visibleRequestGeneration) return;"
+    )
     paint = body.index("paint(data, period);")
     assert silent_return < latest_guard < paint
 
 
-def test_stale_visible_response_cannot_repaint_the_chart():
-    """An older response may fill the cache but must not replace newer data."""
+def test_stale_same_period_response_cannot_replace_newer_cache_data():
+    """Only the latest request for one period may write that period's cache."""
     body = refresh_body()
     cache_write = body.index("chartCache[period] = { data, fetchedAt: Date.now() };")
-    latest_guard = body.index("if (period !== requestedPeriod) return;")
-    paint = body.index("paint(data, period);")
-    assert cache_write < latest_guard < paint
+    cache_guard = body.index(
+        "if (isLatestChartRequest(period, requestGeneration))"
+    )
+    assert cache_guard < cache_write
+
+
+def test_a_b_a_response_order_uses_request_generation_not_period_name():
+    """The first A response must stay stale after the user returns to A."""
+    text = common_js()
+    body = refresh_body()
+    assert "let visibleRequestGeneration = 0;" in text
+    assert "visibleGeneration = ++visibleRequestGeneration;" in body
+    assert "if (visibleGeneration !== visibleRequestGeneration) return;" in body
+    assert "if (period !== requestedPeriod) return;" not in body
 
 
 def test_successful_current_paint_updates_the_timeframe_button():
