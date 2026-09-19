@@ -7,10 +7,11 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 ## Dashboard
 
 - Value summary strip: total value, day change, total return, cost basis
-- Holdings table: ticker, name, quantity, average cost, current price, market value, unrealized P/L ($ and %), day change
+- Grouped transactions table: quantity, value, total gain, and day gain per ticker
 - Portfolio-value-over-time line chart, with a time-weighted Performance (TWR) view
-- Allocation donut carousel by sector, country, type, cap bucket, and currency
+- Allocation donut carousel by ticker, sector, country, type, cap bucket, and currency
 - Index chips, watchlist sidebar, and ticker search bar
+- Privacy eye toggle to hide the amounts
 
 ![Dashboard in light theme](portfoliarr-dashboard.png)
 ![Dashboard in dark theme](portfoliarr-dashboard-dark.png)
@@ -20,6 +21,7 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 - Buy/sell transaction log with grouping, sorting, editing, and paste import
 - Closed Sales table showing each sale's realized result in CAD (average-cost basis)
 - "Show USD in USD" display toggle for the ledger rows
+- Privacy eye toggle to hide the amounts
 
 ![Ledger in light theme](portfoliarr-ledger.png)
 ![Ledger in dark theme](portfoliarr-ledger-dark.png)
@@ -27,7 +29,7 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 ## Stock detail
 
 - Large live price display
-- Time-segmented chart: 1D · 5D · 1M · 6M · YTD · 1Y · 5Y · MAX
+- Time-segmented chart: 1D · 5D · 1M · 3M · 6M · YTD · 1Y · 5Y · MAX
 - Stats grid: open, high, low, prev close, volume, 52-week range, market cap
 - Buttons to add to the watchlist or log a transaction
 
@@ -44,7 +46,7 @@ The dashboard at phone width with the same bottom tab bar that links Dashboard, 
 ## Preferences
 
 - Theme: light, dark, or follow the system
-- Privacy toggles to hide portfolio and ledger amounts
+- Show closed positions: keep fully-sold tickers visible in the ledger
 - Default ledger sort column and direction
 
 ## Tech stack
