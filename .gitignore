@@ -26,6 +26,10 @@ AGENTS.md
 !portfoliarr-ledger.png
 !portfoliarr-stock-detail.png
 !portfoliarr-mobile.png
+!portfoliarr-dashboard-dark.png
+!portfoliarr-ledger-dark.png
+!portfoliarr-stock-detail-dark.png
+!portfoliarr-mobile-dark.png
 
 # Test framework
 .pytest_cache/
