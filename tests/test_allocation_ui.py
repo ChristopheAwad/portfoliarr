@@ -171,6 +171,26 @@ def test_same_dimension_requests_only_accept_latest_response():
     assert src.count("isLatestAllocRequest(by, requestGeneration)") >= 3
 
 
+def test_allocation_tooltip_reads_the_current_chart_label():
+    """A carousel update must not leave the tooltip using first-build labels.
+
+    paintAllocation updates Chart.js's labels in place. The tooltip therefore
+    has to read item.label at hover time, not close over the local `labels`
+    array that existed when the Chart object was first constructed.
+    """
+    src = _read_js("static/js/main.js")
+    tooltip = src.split("tooltip: {", 1)[1].split("},\n                },", 1)[0]
+    assert "item.label" in tooltip
+    assert "labels[item.dataIndex]" not in tooltip
+
+
+def test_allocation_tooltip_ignores_a_stale_hover_index():
+    """Changing to a view with fewer wedges must not throw during redraw."""
+    src = _read_js("static/js/main.js")
+    tooltip = src.split("tooltip: {", 1)[1].split("},\n                },", 1)[0]
+    assert 'if (!slice) return "";' in tooltip
+
+
 # ---------------------------------------------------------------------------
 # JS: swipe wiring
 # ---------------------------------------------------------------------------
