@@ -336,11 +336,24 @@ logTxBtn.addEventListener("click", () => {
 // it; this page's only input is WHERE the data comes from.
 // ---------------------------------------------------------------------------
 
+const comparePicker = setupComparePicker({
+    inputEl: document.getElementById("compare-input"),
+    resultsEl: document.getElementById("compare-results"),
+    chipsEl: document.getElementById("compare-chips"),
+    quickPickBar: document.querySelector(".compare-quick-picks"),
+    primarySymbol: symbol,
+    onChange() {
+        if (stockChartHandle) stockChartHandle.reload();
+    },
+});
+
 const stockChartHandle = setupTimeframeChart({
     canvas: document.getElementById("stockChart"),
     buttonBar: document.querySelector(".chart-timeframe-selectors"),
     datasetLabel: symbol,
     endpoint: `/api/stock/${encodeURIComponent(symbol)}/history`,
+    getBenchmarks: () => (comparePicker ? comparePicker.getSymbols() : []),
+    comparisonReadout: document.getElementById("stock-comparison-readout"),
     defaultPeriod: "5D", // must match the `active` button in stock.html
     // When the chart loads new period data, compute the period return
     // and paint the change pill. The quote poll will overwrite the pill
@@ -355,7 +368,7 @@ const stockChartHandle = setupTimeframeChart({
 // When the theme toggles, repaint the chart so grid/line colors pick up
 // the new CSS variable values.
 document.addEventListener("themechange", () => {
-    if (stockChartHandle) stockChartHandle.chart.update();
+    if (stockChartHandle) stockChartHandle.repaintComparisonReadout();
 });
 
 // ---------------------------------------------------------------------------

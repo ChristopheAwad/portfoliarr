@@ -1052,6 +1052,145 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
+/* Comparison controls shared by the dashboard and stock charts. The row
+   wraps naturally on phones; the search wrapper anchors the existing
+   absolutely-positioned suggestion dropdown. */
+.compare-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.compare-quick-picks,
+.compare-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.compare-quick {
+    padding: 5px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.compare-quick:hover { color: var(--text-primary); }
+
+.compare-quick.active {
+    color: var(--text-primary);
+    border-color: var(--accent);
+    background: var(--bg-inset);
+}
+
+.compare-quick:focus-visible,
+.compare-chip-remove:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.compare-search {
+    position: relative;
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.compare-search input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+}
+
+.compare-search input:focus {
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+}
+
+.compare-search .search-results { min-width: 280px; }
+
+.compare-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.compare-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.compare-chip-remove:hover { color: var(--red-neg); }
+
+/* Comparison readout — the chart's bottom legend while comparison mode is
+   active. Each line becomes one row of colored marker → performance
+   percentage → symbol/line name. It IS the legend (Chart.js's built-in one
+   stays off), so the number sits directly beside its line color. The extra
+   left padding reads as proportional table spacing, keeps the marker from
+   hugging the card edge, and stays quiet on purpose: no pill, no card, no
+   chrome — the numbers are the content. */
+.comparison-readout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 18px;
+    row-gap: 6px;
+    margin-top: 10px;
+    padding-left: 4px;
+    font-size: 12px;
+}
+
+.comparison-readout[hidden] { display: none; }
+
+.comparison-readout-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.comparison-readout-marker {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background-color: currentColor;
+}
+
+.comparison-readout-value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* The readout's green/red reuse the app's one money palette — the same
+   --green-pos / --red-neg every gain/loss figure on the page uses. The
+   doubled selector beats the base .comparison-readout-value rule. */
+.comparison-readout-value.pos { color: var(--green-pos); }
+.comparison-readout-value.neg { color: var(--red-neg); }
+
+.comparison-readout-name { color: var(--text-secondary); }
+
 /* Detail page: the Add-to-Watchlist / Log Transaction row. Same solid-blue
    treatment as the tx-form submit — these are the card's primary actions,
    and all primary buttons share one recipe: blue fill, white text, a
@@ -2659,4 +2798,20 @@ input[type="date"]::-moz-placeholder {
 .indices-bar::-webkit-scrollbar,
 .chart-timeframe-selectors::-webkit-scrollbar {
     display: none;
+}
+
+/* Comparison readout on phones: rows wrap naturally — marker, % and name
+   always stay on ONE row each (no mid-row break), so the number remains
+   directly beside its color. Rows get a slightly tighter rhythm than
+   desktop but a bigger tap target on the whole container. */
+@media (max-width: 600px) {
+    .comparison-readout {
+        column-gap: 14px;
+        row-gap: 8px;
+        margin-top: 8px;
+    }
+
+    .comparison-readout-item {
+        white-space: nowrap;
+    }
 }

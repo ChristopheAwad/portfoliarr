@@ -53,12 +53,21 @@ def test_silent_prefetch_never_changes_or_paints_the_selection():
 
 
 def test_stale_same_period_response_cannot_replace_newer_cache_data():
-    """Only the latest request for one period may write that period's cache."""
+    """Only the latest request for one page+comparison state may write its cache.
+
+    The key combines the period with the ordered comparison list so a plain
+    chart and an overlay chart share nothing (see test_compare.test_portfolio_
+    history_one_benchmark_rebased for the two-reply behavior).
+    """
     body = refresh_body()
-    cache_write = body.index("chartCache[period] = { data, fetchedAt: Date.now() };")
+    cache_write = body.index(
+        "chartCache[cacheKey] = { data, fetchedAt: Date.now() };"
+    )
     cache_guard = body.index(
         "if (isLatestChartRequest(period, requestGeneration))"
     )
+    assert "const cacheKey = `" in body
+    assert "${benchmarks.join(",")}" in body
     assert cache_guard < cache_write
 
 

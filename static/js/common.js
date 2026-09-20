@@ -671,6 +671,118 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
     });
 }
 
+// The comparison picker shared by the dashboard and stock page. It reuses
+// the suggestion factory above. Its selection is PAGE-LOCAL: it starts empty
+// on every navigation/reload and dies with the page, so a comparison can
+// never leak a ghost overlay onto a later page view. It enforces the
+// backend's three-line limit before a request is made.
+const COMPARE_MAX = 3;
+
+function setupComparePicker({
+    inputEl, resultsEl, chipsEl, quickPickBar,
+    primarySymbol = null, onChange,
+}) {
+    if (!inputEl || !resultsEl || !chipsEl) return null;
+
+    let symbols = [];
+
+    function getSymbols() {
+        return symbols.slice();
+    }
+
+    function renderChips() {
+        chipsEl.textContent = "";
+        for (const symbol of symbols) {
+            const chip = document.createElement("span");
+            chip.className = "compare-chip";
+            chip.dataset.symbol = symbol;
+
+            const label = document.createElement("span");
+            label.textContent = symbol;
+
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "compare-chip-remove";
+            remove.setAttribute("aria-label", `Remove ${symbol} comparison`);
+            remove.append(icon("x"));
+            remove.addEventListener("click", () => removeSymbol(symbol));
+            chip.append(label, remove);
+            chipsEl.append(chip);
+        }
+
+        if (quickPickBar) {
+            quickPickBar.querySelectorAll("[data-symbol]").forEach((button) => {
+                const active = symbols.includes(button.dataset.symbol);
+                button.classList.toggle("active", active);
+                button.setAttribute("aria-pressed", String(active));
+            });
+        }
+    }
+
+    function notify() {
+        renderChips();
+        if (onChange) onChange(getSymbols());
+    }
+
+    function addSymbol(raw) {
+        const symbol = String(raw || "").trim().toUpperCase();
+        if (!symbol) return;
+        if (symbol === primarySymbol) {
+            showToast("That symbol is already the chart", "error");
+            return;
+        }
+        if (symbols.includes(symbol)) return;
+        if (symbols.length >= COMPARE_MAX) {
+            showToast(`Up to ${COMPARE_MAX} comparisons`, "error");
+            return;
+        }
+        symbols.push(symbol);
+        notify();
+    }
+
+    function removeSymbol(symbol) {
+        const next = symbols.filter((item) => item !== symbol);
+        if (next.length === symbols.length) return;
+        symbols = next;
+        notify();
+    }
+
+    function clearSymbols({ notifyChange = true } = {}) {
+        if (symbols.length === 0) return;
+        symbols = [];
+        renderChips();
+        if (notifyChange && onChange) onChange(getSymbols());
+    }
+
+    // Browser Back/Forward Cache can restore the whole page — including this
+    // picker's in-memory symbols — WITHOUT re-running load handlers. A fresh
+    // landing would then revive a stale comparison, so wipe the list on
+    // restoration. onChange -> chart reload() therefore re-fetches without a
+    // benchmark query parameter.
+    window.addEventListener("pageshow", (event) => {
+        if (!event.persisted) return;
+        clearSymbols();
+    });
+
+    setupTickerSuggestions(inputEl, resultsEl, (symbol) => {
+        addSymbol(symbol);
+        inputEl.value = "";
+    }, { scopeEl: inputEl });
+
+    if (quickPickBar) {
+        quickPickBar.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-symbol]");
+            if (!button) return;
+            const symbol = button.dataset.symbol;
+            if (symbols.includes(symbol)) removeSymbol(symbol);
+            else addSymbol(symbol);
+        });
+    }
+
+    renderChips();
+    return { getSymbols, addSymbol, removeSymbol, clearSymbols };
+}
+
 // The navbar's search box is the original call site: typing shows
 // suggestions, picking navigates to the stock detail page. Enter always
 // means "go" here (the same reflex the box had before this factory
@@ -756,6 +868,15 @@ function getAllocationColors() {
            "#e28aa0", "#a3c98a", "#9fb0c7", "#f0916f", "#8ea8e8"]
         : ["#1c3a5e", "#047857", "#b45309", "#6d28d9", "#0e7490",
            "#9f1239", "#4d7c0f", "#374151", "#c2410c", "#4338ca"];
+}
+
+// Three categorical colors for the maximum three comparison overlays.
+// These deliberately avoid the primary line's green/red direction colors.
+function getCompareColors() {
+    const dark = document.documentElement.classList.contains("dark");
+    return dark
+        ? ["#67c3d8", "#d0a959", "#a78bfa"]
+        : ["#0e7490", "#b45309", "#6d28d9"];
 }
 
 // The hover CROSSHAIR: a thin vertical line through whatever point the
@@ -1031,7 +1152,8 @@ function oppositePositioner(items, eventPosition) {
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
-      modeBar }
+      modeBar, getBenchmarks, comparisonReadout,
+      comparisonPrimaryLabel = datasetLabel }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -1101,6 +1223,21 @@ function setupTimeframeChart(
     // persistent dataset — so the y-axis stays sized to the value line
     // alone and the chart looks unchanged when you're not inspecting a bar.
     let lastCosts = null;
+
+    // The stock route marks growth-of-$100 comparison replies normalized.
+    // Raw-price-only tools are hidden while that axis is active.
+    let chartNormalized = false;
+
+    // True only while comparison overlays are actually ON the chart:
+    // dashboard Performance with at least one benchmark, or a stock chart
+    // with data.normalized === true. It is the single switch that makes
+    // the tooltip date-only and shows the bottom readout. Portfolio
+    // Performance WITHOUT overlays keeps its normal Return tooltip.
+    let comparisonMode = false;
+
+    // The chart.x index the user is hovering (shown in the bottom readout).
+    // null restores the latest available point per line.
+    let comparisonReadoutIndex = null;
 
     // Which periods get the hover cost LINE. The tooltip's Cost Basis /
     // Gain text is never gated — it's always available. The LINE is:
@@ -1186,7 +1323,7 @@ function setupTimeframeChart(
             // beforeDraw is too late: the pixel mapping is already baked.
             afterDataLimits(chart, { scale }) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
-                if (mode === "performance") return;
+                if (mode === "performance" || chartNormalized) return;
                 if (scale.id !== "y") return;
                 const lo = scale.min;
                 const hi = scale.max;
@@ -1199,7 +1336,7 @@ function setupTimeframeChart(
             },
             afterDraw(chart) {
                 if (currentPeriod !== "1D" || prevClose == null) return;
-                if (mode === "performance") return;
+                if (mode === "performance" || chartNormalized) return;
                 const y = chart.scales.y.getPixelForValue(prevClose);
                 const { left, right, top } = chart.chartArea;
                 const ctx = chart.ctx;
@@ -1568,9 +1705,25 @@ function setupTimeframeChart(
             // and intersect: false means the cursor does NOT have to touch
             // a point — the readout follows you anywhere on the chart.
             interaction: { mode: "index", intersect: false },
+            // Live hover hook for the bottom comparison readout: as the
+            // crosshair moves, the legend shows that date's performance per
+            // line. An empty elements array means the pointer left the plot,
+            // so the readout falls back to each line's latest value. The
+            // external DOM update is side-effect-free for Chart.js — no
+            // update() — so hover never causes a redraw loop.
+            onHover: (event, elements) => {
+                if (!comparisonMode) return;
+                const index = elements.length
+                    ? elements[0].index : null;
+                if (comparisonReadoutIndex === index) return;
+                comparisonReadoutIndex = index;
+                renderComparisonReadout(index);
+            },
             plugins: {
                 // With only one dataset, the legend swatch adds nothing.
-                legend: { display: false },
+                legend: {
+                    display: false,
+                },
                 tooltip: {
                     // Custom positioner (registered above): park the box at
                     // the plot edge farthest from the crosshair, so the
@@ -1654,6 +1807,10 @@ function setupTimeframeChart(
                         // Without it (stock page) it's a single line as
                         // before.
                         label(item) {
+                            // Comparison mode: the hovered date is the only
+                            // floating tooltip content. The percentage for
+                            // each line lives in the bottom readout instead.
+                            if (comparisonMode) return [];
                             // Performance view: a growth-of-$100 line, so
                             // show it as itself — the dataset label names
                             // the unit, the number is the index level.
@@ -1686,6 +1843,9 @@ function setupTimeframeChart(
                         // definition as the summary strip's total return.
                         // footerColor below paints it green/red by sign.
                         footer(items) {
+                            // Comparison mode: no floating footer — the
+                            // performance reads below the chart.
+                            if (comparisonMode) return [];
                             // Performance view: the index is anchored at
                             // 100, so the % return from the start is just
                             // level/100 − 1 — no cost basis to subtract.
@@ -1705,6 +1865,7 @@ function setupTimeframeChart(
                             ];
                         },
                         footerColor(items) {
+                            if (comparisonMode) return "#fff";
                             if (mode === "performance") {
                                 const v = items[0]?.parsed.y;
                                 if (v === undefined) return "#fff";
@@ -1808,6 +1969,7 @@ function setupTimeframeChart(
     }
 
     canvas.addEventListener("mousedown", (e) => {
+        if (chartNormalized) return;
         if (e.button !== 0) return; // left button only
         const rect = canvas.getBoundingClientRect();
         const px = e.clientX - rect.left;
@@ -1871,6 +2033,7 @@ function setupTimeframeChart(
         // exactly the distinction the touchGhostGuard plugin relies on.)
         chart._hoverDormant = false;
         if (e.touches.length >= 2) {
+            if (chartNormalized) return;
             e.preventDefault(); // block Chart.js from processing this
             const t0 = e.touches[0], t1 = e.touches[1];
             const rect = canvas.getBoundingClientRect();
@@ -1935,6 +2098,9 @@ function setupTimeframeChart(
                 chart.tooltip.setActiveElements([], { x: 0, y: 0 });
             }
             chart.setActiveElements([]);
+            // Finger lifted = hover ended for the bottom readout too.
+            comparisonReadoutIndex = null;
+            renderComparisonReadout();
             chart.draw();
         }
     });
@@ -1958,6 +2124,9 @@ function setupTimeframeChart(
             chart.tooltip.setActiveElements([], { x: 0, y: 0 });
         }
         chart.setActiveElements([]);
+        // Cancelled gesture = hover ended for the readout as well.
+        comparisonReadoutIndex = null;
+        renderComparisonReadout();
         chart.draw();
     });
 
@@ -1966,6 +2135,11 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod, { silent = false } = {}) {
+        const benchmarks = (getBenchmarks && getBenchmarks()) || [];
+        const benchmarkParam = benchmarks.length
+            ? `&benchmark=${encodeURIComponent(benchmarks.join(","))}`
+            : "";
+        const cacheKey = `${period}|${benchmarks.join(",")}`;
         const requestGeneration =
             (chartRequestGenerations[period] || 0) + 1;
         chartRequestGenerations[period] = requestGeneration;
@@ -1992,12 +2166,14 @@ function setupTimeframeChart(
             // trip. This makes back-and-forth timeframe toggling instant.
             const ttl = LIVE_PERIODS.has(period)
                 ? TTL_LIVE_MS : TTL_SETTLED_MS;
-            const cached = chartCache[period];
+            const cached = chartCache[cacheKey];
             let data;
             if (cached && (Date.now() - cached.fetchedAt) < ttl) {
                 data = cached.data;
             } else {
-                const response = await fetch(`${endpoint}?period=${period}`);
+                const response = await fetch(
+                    `${endpoint}?period=${period}${benchmarkParam}`
+                );
                 // fetch does NOT throw on 4xx/5xx — only on network failure. A
                 // 400 (bad period key) arrives with ok === false; the buttons
                 // only ever send valid keys, so this mainly guards against
@@ -2006,7 +2182,7 @@ function setupTimeframeChart(
                 data = await response.json(); // {labels, values}
                 // An older same-period response must not replace fresher data.
                 if (isLatestChartRequest(period, requestGeneration)) {
-                    chartCache[period] = { data, fetchedAt: Date.now() };
+                    chartCache[cacheKey] = { data, fetchedAt: Date.now() };
                 }
             }
 
@@ -2044,8 +2220,116 @@ function setupTimeframeChart(
         });
     }
 
+    // Reconcile the chart to exactly one primary dataset plus the currently
+    // visible overlays. Clearing comparisons therefore restores a true
+    // single-line chart instead of leaving hidden stale datasets behind.
+    function syncOverlayDatasets(overlays, plotLabels) {
+        while (chart.data.datasets.length > 1 + overlays.length) {
+            chart.data.datasets.pop();
+        }
+        for (let i = 0; i < overlays.length; i++) {
+            let dataset = chart.data.datasets[i + 1];
+            if (!dataset) {
+                dataset = {
+                    label: "",
+                    data: [],
+                    borderColor: () => getCompareColors()[i],
+                    backgroundColor: "transparent",
+                    fill: false,
+                    tension: 0,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    borderWidth: 1.5,
+                };
+                chart.data.datasets.push(dataset);
+            }
+            dataset.label = overlays[i].symbol;
+            // Preserve a failed benchmark's route-boundary explanation so
+            // the readout can distinguish failure from a valid line that has
+            // not started at the hovered date. Reset to null when a later
+            // request succeeds so stale failure text cannot survive.
+            dataset.compareError = overlays[i].error || null;
+            const values = overlays[i].values;
+            dataset.data = Array.isArray(values)
+                ? values.slice(0, plotLabels.length)
+                : [];
+        }
+    }
+
+    // Render the bottom comparison readout — the legend AND live
+    // performance display for every line currently on the chart. Each row
+    // is marker (the line's exact color) → percentage at the requested
+    // index → label (primary keeps its paint() label; overlays their
+    // symbols). With no index it shows the LATEST valid point per line, so
+    // the row is always meaningful, before and after any hover.
+    function renderComparisonReadout(index = null) {
+        if (!comparisonReadout) return;
+        if (!comparisonMode) {
+            comparisonReadout.hidden = true;
+            comparisonReadout.textContent = "";
+            return;
+        }
+        comparisonReadout.hidden = false;
+        comparisonReadout.textContent = "";
+
+        chart.data.datasets.forEach((dataset, datasetIndex) => {
+            const values = dataset.data;
+            const hasHoverIndex = index !== null && index !== undefined;
+            // A hovered date is exact: if this line has not started yet,
+            // show unavailable instead of borrowing a future value. Only the
+            // no-hover state intentionally falls back to the latest point.
+            const value = hasHoverIndex
+                ? (Number.isFinite(values[index]) ? values[index] : null)
+                : (() => {
+                    for (let i = values.length - 1; i >= 0; i--) {
+                        if (Number.isFinite(values[i])) return values[i];
+                    }
+                    return null;
+                })();
+
+            const item = document.createElement("div");
+            item.className = "comparison-readout-item";
+
+            const marker = document.createElement("span");
+            marker.className = "comparison-readout-marker";
+            // Resolve the exact same option the line uses, so a future
+            // palette or dataset-order change cannot separate marker color
+            // from line color.
+            marker.style.background = typeof dataset.borderColor === "function"
+                ? dataset.borderColor() : dataset.borderColor;
+
+            const valueEl = document.createElement("span");
+            valueEl.className = "comparison-readout-value";
+            if (value === null || !Number.isFinite(value)) {
+                valueEl.textContent = "—";
+            } else {
+                const pct = (value / 100 - 1) * 100;
+                const sign = pct >= 0 ? "+" : "";
+                valueEl.textContent = `${sign}${pct.toFixed(2)}%`;
+                valueEl.classList.add(pct >= 0 ? "pos" : "neg");
+            }
+
+            const name = document.createElement("span");
+            name.className = "comparison-readout-name";
+            if (dataset.compareError) {
+                name.textContent = `${dataset.label} unavailable`;
+                name.title = dataset.compareError;
+            } else {
+                name.textContent = datasetIndex === 0
+                    ? comparisonPrimaryLabel : (dataset.label || "—");
+            }
+
+            item.append(marker, valueEl, name);
+            comparisonReadout.append(item);
+        });
+    }
+
     function paint(data, period) {
         lastReply = data;  // kept for instant view swaps (see modeBar)
+
+        // A fresh series resets the readout to "latest point" until the
+        // pointer moves again.
+        comparisonReadoutIndex = null;
 
         // A new series can have different geometry. Let its first hover pick
         // the correct edge rather than inheriting the previous series' latch.
@@ -2058,6 +2342,8 @@ function setupTimeframeChart(
         // the growth index; value view the CAD line.
         const plottingIndex = mode === "performance";
         const plotValues = plottingIndex ? data.index_values : data.values;
+        const finitePlotValues = Array.isArray(plotValues)
+            ? plotValues.filter(Number.isFinite) : [];
         // The TWR index may be TRUNCATED (the backend stops chaining at a
         // non-positive base — an oversold short, a withdrawn portfolio).
         // The x-axis must end where the line ends, so labels are sliced
@@ -2066,17 +2352,18 @@ function setupTimeframeChart(
         const plotLabels = Array.isArray(plotValues)
             ? data.labels.slice(0, plotValues.length)
             : [];
-        if (Array.isArray(plotValues) && plotValues.length > 0) {
-            direction = plotValues.at(-1) >= plotValues[0] ? "up" : "down";
+        if (finitePlotValues.length > 0) {
+            direction = finitePlotValues.at(-1) >= finitePlotValues[0]
+                ? "up" : "down";
             chart.data.datasets[0].borderColor =
                 CHART_COLORS[direction].line;
         }
         chart.data.labels = plotLabels;
         chart.data.datasets[0].data =
             Array.isArray(plotValues) ? plotValues : [];
-        chart.data.datasets[0].label = plottingIndex
-            ? "Growth of $100 (TWR)"
-            : datasetLabel;
+        chart.data.datasets[0].label = data.normalized === true
+            ? `${datasetLabel} (growth of $100)`
+            : (plottingIndex ? "Growth of $100 (TWR)" : datasetLabel);
         // Cost-basis series: present ONLY on the portfolio endpoint
         // (data.costs) — the stock page's reply lacks it, so lastCosts
         // stays null and the chart stays a single line. The cost LINE
@@ -2087,6 +2374,19 @@ function setupTimeframeChart(
         // were already removed, so showing one would double-count.
         lastCosts = (!plottingIndex && Array.isArray(data.costs))
             ? data.costs : null;
+        // Dashboard comparisons belong only beside the TWR index. Stock
+        // comparison replies explicitly mark their primary line normalized.
+        // comparisonMode is the ONE switch for date-only tooltips + the
+        // bottom readout, so both pages behave identically.
+        const overlays = Array.isArray(data.benchmarks) ? data.benchmarks : [];
+        comparisonMode = overlays.length > 0
+            && (data.normalized === true || plottingIndex);
+        syncOverlayDatasets(comparisonMode ? overlays : [], plotLabels);
+        chartNormalized = data.normalized === true;
+        // The Chart.js legend stays off always — the bottom DOM readout is
+        // the comparison legend, and a plain single-line chart needs none.
+        chart.options.plugins.legend.display = false;
+        renderComparisonReadout();
         // Rebuild the axis-text plan BEFORE the redraw: the tick
         // callback reads xTickLabels at draw time, so it must
         // describe the NEW series, not the previous one. The target
@@ -2104,11 +2404,10 @@ function setupTimeframeChart(
         // page scripts can derive a period return (e.g. the stock
         // page's change pill). Only fires when there are at least two
         // points — a single bar can't define a direction.
-        if (onPeriodData && Array.isArray(plotValues)
-                && plotValues.length > 1) {
+        if (onPeriodData && finitePlotValues.length > 1) {
             onPeriodData({
-                firstValue: plotValues[0],
-                lastValue: plotValues.at(-1),
+                firstValue: finitePlotValues[0],
+                lastValue: finitePlotValues.at(-1),
                 period,
             });
         }
@@ -2184,6 +2483,19 @@ function setupTimeframeChart(
     return {
         chart,
         refresh,
+        reload() {
+            return refresh(requestedPeriod);
+        },
+        repaintComparisonReadout() {
+            // Primary borderColor is a resolved string, while overlay colors
+            // are scriptable functions. Refresh both sides of that contract:
+            // replace the primary color, rebuild DOM markers from the live
+            // palette, then redraw scriptable overlay lines and the gradient.
+            chart.data.datasets[0].borderColor =
+                CHART_COLORS[direction].line;
+            renderComparisonReadout(comparisonReadoutIndex);
+            chart.update();
+        },
         updatePrevClose(val) {
             prevClose = val;
             chart.update();

@@ -132,6 +132,14 @@
                         <canvas id="portfolioChart"></canvas>
                     </div>
 
+                    <!-- Comparison readout: the comparison mode's bottom
+                         legend + live performance per line (marker, %, name).
+                         Filled only while overlays are visible; hidden
+                         otherwise so the chart card stays unchanged. -->
+                    <div id="portfolio-comparison-readout"
+                         class="comparison-readout"
+                         hidden></div>
+
                     <!-- View toggle (Value vs Performance) — portfolio chart
                          only. Value = the money-weighted CAD line (what you
                          actually have, deposits included); Performance = the
@@ -160,6 +168,31 @@
                         <button class="time-btn">1Y</button>
                         <button class="time-btn">5Y</button>
                         <button class="time-btn">MAX</button>
+                    </div>
+
+                    <!-- Up to three normalized comparison lines. main.js
+                         owns the PAGE-LOCAL symbol list; quick picks
+                         mirror the market-index symbols above. -->
+                    <div class="compare-picker">
+                        <div class="compare-quick-picks">
+                            <button class="compare-quick" type="button"
+                                    data-symbol="^GSPC"
+                                    aria-pressed="false">S&amp;P 500</button>
+                            <button class="compare-quick" type="button"
+                                    data-symbol="^IXIC"
+                                    aria-pressed="false">Nasdaq</button>
+                            <button class="compare-quick" type="button"
+                                    data-symbol="^GSPTSE"
+                                    aria-pressed="false">TSX</button>
+                        </div>
+                        <div class="compare-search">
+                            <input id="compare-input" type="text"
+                                   autocomplete="off"
+                                   placeholder="Compare to a ticker...">
+                            <div id="compare-results"
+                                 class="search-results" hidden></div>
+                        </div>
+                        <div id="compare-chips" class="compare-chips"></div>
                     </div>
                 </div>
 
