@@ -46,6 +46,22 @@ Track uninvested cash in the portfolio. One row in a `portfolio` settings table 
 
 ---
 
+### 16. Android Biometric/PIN App Lock
+Add an optional local privacy lock to the Android APK using Android's
+`BiometricPrompt`, with fingerprint/face authentication and the device PIN,
+pattern, or password as fallback. Lock on a configurable return-from-background
+timeout without destroying or reloading the WebView, and provide settings to
+enable, disable, and test the lock. Handle cancellation, repeated failures,
+devices without enrolled credentials, activity recreation, and renderer
+recovery safely. This protects the portfolio on the phone only; it does not
+authenticate or secure the Flask server.
+
+**Effort:** 1–2 days
+**Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, Android tests
+**Depends on:** Nothing
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 6. Dividend Tracking
@@ -96,6 +112,7 @@ Edge-case refinement to #13's mirror rule (found in PR #45's review round 2, non
 
 **Files:** `app.py` (flow fold in the `portfolio_history` walk), `tests/test_twrr.py` (regression tests)
 **Depends on:** #13 (shipped)
+**Status:** shipped 2026-09-20 (PR #59)
 
 ---
 
@@ -144,7 +161,8 @@ Tier 1 (all independent):
   2. CSV Export ───────────────────────┤
   3. Transaction Fees ─────────────────┤── can be done in any order
   4. Sector Breakdown ─────────────────┤
-  5. Cash Balance ─────────────────────┘
+  5. Cash Balance ─────────────────────┤
+  16. Android Biometric/PIN Lock ──────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -172,6 +190,7 @@ For maximum compounding value:
 1. **Transaction Fees** → makes cost basis realistic
 2. **Average Cost** → displays the now-real cost basis
 3. **CSV Export** → makes data portable
+16. **Android Biometric/PIN Lock** → protects financial information on the phone
 4. **Sector Breakdown** → deeper allocation insight
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app

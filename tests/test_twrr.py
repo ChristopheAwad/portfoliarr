@@ -283,6 +283,113 @@ def test_delisted_before_window_flow_excluded(client, fake_market):
     assert body["twrr_pct"] == pytest.approx(10.0)
 
 
+def test_flow_deferred_until_symbol_first_prices(client, fake_market):
+    """Roadmap #14: MSFT's first in-window bar (09-01) lands AFTER its
+    buy's absorption label (08-31). Its flow must NOT be removed on
+    08-31 while MSFT still contributes 0 — that removal would drive r to
+    −100% and truncate the whole index (the buggy build returns None).
+    The pending flow flushes on 09-01, the first bar MSFT prices.
+
+        08-28 buy AAPL 10 @ 100 (CAD)  AAPL closes 100
+        08-31 buy MSFT 10 @ 100 (CAD)  AAPL 100; MSFT has no bar → 0
+        09-01                          AAPL 100 + MSFT 100 = 2000
+        values [1000, 1000, 2000]; flows [1000, 0, 1000]
+        r1 = (1000 − 0 − 1000)/1000 = 0
+        r2 = (2000 − 1000 − 1000)/1000 = 0 → index [100, 100, 100]"""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="MSFT", date="2026-08-31", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 100.0, "2026-09-01": 100.0,
+    }
+    fake_market.histories["MSFT"] = {"2026-09-01": 100.0}
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["labels"] == ["2026-08-28", "2026-08-31", "2026-09-01"]
+    assert body["values"] == [1000.0, 1000.0, 2000.0]
+    assert body["costs"] == [1000.0, 2000.0, 2000.0]
+    assert body["index_values"] == [100.0, 100.0, 100.0]
+    assert body["twrr_pct"] == 0.0
+
+
+def test_deferred_flow_flushed_once_on_first_price(client, fake_market):
+    """The pending flow must be removed exactly once, at the first measured
+    price, and must not leave a permanent phantom. Non-zero return so a
+    missing flush or a double flush both change the answer.
+
+        08-28 buy AAPL 10 @ 100 (CAD); AAPL 100
+        08-31 buy MSFT 10 @ 100 (CAD); AAPL 110; MSFT no bar → 0
+        09-01 AAPL 121 + MSFT 110 = 2310; MSFT's +1000 flow flushes
+        r1 = (1100 − 0 − 1000)/1000       = 0.10   → index 110
+        r2 = (2310 − 1000 − 1100)/1100    = 0.1909 → index 131 = +31%"""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="MSFT", date="2026-08-31", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 110.0, "2026-09-01": 121.0,
+    }
+    fake_market.histories["MSFT"] = {"2026-09-01": 110.0}
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["values"] == [1000.0, 1100.0, 2310.0]
+    assert body["index_values"] == pytest.approx([100.0, 110.0, 131.0])
+    assert body["twrr_pct"] == pytest.approx(31.0)
+
+
+def test_sell_to_zero_flow_removed_on_zero_bar(client, fake_market):
+    """REGRESSION LOCK (passes before and after #14): when a sell takes the
+    position to 0, the symbol contributes no value that bar but DOES have a
+    carried-forward close, so its negative flow must still be removed — a
+    full withdrawal reads 0%, then the empty base truncates the chain.
+
+        08-28 buy 10 @ 100        V = 1000
+        08-31 sell 10 @ 100       V = 0, F = −1000
+        r1 = (0 + 1000 − 1000)/1000 = 0 → index [100, 100], then V=0 stops."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="AAPL", date="2026-08-31", qty=10,
+                     tx_type="SELL", currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 100.0, "2026-09-01": 100.0,
+    }
+
+    body = client.get("/api/portfolio/history?period=5D").get_json()
+    assert body["values"] == [1000.0, 0.0, 0.0]
+    assert body["index_values"] == [100.0, 100.0]
+    assert len(body["index_values"]) < len(body["labels"])
+    assert body["twrr_pct"] == 0.0
+
+
+def test_1d_deferred_flow_flushes_at_symbol_first_bar(client, fake_market):
+    """REGRESSION LOCK for the intraday (1D) branch of the #14 fix. Both
+    buys absorb at today's FIRST bar (the intraday rule), but MSFT prints
+    no 09:30 bar — its first bar is 10:00. Its flow must stay pending and
+    flush at 10:00, the bar its value enters. The old build released every
+    1D flow onto the ignored bar 0, so it never removed MSFT's entry where
+    its value arrived — the whole $1000 read as a fake intraday gain.
+
+        (both bought today @ 100)   AAPL 10, MSFT 10
+        AAPL history: 09:30=100, 09:35=110; MSFT history: 10:00=100
+        V [1000, 1100, 2100]; F [2000, 0, 1000]
+        r1 = (1100 − 0 − 1000)/1000     = 0.10 → index 110
+        r2 = (2100 − 1000 − 1100)/1100  = 0    → index [100, 110, 110]
+        (the old build removes no flow on 10:00 → index 210, a fake +110%)"""
+    today = date.today().isoformat()
+    seed_transaction(ticker="AAPL", date=today, qty=10, currency="CAD")
+    seed_transaction(ticker="MSFT", date=today, qty=10, currency="CAD")
+    fake_market.histories["AAPL"] = {"09:30": 100.0, "09:35": 110.0}
+    fake_market.histories["MSFT"] = {"10:00": 100.0}
+
+    body = client.get("/api/portfolio/history?period=1D").get_json()
+    assert body["labels"] == ["09:30", "09:35", "10:00"]
+    assert body["values"] == [1000.0, 1100.0, 2100.0]
+    assert body["costs"] == [2000.0, 2000.0, 2000.0]
+    assert body["index_values"] == pytest.approx([100.0, 110.0, 110.0])
+    assert body["twrr_pct"] == pytest.approx(10.0)
+
+
 # ── Truncation (honest degradation) ───────────────────────────────────
 
 def test_short_truncates_index(client, fake_market):
