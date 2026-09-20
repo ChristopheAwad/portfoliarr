@@ -1,5 +1,7 @@
 """Backend contracts for arbitrary chart comparison overlays."""
 
+from datetime import date, timedelta
+
 import pytest
 
 import app as app_module
@@ -131,6 +133,19 @@ def test_portfolio_benchmark_failure_degrades_independently(client, fake_market)
     assert body["benchmarks"][1]["values"] == [100.0, 110.0]
 
 
+def test_portfolio_empty_benchmark_history_is_unavailable(client, fake_market):
+    seed_transaction()
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 100.0,
+    }
+    fake_market.histories["SPY"] = {}
+    body = client.get(
+        "/api/portfolio/history?period=5D&benchmark=SPY"
+    ).get_json()
+    assert body["benchmarks"][0]["values"] is None
+    assert body["benchmarks"][0]["error"] == "no history available for SPY"
+
+
 def test_portfolio_benchmark_can_reuse_held_symbol(client, fake_market):
     seed_transaction()
     fake_market.histories["AAPL"] = {
@@ -156,6 +171,60 @@ def test_portfolio_empty_ledger_with_benchmark_is_empty(client, fake_market):
             "symbol": "SPY", "values": [], "error": None,
         }],
     }
+
+
+def test_portfolio_no_held_labels_keeps_valid_benchmark_row(client, fake_market):
+    seed_transaction()
+    fake_market.histories["AAPL"] = {}
+    fake_market.histories["SPY"] = {"2026-08-28": 400.0}
+    body = client.get(
+        "/api/portfolio/history?period=5D&benchmark=SPY"
+    ).get_json()
+    assert body["labels"] == []
+    assert body["benchmarks"] == [{
+        "symbol": "SPY", "values": [], "error": None,
+    }]
+
+
+def test_portfolio_empty_reused_held_benchmark_is_unavailable(
+        client, fake_market):
+    seed_transaction()
+    fake_market.histories["AAPL"] = {}
+    body = client.get(
+        "/api/portfolio/history?period=5D&benchmark=AAPL"
+    ).get_json()
+    assert body["benchmarks"] == [{
+        "symbol": "AAPL", "values": None,
+        "error": "no history available for AAPL",
+    }]
+
+
+def test_portfolio_future_intraday_keeps_benchmark_row(client, fake_market):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    seed_transaction(date=tomorrow)
+    fake_market.histories["AAPL"] = {"09:30": 100.0}
+    fake_market.histories["SPY"] = {"09:30": 400.0}
+    body = client.get(
+        "/api/portfolio/history?period=1D&benchmark=SPY"
+    ).get_json()
+    assert body["labels"] == []
+    assert body["benchmarks"] == [{
+        "symbol": "SPY", "values": [], "error": None,
+    }]
+
+
+def test_portfolio_trimmed_empty_window_keeps_benchmark_row(
+        client, fake_market):
+    seed_transaction(date="2026-09-01")
+    fake_market.histories["AAPL"] = {"2026-08-28": 100.0}
+    fake_market.histories["SPY"] = {"2026-08-28": 400.0}
+    body = client.get(
+        "/api/portfolio/history?period=5D&benchmark=SPY"
+    ).get_json()
+    assert body["labels"] == []
+    assert body["benchmarks"] == [{
+        "symbol": "SPY", "values": [], "error": None,
+    }]
 
 
 def test_portfolio_bad_period_wins_before_benchmark_fetch(client, fake_market):
@@ -241,6 +310,20 @@ def test_stock_benchmark_failure_keeps_primary(client, fake_market):
     assert body["values"] == [100.0, 120.0]
     assert body["benchmarks"][0]["values"] is None
     assert body["benchmarks"][0]["error"]
+
+
+def test_stock_empty_benchmark_history_is_unavailable(client, fake_market):
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 120.0,
+    }
+    fake_market.histories["SPY"] = {}
+    body = client.get(
+        "/api/stock/AAPL/history?period=5D&benchmark=SPY"
+    ).get_json()
+    assert body["benchmarks"] == [{
+        "symbol": "SPY", "values": None,
+        "error": "no history available for SPY",
+    }]
 
 
 def test_stock_primary_failure_remains_404_with_benchmark(client, fake_market):

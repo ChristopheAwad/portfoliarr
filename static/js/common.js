@@ -1722,10 +1722,6 @@ function setupTimeframeChart(
                 // With only one dataset, the legend swatch adds nothing.
                 legend: {
                     display: false,
-                    labels: {
-                        color: () => getComputedStyle(document.documentElement)
-                            .getPropertyValue("--text-secondary").trim(),
-                    },
                 },
                 tooltip: {
                     // Custom positioner (registered above): park the box at
@@ -1837,11 +1833,6 @@ function setupTimeframeChart(
                                         `Cost Basis (CAD): ${formatPrice(cost)}`,
                                     ];
                                 }
-                            }
-                            if (chart.data.datasets.length > 1) {
-                                return [
-                                    `${item.dataset.label}: ${formatPrice(item.parsed.y)}`,
-                                ];
                             }
                             return formatPrice(item.parsed.y);
                         },

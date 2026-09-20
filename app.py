@@ -366,6 +366,27 @@ Algorithm: walk every trading day in the range forward, keeping a
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    def empty_history_response(benchmark_errors=None):
+        """Return the empty portfolio shape plus requested comparisons.
+
+        Comparisons cannot create a portfolio axis. A successfully fetched
+        benchmark therefore gets an empty values list; a known failure keeps
+        its error and null values so the frontend can explain the difference.
+        """
+        errors = benchmark_errors or {}
+        payload = {"labels": [], "values": [], "costs": [],
+                   "index_values": None, "twrr_pct": None}
+        if benchmark_symbols:
+            payload["benchmarks"] = [
+                {
+                    "symbol": symbol,
+                    "values": None if symbol in errors else [],
+                    "error": errors.get(symbol),
+                }
+                for symbol in benchmark_symbols
+            ]
+        return jsonify(payload)
+
     # The ledger's default sort is newest-first; we need the opposite to
     # walk history forward, so sort ascending here.
     transactions = sorted(
@@ -376,17 +397,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
     if not transactions:
-        payload = {"labels": [], "values": [], "costs": [],
-                   "index_values": None, "twrr_pct": None}
-        if benchmark_symbols:
-            # No holdings means there is intentionally no portfolio axis to
-            # align against. Report each requested comparison explicitly,
-            # but do not fetch it or invent a benchmark-only chart axis.
-            payload["benchmarks"] = [
-                {"symbol": symbol, "values": [], "error": None}
-                for symbol in benchmark_symbols
-            ]
-        return jsonify(payload)
+        return empty_history_response()
 
     # Fetch each ticker's price history once — but IN PARALLEL. The
     # serial version paid "sum of every Yahoo call" before the chart
@@ -468,7 +479,7 @@ Algorithm: walk every trading day in the range forward, keeping a
             for symbol, history in pool.map(
                 fetch_benchmark_history, missing_benchmarks
             ):
-                if history is None:
+                if not history:
                     benchmark_errors[symbol] = (
                         f"no history available for {symbol}"
                     )
@@ -476,7 +487,12 @@ Algorithm: walk every trading day in the range forward, keeping a
                     benchmark_histories[symbol] = history
     for symbol in benchmark_symbols:
         if symbol in histories:
-            benchmark_histories[symbol] = histories[symbol]
+            if histories[symbol]:
+                benchmark_histories[symbol] = histories[symbol]
+            else:
+                benchmark_errors[symbol] = (
+                    f"no history available for {symbol}"
+                )
 
     # DISPLAY CURRENCY — the chart is ALWAYS CAD (the dashboard's ledger
     # toggle never touches it: this line IS the portfolio total). Each
@@ -516,8 +532,7 @@ Algorithm: walk every trading day in the range forward, keeping a
         all_labels.update(history)
     labels = sorted(all_labels)
     if not labels:
-        return jsonify({"labels": [], "values": [], "costs": [],
-                        "index_values": None, "twrr_pct": None})
+        return empty_history_response(benchmark_errors)
 
     # Intraday (1D) labels are times ("09:30"), not dates ("2026-08-31") —
     # see get_history. So "which label applies which transaction" differs:
@@ -557,16 +572,14 @@ Algorithm: walk every trading day in the range forward, keeping a
     first_tx_date = transactions[0]["transaction_date"]
     if is_intraday:
         if first_tx_date > label_date_today:
-            return jsonify({"labels": [], "values": [], "costs": [],
-                            "index_values": None, "twrr_pct": None})
+            return empty_history_response(benchmark_errors)
     else:
         labels = [label for label in labels if label >= first_tx_date]
         if not labels:
             # Every fetched bar predates the first logged investment —
             # the live case being a future-dated transaction vs. the
             # period's fixed window. Nothing plottable, not an error.
-            return jsonify({"labels": [], "values": [], "costs": [],
-                            "index_values": None, "twrr_pct": None})
+            return empty_history_response(benchmark_errors)
 
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
@@ -2821,7 +2834,7 @@ def stock_history(symbol):
             return history_symbol, get_history(history_symbol, period)
         except Exception:
             app.logger.warning(
-                "stock comparison history failed for %s",
+                "stock history fetch failed for %s",
                 history_symbol,
                 exc_info=True,
             )
@@ -2829,7 +2842,7 @@ def stock_history(symbol):
 
     with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
         for history_symbol, history in pool.map(fetch_one, symbols):
-            if history is None:
+            if history is None or (history_symbol != symbol and not history):
                 errors[history_symbol] = (
                     f"no history available for {history_symbol}"
                 )
