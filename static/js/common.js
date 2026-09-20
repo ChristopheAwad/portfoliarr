@@ -2485,6 +2485,16 @@ function setupTimeframeChart(
         reload() {
             return refresh(requestedPeriod);
         },
+        repaintComparisonReadout() {
+            // Primary borderColor is a resolved string, while overlay colors
+            // are scriptable functions. Refresh both sides of that contract:
+            // replace the primary color, rebuild DOM markers from the live
+            // palette, then redraw scriptable overlay lines and the gradient.
+            chart.data.datasets[0].borderColor =
+                CHART_COLORS[direction].line;
+            renderComparisonReadout(comparisonReadoutIndex);
+            chart.update();
+        },
         updatePrevClose(val) {
             prevClose = val;
             chart.update();

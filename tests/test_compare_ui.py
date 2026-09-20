@@ -114,6 +114,12 @@ def test_chart_factory_receives_comparison_readout():
     )
 
 
+def test_theme_change_repaints_chart_and_readout_colors():
+    assert "repaintComparisonReadout()" in COMMON_JS
+    assert "portfolioChartHandle.repaintComparisonReadout();" in MAIN_JS
+    assert "stockChartHandle.repaintComparisonReadout();" in STOCK_JS
+
+
 def test_comparison_readout_renders_marker_value_then_name():
     body = _comparison_readout_body()
     order = [

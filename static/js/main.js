@@ -730,7 +730,9 @@ function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD, opts) {
 // refresh time and need an explicit update). The donut's palette is also
 // build-time state (see paintAllocation) and needs the same refresh.
 document.addEventListener("themechange", () => {
-    if (portfolioChartHandle) portfolioChartHandle.chart.update();
+    if (portfolioChartHandle) {
+        portfolioChartHandle.repaintComparisonReadout();
+    }
     // Re-read BOTH pieces of donut color from the new theme: the wedge
     // palette and the card-paper border between wedges. update("none")
     // repaints instantly — a theme flip is not the moment for a 600ms

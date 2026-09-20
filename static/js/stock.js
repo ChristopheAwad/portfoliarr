@@ -368,7 +368,7 @@ const stockChartHandle = setupTimeframeChart({
 // When the theme toggles, repaint the chart so grid/line colors pick up
 // the new CSS variable values.
 document.addEventListener("themechange", () => {
-    if (stockChartHandle) stockChartHandle.chart.update();
+    if (stockChartHandle) stockChartHandle.repaintComparisonReadout();
 });
 
 // ---------------------------------------------------------------------------
