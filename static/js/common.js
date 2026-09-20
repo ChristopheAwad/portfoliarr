@@ -2252,6 +2252,11 @@ function setupTimeframeChart(
                 chart.data.datasets.push(dataset);
             }
             dataset.label = overlays[i].symbol;
+            // Preserve a failed benchmark's route-boundary explanation so
+            // the readout can distinguish failure from a valid line that has
+            // not started at the hovered date. Reset to null when a later
+            // request succeeds so stale failure text cannot survive.
+            dataset.compareError = overlays[i].error || null;
             const values = overlays[i].values;
             dataset.data = Array.isArray(values)
                 ? values.slice(0, plotLabels.length)
@@ -2316,7 +2321,12 @@ function setupTimeframeChart(
 
             const name = document.createElement("span");
             name.className = "comparison-readout-name";
-            name.textContent = dataset.label || "—";
+            if (dataset.compareError) {
+                name.textContent = `${dataset.label} unavailable`;
+                name.title = dataset.compareError;
+            } else {
+                name.textContent = dataset.label || "—";
+            }
 
             item.append(marker, valueEl, name);
             comparisonReadout.append(item);

@@ -149,7 +149,13 @@ def test_portfolio_empty_ledger_with_benchmark_is_empty(client, fake_market):
         "/api/portfolio/history?period=5D&benchmark=SPY"
     )
     assert response.status_code == 200
-    assert response.get_json()["labels"] == []
+    assert response.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        "index_values": None, "twrr_pct": None,
+        "benchmarks": [{
+            "symbol": "SPY", "values": [], "error": None,
+        }],
+    }
 
 
 def test_portfolio_bad_period_wins_before_benchmark_fetch(client, fake_market):

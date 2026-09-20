@@ -138,6 +138,14 @@ def test_comparison_readout_uses_growth_return_math():
     assert '"—"' in body
 
 
+def test_comparison_readout_identifies_failed_benchmarks():
+    assert "dataset.compareError = overlays[i].error || null;" in COMMON_JS
+    body = _comparison_readout_body()
+    assert "dataset.compareError" in body
+    assert " unavailable`" in body
+    assert "name.title = dataset.compareError;" in body
+
+
 def test_comparison_readout_tracks_hover_and_falls_back_to_latest():
     js = COMMON_JS
     assert "onHover:" in js

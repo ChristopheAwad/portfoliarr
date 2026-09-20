@@ -376,8 +376,17 @@ Algorithm: walk every trading day in the range forward, keeping a
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
     if not transactions:
-        return jsonify({"labels": [], "values": [], "costs": [],
-                        "index_values": None, "twrr_pct": None})
+        payload = {"labels": [], "values": [], "costs": [],
+                   "index_values": None, "twrr_pct": None}
+        if benchmark_symbols:
+            # No holdings means there is intentionally no portfolio axis to
+            # align against. Report each requested comparison explicitly,
+            # but do not fetch it or invent a benchmark-only chart axis.
+            payload["benchmarks"] = [
+                {"symbol": symbol, "values": [], "error": None}
+                for symbol in benchmark_symbols
+            ]
+        return jsonify(payload)
 
     # Fetch each ticker's price history once — but IN PARALLEL. The
     # serial version paid "sum of every Yahoo call" before the chart
