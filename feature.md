@@ -3,7 +3,7 @@
 ## Roadmap
 
 - Parent feature: Roadmap #17, Arbitrary Comparison Overlays.
-- Roadmap status remains `in progress` until the PR number is assigned.
+- Roadmap status: `shipped 2026-09-20 (PR #60)`.
 - This is a requested refinement to the active feature, not a new roadmap item.
 
 ## Status

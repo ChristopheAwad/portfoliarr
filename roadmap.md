@@ -102,7 +102,7 @@ request (no new endpoint). Currency-agnostic by construction (ratios only).
 `templates/index.html`, `templates/stock.html`, `static/style.css`,
 `tests/test_compare.py`, `tests/test_compare_ui.py`
 **Depends on:** #13 (shipped) for the growth-of-$100 index
-**Status:** in progress
+**Status:** shipped 2026-09-20 (PR #60)
 
 ---
 
