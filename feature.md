@@ -9,9 +9,10 @@
 ## Status
 
 IMPLEMENTED. The comparison overlays and requested refinement are complete.
-Tests were written first and failed for the intended persistence, readout, and
-tooltip gaps. The final full suite passes (`629 passed`). This file preserves
-the implementation contract and verification checklist for future maintenance.
+Tests were written first and failed for the intended persistence, readout,
+tooltip, and degraded-data gaps. The final full suite passes (`641 passed`).
+This file preserves the implementation contract and verification checklist for
+future maintenance.
 
 ## User Request
 
@@ -110,8 +111,9 @@ Comparison symbols are page-local JavaScript state only.
   unavailable state, and hidden empty state.
 - `feature.md`: this handoff.
 
-Do not change `app.py`, `db.py`, `market_data.py`, or the history response shape
-for this refinement.
+Backend changes are limited to additive benchmark behavior in the existing
+history routes. Do not change `db.py`, `market_data.py`, or the no-benchmark
+response shapes.
 
 ## Part 1: Write Failing Tests First
 
@@ -148,8 +150,8 @@ Add `test_comparison_readout_markup_is_below_each_canvas`:
   `stock-comparison-readout`.
 - Verify by string position that each readout appears after its chart `<canvas>`
   and before the chart controls/picker.
-- Require `aria-live="polite"` so keyboard users receive updated values without
-  an intrusive alert.
+- Do not use `aria-live`: hover changes can otherwise cause a burst of screen-
+  reader announcements. The readout remains ordinary visible text.
 
 Add `test_chart_factory_receives_comparison_readout`:
 
@@ -297,7 +299,6 @@ In `templates/index.html`, immediately after the closing `</div>` for the
 ```html
 <div id="portfolio-comparison-readout"
      class="comparison-readout"
-     aria-live="polite"
      hidden></div>
 ```
 
@@ -307,7 +308,6 @@ In `templates/stock.html`, immediately after the `.chart-box` containing
 ```html
 <div id="stock-comparison-readout"
      class="comparison-readout"
-     aria-live="polite"
      hidden></div>
 ```
 
@@ -547,7 +547,7 @@ Responsive/accessibility:
 ## Scope Limits
 
 - No persistence option or preference toggle.
-- No backend/API changes.
+- No new endpoint, database schema, or market-data cache.
 - No database changes.
 - No configurable legend ordering.
 - No absolute price/value in the bottom readout during comparison mode.

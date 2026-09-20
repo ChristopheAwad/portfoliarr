@@ -706,6 +706,7 @@ const portfolioChartHandle = setupTimeframeChart({
     modeBar: document.querySelector(".chart-mode-selectors"),
     getBenchmarks: () => (comparePicker ? comparePicker.getSymbols() : []),
     comparisonReadout: document.getElementById("portfolio-comparison-readout"),
+    comparisonPrimaryLabel: "Portfolio",
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",

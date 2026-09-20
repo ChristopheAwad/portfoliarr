@@ -1152,7 +1152,8 @@ function oppositePositioner(items, eventPosition) {
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
-      modeBar, getBenchmarks, comparisonReadout }
+      modeBar, getBenchmarks, comparisonReadout,
+      comparisonPrimaryLabel = datasetLabel }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -2316,7 +2317,8 @@ function setupTimeframeChart(
                 name.textContent = `${dataset.label} unavailable`;
                 name.title = dataset.compareError;
             } else {
-                name.textContent = dataset.label || "—";
+                name.textContent = datasetIndex === 0
+                    ? comparisonPrimaryLabel : (dataset.label || "—");
             }
 
             item.append(marker, valueEl, name);

@@ -99,7 +99,8 @@ def test_comparison_readout_markup_is_below_each_canvas():
         readout_at = html.index(readout_id)
         assert readout_at > canvas_at
         assert 'class="comparison-readout"' in html
-        assert 'aria-live="polite"' in html
+        readout_tag = html[readout_at:html.index(">", readout_at)]
+        assert "aria-live" not in readout_tag
 
 
 def test_chart_factory_receives_comparison_readout():
@@ -112,6 +113,8 @@ def test_chart_factory_receives_comparison_readout():
         'comparisonReadout: document.getElementById("stock-comparison-readout")'
         in STOCK_JS
     )
+    assert 'comparisonPrimaryLabel: "Portfolio"' in MAIN_JS
+    assert "comparisonPrimaryLabel" in COMMON_JS
 
 
 def test_theme_change_repaints_chart_and_readout_colors():

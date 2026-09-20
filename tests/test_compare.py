@@ -160,6 +160,7 @@ def test_portfolio_benchmark_can_reuse_held_symbol(client, fake_market):
 
 
 def test_portfolio_empty_ledger_with_benchmark_is_empty(client, fake_market):
+    fake_market.histories["SPY"] = {"2026-08-28": 400.0}
     response = client.get(
         "/api/portfolio/history?period=5D&benchmark=SPY"
     )
@@ -171,6 +172,17 @@ def test_portfolio_empty_ledger_with_benchmark_is_empty(client, fake_market):
             "symbol": "SPY", "values": [], "error": None,
         }],
     }
+
+
+def test_portfolio_empty_ledger_reports_invalid_benchmark(client, fake_market):
+    fake_market.histories["NOPE"] = {}
+    body = client.get(
+        "/api/portfolio/history?period=5D&benchmark=NOPE"
+    ).get_json()
+    assert body["benchmarks"] == [{
+        "symbol": "NOPE", "values": None,
+        "error": "no history available for NOPE",
+    }]
 
 
 def test_portfolio_no_held_labels_keeps_valid_benchmark_row(client, fake_market):

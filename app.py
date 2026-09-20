@@ -387,6 +387,50 @@ Algorithm: walk every trading day in the range forward, keeping a
             ]
         return jsonify(payload)
 
+    def load_benchmark_histories(held_histories):
+        """Fetch comparisons separately from the portfolio's held histories."""
+        benchmark_histories = {}
+        benchmark_errors = {}
+        missing_benchmarks = [
+            symbol for symbol in benchmark_symbols
+            if symbol not in held_histories
+        ]
+
+        def fetch_benchmark_history(symbol):
+            try:
+                return symbol, get_history(symbol, period)
+            except Exception:
+                app.logger.warning(
+                    "benchmark history failed for %s — comparison omitted",
+                    symbol,
+                    exc_info=True,
+                )
+                return symbol, None
+
+        if missing_benchmarks:
+            with ThreadPoolExecutor(
+                max_workers=min(len(missing_benchmarks), 8)
+            ) as pool:
+                for symbol, history in pool.map(
+                    fetch_benchmark_history, missing_benchmarks
+                ):
+                    if not history:
+                        benchmark_errors[symbol] = (
+                            f"no history available for {symbol}"
+                        )
+                    else:
+                        benchmark_histories[symbol] = history
+
+        for symbol in benchmark_symbols:
+            if symbol in held_histories:
+                if held_histories[symbol]:
+                    benchmark_histories[symbol] = held_histories[symbol]
+                else:
+                    benchmark_errors[symbol] = (
+                        f"no history available for {symbol}"
+                    )
+        return benchmark_histories, benchmark_errors
+
     # The ledger's default sort is newest-first; we need the opposite to
     # walk history forward, so sort ascending here.
     transactions = sorted(
@@ -397,7 +441,8 @@ Algorithm: walk every trading day in the range forward, keeping a
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
     if not transactions:
-        return empty_history_response()
+        _, benchmark_errors = load_benchmark_histories({})
+        return empty_history_response(benchmark_errors)
 
     # Fetch each ticker's price history once — but IN PARALLEL. The
     # serial version paid "sum of every Yahoo call" before the chart
@@ -455,44 +500,7 @@ Algorithm: walk every trading day in the range forward, keeping a
 
     # Keep comparisons separate from the portfolio histories. Adding a
     # benchmark must not add labels and therefore change the portfolio line.
-    benchmark_histories = {}
-    benchmark_errors = {}
-    missing_benchmarks = [
-        symbol for symbol in benchmark_symbols if symbol not in histories
-    ]
-
-    def fetch_benchmark_history(symbol):
-        try:
-            return symbol, get_history(symbol, period)
-        except Exception:
-            app.logger.warning(
-                "benchmark history failed for %s — comparison omitted",
-                symbol,
-                exc_info=True,
-            )
-            return symbol, None
-
-    if missing_benchmarks:
-        with ThreadPoolExecutor(
-            max_workers=min(len(missing_benchmarks), 8)
-        ) as pool:
-            for symbol, history in pool.map(
-                fetch_benchmark_history, missing_benchmarks
-            ):
-                if not history:
-                    benchmark_errors[symbol] = (
-                        f"no history available for {symbol}"
-                    )
-                else:
-                    benchmark_histories[symbol] = history
-    for symbol in benchmark_symbols:
-        if symbol in histories:
-            if histories[symbol]:
-                benchmark_histories[symbol] = histories[symbol]
-            else:
-                benchmark_errors[symbol] = (
-                    f"no history available for {symbol}"
-                )
+    benchmark_histories, benchmark_errors = load_benchmark_histories(histories)
 
     # DISPLAY CURRENCY — the chart is ALWAYS CAD (the dashboard's ledger
     # toggle never touches it: this line IS the portfolio total). Each
