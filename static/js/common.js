@@ -2292,13 +2292,11 @@ function setupTimeframeChart(
 
             const marker = document.createElement("span");
             marker.className = "comparison-readout-marker";
-            // datasetIndex 0 is the primary (its borderColor resolves via
-            // the data-driven direction color); overlays use the palette.
-            marker.style.background = datasetIndex === 0
-                ? (typeof dataset.borderColor === "function"
-                    ? dataset.borderColor()
-                    : dataset.borderColor)
-                : getCompareColors()[datasetIndex - 1];
+            // Resolve the exact same option the line uses, so a future
+            // palette or dataset-order change cannot separate marker color
+            // from line color.
+            marker.style.background = typeof dataset.borderColor === "function"
+                ? dataset.borderColor() : dataset.borderColor;
 
             const valueEl = document.createElement("span");
             valueEl.className = "comparison-readout-value";

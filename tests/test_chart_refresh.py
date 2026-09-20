@@ -57,7 +57,7 @@ def test_stale_same_period_response_cannot_replace_newer_cache_data():
 
     The key combines the period with the ordered comparison list so a plain
     chart and an overlay chart share nothing (see test_compare.test_portfolio_
-    one_benchmark_rebases_against_axis for the two-reply behavior).
+    history_one_benchmark_rebased for the two-reply behavior).
     """
     body = refresh_body()
     cache_write = body.index(
