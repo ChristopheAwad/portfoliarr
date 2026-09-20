@@ -539,29 +539,28 @@ Algorithm: walk every trading day in the range forward, keeping a
     # withdraws (negative) — there is no separate cash account, so
     # transactions ARE the cash movements.
     #
-    # THE MIRROR RULE: a transaction's flow is removed ONLY if its value
-    # entered the series. A dead ticker (get_history raised → empty dict)
-    # contributes 0 to values, so removing its buy would "return" money
-    # that never actually arrived — that would fake a LOSS. Same for a
-    # USD row with no live rate, or an unsupported currency. Flow removal
-    # is the exact mirror of the value walk: no value, no flow.
+    # THE MIRROR RULE: a transaction's flow is removed ONLY at a bar where
+    # its symbol's value is actually measured. A dead ticker (get_history
+    # raised → empty dict) contributes 0 to values, so removing its buy
+    # would "return" money that never arrived — that would fake a LOSS.
+    # Same for a USD row with no live rate, or an unsupported currency.
     #
-    # Non-empty is not enough: a ticker whose ENTIRE history predates the
-    # window (delisted before the first transaction; another holding
-    # anchors the labels) also never enters the series — its bars are all
-    # trimmed away, so the walk never prices it and it contributes 0 to
-    # values. Requiring its last bar to reach labels[0] is what keeps the
-    # gate equivalent to the invariant above. Safe for the intraday walk
-    # too: all flows land on bar 0 there and are ignored anyway (and
-    # history keys and labels share one format — both come from
-    # get_history for the same period).
-    flowable_symbols = {
-        symbol for symbol, history in histories.items()
-        if history
-        and max(history) >= labels[0]
-        and (currency_by_symbol.get(symbol) == "CAD"
-             or (currency_by_symbol.get(symbol) == "USD"
-                 and live_rate is not None))
+    # The mirror is PER-BAR, not per-symbol (roadmap #14). A ticker's
+    # first bar inside the window can land AFTER its transaction's
+    # absorption label (a Yahoo data gap, or a MAX window whose history
+    # starts later than a logged buy). On those gap bars the ticker still
+    # contributes 0: removing its flow anyway would fake a one-bar loss
+    # (and, when the flow is large, truncate the whole index). So each
+    # symbol's flows wait in `pending_flows` and flush at the FIRST label
+    # where that symbol has a measured price — the exact bar its value
+    # enters the series. A symbol that never prices in the window keeps
+    # its flows pending forever, so they are never removed (no value, no
+    # flow). The set below gates CURRENCY only; the pending/flush walk
+    # gates timing.
+    flow_eligible_symbols = {
+        symbol for symbol, currency in currency_by_symbol.items()
+        if currency == "CAD"
+        or (currency == "USD" and live_rate is not None)
     }
 
     def tx_flow(tx):
@@ -573,7 +572,7 @@ Algorithm: walk every trading day in the range forward, keeping a
         own bar. (The COST side above keeps the stored rate — that's a
         frozen fact about the past; this is a removal amount in today's
         units, and the two must match or the books don't close.)"""
-        if tx["ticker"] not in flowable_symbols:
+        if tx["ticker"] not in flow_eligible_symbols:
             return 0.0   # mirror rule — no value in the series, no flow
         if tx["currency"] == "USD":
             # The flowable gate already proves live_rate exists for a
@@ -595,6 +594,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     values = []
     costs = []
     flows_by_label = {}  # label → net CAD cash contribution absorbed there
+    pending_flows = {}   # symbol → flows absorbed BEFORE it first prices
     tx_index = 0        # next un-applied daily transaction (advances through
                         # the sorted list); unused in the intraday branch
     today_applied = False  # intraday: have today's transactions been applied?
@@ -619,8 +619,8 @@ Algorithm: walk every trading day in the range forward, keeping a
                             net_cost.get(tx["ticker"], 0.0)
                             + tx_cad_cost(tx)
                         )
-                        flows_by_label[label] = (
-                            flows_by_label.get(label, 0.0) + tx_flow(tx)
+                        pending_flows[tx["ticker"]] = (
+                            pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
                         )
         else:
             # Daily: transactions are sorted by date, so as long as the
@@ -637,8 +637,8 @@ Algorithm: walk every trading day in the range forward, keeping a
                 net_cost[tx["ticker"]] = (
                     net_cost.get(tx["ticker"], 0.0) + tx_cad_cost(tx)
                 )
-                flows_by_label[label] = (
-                    flows_by_label.get(label, 0.0) + tx_flow(tx)
+                pending_flows[tx["ticker"]] = (
+                    pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
                 )
 
         # Sum each ticker's held quantity × its close price at this label
@@ -685,6 +685,20 @@ Algorithm: walk every trading day in the range forward, keeping a
         # go negative (recouped more than paid); that's honest, matching
         # the summary strip's own negative-cost-basis semantics.
         costs.append(sum(net_cost.values()))
+
+        # Flush every held symbol's pending flows at the first label where
+        # that symbol has a measured price (a bar now, or a carried-forward
+        # last close). `last_closes` is the same "this symbol's value is
+        # real at this label" marker the value walk used just above, so a
+        # flow is removed on exactly the bar its value enters — no earlier.
+        # A symbol that never prices here stays in `pending_flows` forever,
+        # so its flows are never removed (the mirror rule, now per-bar).
+        for symbol in [s for s in pending_flows if s in last_closes]:
+            flow = pending_flows.pop(symbol)
+            if flow:
+                flows_by_label[label] = (
+                    flows_by_label.get(label, 0.0) + flow
+                )
 
     # Time-weighted return: chain the value line with each bar's cash
     # flow removed. Label-keyed flows are aligned to the label order,
