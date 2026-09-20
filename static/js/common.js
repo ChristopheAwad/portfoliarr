@@ -2277,9 +2277,12 @@ function setupTimeframeChart(
 
         chart.data.datasets.forEach((dataset, datasetIndex) => {
             const values = dataset.data;
-            const value = (index !== null && index !== undefined
-                && Number.isFinite(values[index]))
-                ? values[index]
+            const hasHoverIndex = index !== null && index !== undefined;
+            // A hovered date is exact: if this line has not started yet,
+            // show unavailable instead of borrowing a future value. Only the
+            // no-hover state intentionally falls back to the latest point.
+            const value = hasHoverIndex
+                ? (Number.isFinite(values[index]) ? values[index] : null)
                 : (() => {
                     for (let i = values.length - 1; i >= 0; i--) {
                         if (Number.isFinite(values[i])) return values[i];
@@ -2338,6 +2341,8 @@ function setupTimeframeChart(
         // the growth index; value view the CAD line.
         const plottingIndex = mode === "performance";
         const plotValues = plottingIndex ? data.index_values : data.values;
+        const finitePlotValues = Array.isArray(plotValues)
+            ? plotValues.filter(Number.isFinite) : [];
         // The TWR index may be TRUNCATED (the backend stops chaining at a
         // non-positive base — an oversold short, a withdrawn portfolio).
         // The x-axis must end where the line ends, so labels are sliced
@@ -2346,8 +2351,9 @@ function setupTimeframeChart(
         const plotLabels = Array.isArray(plotValues)
             ? data.labels.slice(0, plotValues.length)
             : [];
-        if (Array.isArray(plotValues) && plotValues.length > 0) {
-            direction = plotValues.at(-1) >= plotValues[0] ? "up" : "down";
+        if (finitePlotValues.length > 0) {
+            direction = finitePlotValues.at(-1) >= finitePlotValues[0]
+                ? "up" : "down";
             chart.data.datasets[0].borderColor =
                 CHART_COLORS[direction].line;
         }
@@ -2397,11 +2403,10 @@ function setupTimeframeChart(
         // page scripts can derive a period return (e.g. the stock
         // page's change pill). Only fires when there are at least two
         // points — a single bar can't define a direction.
-        if (onPeriodData && Array.isArray(plotValues)
-                && plotValues.length > 1) {
+        if (onPeriodData && finitePlotValues.length > 1) {
             onPeriodData({
-                firstValue: plotValues[0],
-                lastValue: plotValues.at(-1),
+                firstValue: finitePlotValues[0],
+                lastValue: finitePlotValues.at(-1),
                 period,
             });
         }

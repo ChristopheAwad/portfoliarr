@@ -205,6 +205,23 @@ def test_stock_history_comparison_normalizes_union_axis(client, fake_market):
     }]
 
 
+def test_stock_comparison_can_start_before_primary(client, fake_market):
+    fake_market.histories["AAPL"] = {
+        "2026-08-31": 100.0, "2026-09-01": 110.0,
+    }
+    fake_market.histories["SPY"] = {
+        "2026-08-28": 400.0, "2026-08-31": 420.0,
+    }
+    body = client.get(
+        "/api/stock/AAPL/history?period=5D&benchmark=SPY"
+    ).get_json()
+    assert body["labels"] == [
+        "2026-08-28", "2026-08-31", "2026-09-01",
+    ]
+    assert body["values"] == [None, 100.0, 110.0]
+    assert body["benchmarks"][0]["values"] == [100.0, 105.0, 105.0]
+
+
 def test_stock_benchmark_failure_keeps_primary(client, fake_market):
     fake_market.histories["AAPL"] = {
         "2026-08-28": 100.0, "2026-08-31": 120.0,

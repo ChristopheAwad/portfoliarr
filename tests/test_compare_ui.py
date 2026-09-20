@@ -139,6 +139,23 @@ def test_comparison_readout_tracks_hover_and_falls_back_to_latest():
     assert "renderComparisonReadout()" in js
 
 
+def test_comparison_readout_does_not_fall_forward_on_hover():
+    body = _comparison_readout_body()
+    assert "const hasHoverIndex = index !== null && index !== undefined;" in body
+    assert "const value = hasHoverIndex" in body
+    assert "Number.isFinite(values[index]) ? values[index] : null" in body
+
+
+def test_chart_period_summary_uses_finite_primary_endpoints():
+    start = COMMON_JS.index("function paint(data, period)")
+    end = COMMON_JS.index("function syncTimeframeButtons(period)", start)
+    body = COMMON_JS[start:end]
+    assert "const finitePlotValues" in body
+    assert "plotValues.filter(Number.isFinite)" in body
+    assert "firstValue: finitePlotValues[0]" in body
+    assert "lastValue: finitePlotValues.at(-1)" in body
+
+
 def test_dashboard_wires_picker_to_performance_chart():
     assert "setupComparePicker" in MAIN_JS
     assert "getBenchmarks" in MAIN_JS
