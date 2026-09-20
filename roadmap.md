@@ -112,7 +112,7 @@ Edge-case refinement to #13's mirror rule (found in PR #45's review round 2, non
 
 **Files:** `app.py` (flow fold in the `portfolio_history` walk), `tests/test_twrr.py` (regression tests)
 **Depends on:** #13 (shipped)
-**Status:** shipped
+**Status:** shipped 2026-09-20 (PR #59)
 
 ---
 
