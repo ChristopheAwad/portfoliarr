@@ -679,6 +679,24 @@ const DEFAULT_CHART_PERIOD = "5D";
 // redraws — no re-creating the Chart, no page reload. The factory wires
 // the delegated .time-btn listener too, so a click re-fetches with the
 // clicked button's textContent as the PERIOD_MAP key.
+const comparePicker = setupComparePicker({
+    inputEl: document.getElementById("compare-input"),
+    resultsEl: document.getElementById("compare-results"),
+    chipsEl: document.getElementById("compare-chips"),
+    quickPickBar: document.querySelector(".compare-quick-picks"),
+    onChange(symbols) {
+        if (portfolioChartHandle) portfolioChartHandle.reload();
+
+        // A normalized comparison has meaning only beside the TWR index.
+        const performanceButton =
+            document.querySelector('[data-chart-mode="performance"]');
+        if (symbols.length && performanceButton
+            && !performanceButton.classList.contains("active")) {
+            performanceButton.click();
+        }
+    },
+});
+
 const portfolioChartHandle = setupTimeframeChart({
     canvas: portfolioCanvas,
     buttonBar: chartButtonsEl,
@@ -686,6 +704,8 @@ const portfolioChartHandle = setupTimeframeChart({
     // both series, so this tray (in index.html) flips between them. The
     // stock page passes nothing here and gets a plain value chart.
     modeBar: document.querySelector(".chart-mode-selectors"),
+    getBenchmarks: () => (comparePicker ? comparePicker.getSymbols() : []),
+    comparisonReadout: document.getElementById("portfolio-comparison-readout"),
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",

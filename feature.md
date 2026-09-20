@@ -1,318 +1,565 @@
-# Feature: TWR Flow-Timing Alignment (Roadmap #14)
+# Feature: Comparison Session State and Bottom Performance Readout
+
+## Roadmap
+
+- Parent feature: Roadmap #17, Arbitrary Comparison Overlays.
+- Roadmap status remains `in progress` until the PR number is assigned.
+- This is a requested refinement to the active feature, not a new roadmap item.
 
 ## Status
-IMPLEMENTED — tests A/B/C written first (A and B failed on the buggy build),
-then the per-bar flow fix. Focused suites and the full 585-test suite pass.
-Browser GUI approved by the user; ready for the approved PR workflow.
 
-## Goal
-Fix the one correctness bug in the TWR "Performance" chart view. A cash flow
-must be removed on the same bar where its symbol's value enters the series,
-not on the transaction's absorption label. Today a ticker whose first in-window
-price bar comes AFTER its buy's absorption label has its flow removed while it
-still contributes 0 to the value line. That fakes a one-bar loss. In the extreme
-(flow is large compared with the rest of the portfolio) it trips the truncation
-guard and makes the whole index `null` or permanently short.
+IMPLEMENTED. The comparison overlays and requested refinement are complete.
+Tests were written first and failed for the intended persistence, readout, and
+tooltip gaps. The final full suite passes (`629 passed`). This file preserves
+the implementation contract and verification checklist for future maintenance.
 
-This is the bug the audit found as finding #1 and that roadmap #14 already
-describes. No other audit finding is in scope.
+## User Request
 
-## Root cause (verified in code)
-- `flowable_symbols` (`app.py:558-565`) gates flow removal per SYMBOL. It only
-  requires `max(history) >= labels[0]`.
-- The transaction walk removes the flow at the transaction's ABSORPTION LABEL:
-  - intraday branch: `app.py:622-624`
-  - daily branch: `app.py:640-642`
-- The value walk (`app.py:665-671`) contributes 0 when the symbol has no bar at
-  that label and no carried-forward close.
-- So a symbol can pass the per-symbol gate but have no measured price at the
-  absorption label. The flow is subtracted anyway:
-  `r_i = (0 − F_i − V_{i−1}) / V_{i−1}`. If `F_i >= V_{i−1}`, then
-  `post_flow_value = V_i − F_i = −F_i <= 0`, and `_time_weighted_return`
-  (`app.py:281-283`) breaks the chain. Result: `index_values` is `null` (one
-  bar removed) or a permanently short index.
+1. A comparison must be removed when the user navigates away. Comparisons must
+   not persist across pages, reloads, or browser Back/Forward Cache restoration.
+2. While comparison mode is active, the floating chart tooltip must contain
+   only the hovered date.
+3. Comparison performance and the legend must be below the chart.
+4. Each performance number must sit directly beside its matching line-color
+   marker.
 
-## The contract after the fix (do not deviate)
-1. A flow is removed on the FIRST label where its symbol has a MEASURED price.
-   "Measured price" = a bar at that label, or a carried-forward last close —
-   the exact same marker the value walk uses (`last_closes`).
-2. A symbol that never prices inside the window keeps its flows pending
-   forever, so they are never removed. This preserves the existing mirror rule
-   (no value in the series, no flow out).
-3. Currency eligibility is unchanged: CAD always, USD only when a live rate
-   exists. Unsupported currencies and USD-without-rate still contribute 0 flow.
-4. The normal case is unchanged: a symbol that prices at its absorption label
-   flushes the flow there, exactly as today. All existing TWR tests must keep
-   passing without edits.
-5. Sell-to-zero is preserved: the sell's negative flow is removed on the
-   zeroing bar (the symbol already has a `last_closes` entry), so a full
-   withdrawal still reads 0% and truncates at the empty base.
+## Locked Interpretation
 
-## Test plan (write these FIRST; they must fail on the current build)
+Use a custom bottom comparison readout instead of Chart.js's built-in legend.
+Each entry has this visual and DOM order:
 
-Add the following three tests to `tests/test_twrr.py`. Use the file's existing
-`seed_transaction` helper and the `client` / `fake_market` fixtures. Append them
-after `test_delisted_before_window_flow_excluded` (after line 283), under the
-existing mirror-rule section.
-
-### Test A — the core regression (fails on the current build)
-Name: `test_flow_deferred_until_symbol_first_prices`
-
-Scenario:
-- 2026-08-28 buy AAPL 10 @ 100 (CAD)
-- 2026-08-31 buy MSFT 10 @ 100 (CAD)
-- AAPL history: `{"2026-08-28": 100.0, "2026-08-31": 100.0, "2026-09-01": 100.0}`
-- MSFT history: `{"2026-09-01": 100.0}` (deliberate data gap on 08-31)
-
-Why it fails now: MSFT's first bar is 09-01, after its absorption label 08-31.
-On 08-31 MSFT contributes 0 but its +1000 flow is removed, so
-`post_flow_value = 1000 − 1000 = 0` breaks the chain and the route returns
-`index_values: None`. The fixed build holds the flow pending until 09-01.
-
-Exact assertions:
-```python
-def test_flow_deferred_until_symbol_first_prices(client, fake_market):
-    """Roadmap #14: MSFT's first in-window bar (09-01) lands AFTER its
-    buy's absorption label (08-31). Its flow must NOT be removed on
-    08-31 while MSFT still contributes 0 — that removal would drive r to
-    −100% and truncate the whole index (the buggy build returns None).
-    The pending flow flushes on 09-01, the first bar MSFT prices.
-
-        08-28 buy AAPL 10 @ 100 (CAD)  AAPL closes 100
-        08-31 buy MSFT 10 @ 100 (CAD)  AAPL 100; MSFT has no bar → 0
-        09-01                          AAPL 100 + MSFT 100 = 2000
-        values [1000, 1000, 2000]; flows [1000, 0, 1000]
-        r1 = (1000 − 0 − 1000)/1000 = 0
-        r2 = (2000 − 1000 − 1000)/1000 = 0 → index [100, 100, 100]"""
-    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
-                     currency="CAD")
-    seed_transaction(ticker="MSFT", date="2026-08-31", qty=10,
-                     currency="CAD")
-    fake_market.histories["AAPL"] = {
-        "2026-08-28": 100.0, "2026-08-31": 100.0, "2026-09-01": 100.0,
-    }
-    fake_market.histories["MSFT"] = {"2026-09-01": 100.0}
-
-    body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["labels"] == ["2026-08-28", "2026-08-31", "2026-09-01"]
-    assert body["values"] == [1000.0, 1000.0, 2000.0]
-    assert body["costs"] == [1000.0, 2000.0, 2000.0]
-    assert body["index_values"] == [100.0, 100.0, 100.0]
-    assert body["twrr_pct"] == 0.0
+```text
+[colored marker] [+12.40%] [Portfolio]
+[colored marker] [ +8.15%] [S&P 500]
 ```
 
-### Test B — the flow flushes once and the return is true (fails now)
+The marker comes first, the percentage comes second, and the symbol/name comes
+third. This places the number directly beside its line color, as requested.
 
-Exact assertions:
-```python
-def test_deferred_flow_flushed_once_on_first_price(client, fake_market):
-    """The pending flow must be removed exactly once, at the first measured
-    price, and must not leave a permanent phantom. Non-zero return so a
-    missing flush or a double flush both change the answer.
+The bottom percentages are cumulative performance at the active chart point:
 
-        08-28 buy AAPL 10 @ 100 (CAD); AAPL 100
-        08-31 buy MSFT 10 @ 100 (CAD); AAPL 110; MSFT no bar → 0
-        09-01 AAPL 121 + MSFT 110 = 2310; MSFT's +1000 flow flushes
-        r1 = (1100 − 0 − 1000)/1000       = 0.10   → index 110
-        r2 = (2310 − 1000 − 1100)/1100    = 0.1909 → index 131 = +31%"""
-    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
-                     currency="CAD")
-    seed_transaction(ticker="MSFT", date="2026-08-31", qty=10,
-                     currency="CAD")
-    fake_market.histories["AAPL"] = {
-        "2026-08-28": 100.0, "2026-08-31": 110.0, "2026-09-01": 121.0,
-    }
-    fake_market.histories["MSFT"] = {"2026-09-01": 110.0}
-
-    body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["values"] == [1000.0, 1100.0, 2310.0]
-    assert body["index_values"] == pytest.approx([100.0, 110.0, 131.0])
-    assert body["twrr_pct"] == pytest.approx(31.0)
+```text
+(growth_index_value / 100 - 1) * 100
 ```
 
-Buggy result for comparison: `index_values` is `[100, 10, 21]`,
-`twrr_pct = −79`.
+- On mouse or touch hover, use the hovered data index.
+- Before hover, and after mouse leave or touch dismissal, use the latest valid
+  chart point for each dataset.
+- A positive or zero percentage uses the existing positive color class.
+- A negative percentage uses the existing negative color class.
+- A missing value displays the app's unavailable glyph (`—`), never `0.00%`.
+- The floating tooltip title continues to use the existing human-readable date
+  formatting.
+- In comparison mode, floating-tooltip body and footer content are empty. The
+  tooltip therefore shows the date only.
+- Outside comparison mode, preserve all current tooltip behavior exactly:
+  stock raw price, portfolio value/cost/gain, and portfolio Performance without
+  overlays must not change.
 
-### Test C — sell-to-zero regression lock (passes before AND after)
-This test guards against the pending mechanism accidentally dropping a sell
-flow when the position goes to zero.
+## State Contract
 
-Exact assertions:
-```python
-def test_sell_to_zero_flow_removed_on_zero_bar(client, fake_market):
-    """REGRESSION LOCK (passes before and after #14): when a sell takes the
-    position to 0, the symbol contributes no value that bar but DOES have a
-    carried-forward close, so its negative flow must still be removed — a
-    full withdrawal reads 0%, then the empty base truncates the chain.
+Comparison symbols are page-local JavaScript state only.
 
-        08-28 buy 10 @ 100        V = 1000
-        08-31 sell 10 @ 100       V = 0, F = −1000
-        r1 = (0 + 1000 − 1000)/1000 = 0 → index [100, 100], then V=0 stops."""
-    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10,
-                     currency="CAD")
-    seed_transaction(ticker="AAPL", date="2026-08-31", qty=10,
-                     tx_type="SELL", currency="CAD")
-    fake_market.histories["AAPL"] = {
-        "2026-08-28": 100.0, "2026-08-31": 100.0, "2026-09-01": 100.0,
-    }
+- Do not read `compareSymbols` from `localStorage`.
+- Do not write `compareSymbols` to `localStorage`.
+- Do not use `sessionStorage`, cookies, URL parameters, or backend persistence.
+- Every normal page load starts with no comparisons.
+- Navigating dashboard -> stock, stock -> dashboard, or stock A -> stock B starts
+  the destination page with no comparisons.
+- A browser Back/Forward Cache restoration can preserve the old DOM and JS heap.
+  Handle `pageshow` with `event.persisted === true`: clear the picker state,
+  repaint its chips/quick picks, and reload the current chart without a
+  `benchmark` query parameter.
+- Changing timeframe or Value/Performance mode is not page navigation. Keep
+  active comparisons during those in-page actions.
 
-    body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["values"] == [1000.0, 0.0, 0.0]
-    assert body["index_values"] == [100.0, 100.0]
-    assert len(body["index_values"]) < len(body["labels"])
-    assert body["twrr_pct"] == 0.0
+## Existing Contracts That Must Stay Intact
+
+- Maximum 3 comparison symbols.
+- Ordered, uppercase, de-duplicated symbols.
+- Dashboard comparisons appear only in Performance/TWR mode. Adding the first
+  comparison auto-switches to Performance.
+- Stock charts use raw prices with no comparison and growth-of-$100 while a
+  comparison is active.
+- Clearing all stock comparisons restores raw-price tools, including previous
+  close and price-difference measurement.
+- Dashboard benchmark history never changes the portfolio label axis.
+- History endpoint replies stay byte-identical when no `benchmark` parameter is
+  sent.
+- Failed benchmarks degrade independently and do not fail the primary chart.
+- Keep the existing backend implementation and `tests/test_compare.py` green.
+- Do not add polling or a new endpoint.
+
+## Files To Change
+
+- `tests/test_compare_ui.py`: replace persistence expectations and add contracts
+  for the custom bottom readout and comparison-only tooltip behavior.
+- `tests/test_chart_tooltip.py`: lock date-only comparison callbacks while
+  preserving normal tooltip callbacks.
+- `tests/test_chart_refresh.py`: only change if a new reload/reset contract needs
+  a source assertion; do not weaken existing request-generation assertions.
+- `static/js/common.js`: remove persistence, add BFCache reset, render the bottom
+  readout, and suppress comparison-mode tooltip body/footer.
+- `static/js/main.js`: pass the dashboard readout element to the chart factory.
+- `static/js/stock.js`: pass the stock readout element to the chart factory.
+- `templates/index.html`: add an empty readout container directly below the
+  dashboard `.chart-box`.
+- `templates/stock.html`: add the same readout container directly below the
+  stock `.chart-box`.
+- `static/style.css`: style responsive bottom entries, markers, values, names,
+  unavailable state, and hidden empty state.
+- `feature.md`: this handoff.
+
+Do not change `app.py`, `db.py`, `market_data.py`, or the history response shape
+for this refinement.
+
+## Part 1: Write Failing Tests First
+
+### 1.1 Update `tests/test_compare_ui.py`
+
+Remove or replace the current test named `test_picker_persists_symbols`. The new
+tests must enforce page-local state.
+
+Add `test_picker_does_not_persist_symbols` with source assertions that:
+
+- `setupComparePicker` still exists.
+- The `setupComparePicker` source does not contain `localStorage.getItem`.
+- The `setupComparePicker` source does not contain `localStorage.setItem`.
+- The source does not contain the string `compareSymbols`.
+- The source does not contain `sessionStorage`.
+
+Extract only the `setupComparePicker` function body for these negative checks.
+Do not search all of `common.js`, because unrelated chart preferences correctly
+use `localStorage`.
+
+Add `test_picker_clears_bfcache_restoration` with source assertions that the
+picker or its caller:
+
+- Registers a `pageshow` listener.
+- Checks `event.persisted`.
+- Clears the comparison symbol array.
+- Renders the empty chips/quick-pick state.
+- Notifies the chart so it reloads without benchmarks.
+
+Add `test_comparison_readout_markup_is_below_each_canvas`:
+
+- Require one `.comparison-readout` container on each page.
+- Require stable IDs: `portfolio-comparison-readout` and
+  `stock-comparison-readout`.
+- Verify by string position that each readout appears after its chart `<canvas>`
+  and before the chart controls/picker.
+- Require `aria-live="polite"` so keyboard users receive updated values without
+  an intrusive alert.
+
+Add `test_chart_factory_receives_comparison_readout`:
+
+- `setupTimeframeChart` accepts a `comparisonReadout` option.
+- `main.js` passes `document.getElementById("portfolio-comparison-readout")`.
+- `stock.js` passes `document.getElementById("stock-comparison-readout")`.
+
+Add `test_comparison_readout_renders_marker_value_then_name`:
+
+- Require creation/use of `.comparison-readout-item`.
+- Require child classes `.comparison-readout-marker`,
+  `.comparison-readout-value`, and `.comparison-readout-name`.
+- Lock their append order as marker, value, name. Use a narrow source assertion
+  around the item builder rather than an assertion against unrelated DOM code.
+- Require a helper named `renderComparisonReadout`.
+
+Add `test_comparison_readout_uses_growth_return_math`:
+
+- Require the implementation to calculate `(value / 100 - 1) * 100`.
+- Require two decimal places and an explicit `+` sign for non-negative values.
+- Require unavailable values to render `—`.
+
+Add `test_comparison_readout_tracks_hover_and_falls_back_to_latest`:
+
+- Require chart hover handling to pass the active data index to
+  `renderComparisonReadout`.
+- Require mouse-leave/no-active handling to render the latest valid point.
+- Require touch cleanup to restore the latest-point readout after the tooltip is
+  dismissed.
+
+Keep all existing quick-pick, maximum, wiring, color palette, and normalized
+chart assertions.
+
+### 1.2 Update `tests/test_chart_tooltip.py`
+
+Read the existing tests before editing. Preserve every assertion that protects
+normal Value, Performance-without-comparison, and stock raw-price tooltips.
+
+Add a comparison-mode source contract that requires:
+
+- The tooltip `title` callback remains active.
+- The tooltip `label` callback returns no body line when comparison overlays are
+  visible.
+- The tooltip `footer` callback returns no footer when comparison overlays are
+  visible.
+- `footerColor` does not attempt comparison return coloring when the comparison
+  footer is absent.
+- The condition is tied to visible comparison mode, not only
+  `data.normalized === true`. Dashboard Performance overlays must get the same
+  date-only tooltip behavior as stock comparisons.
+
+Use one closure boolean such as `comparisonMode` or `showOverlays` as the source
+of truth. Do not duplicate different stock/dashboard conditions throughout the
+callbacks.
+
+### 1.3 Add CSS source contracts
+
+In `tests/test_compare_ui.py`, require these selectors:
+
+- `.comparison-readout`
+- `.comparison-readout-item`
+- `.comparison-readout-marker`
+- `.comparison-readout-value`
+- `.comparison-readout-name`
+
+Require a mobile media-query treatment that permits wrapping or horizontal
+scrolling without clipping. Do not lock exact pixel values.
+
+### 1.4 Run the red tests
+
+Run:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_compare_ui.py tests/test_chart_tooltip.py -q
 ```
 
-### Existing tests that must keep passing unchanged
-- `tests/test_twrr.py` (all 13 tests) — especially
-  `test_delisted_before_window_flow_excluded`,
-  `test_dead_ticker_flow_excluded_mirror_rule`,
-  `test_usd_flow_excluded_when_no_live_rate`,
-  `test_usd_flow_uses_live_rate_not_stored_fx`,
-  `test_weekend_buy_flow_lands_next_bar`,
-  `test_short_truncates_index`.
-- `tests/test_chart_speed.py` TWR assertions (`index_values` / `twrr_pct`).
-- `tests/test_history_costs.py`, `tests/test_routes.py` TWR key shapes.
+Expected failures before implementation:
 
-## Implementation (only after tests A and B fail)
+- Current picker still reads/writes `compareSymbols` in `localStorage`.
+- No BFCache reset exists.
+- No bottom readout containers exist.
+- Current comparison tooltip still includes dataset values and a Return footer.
+- No bottom readout renderer or styles exist.
 
-All changes are in `app.py`, inside `portfolio_history`.
+If a new test passes before implementation, confirm that it protects a real
+contract rather than only matching an unrelated string.
 
-### Step 1 — replace the flow gate block (`app.py:542-565`)
-Replace the whole comment + `flowable_symbols` block with this. The eligibility
-set drops the `max(history) >= labels[0]` condition; timing is now handled by
-the pending walk.
+## Part 2: Make Comparison State Page-Local
 
-```python
-    # THE MIRROR RULE: a transaction's flow is removed ONLY at a bar where
-    # its symbol's value is actually measured. A dead ticker (get_history
-    # raised → empty dict) contributes 0 to values, so removing its buy
-    # would "return" money that never arrived — that would fake a LOSS.
-    # Same for a USD row with no live rate, or an unsupported currency.
-    #
-    # The mirror is PER-BAR, not per-symbol (roadmap #14). A ticker's
-    # first bar inside the window can land AFTER its transaction's
-    # absorption label (a Yahoo data gap, or a MAX window whose history
-    # starts later than a logged buy). On those gap bars the ticker still
-    # contributes 0: removing its flow anyway would fake a one-bar loss
-    # (and, when the flow is large, truncate the whole index). So each
-    # symbol's flows wait in `pending_flows` and flush at the FIRST label
-    # where that symbol has a measured price — the exact bar its value
-    # enters the series. A symbol that never prices in the window keeps
-    # its flows pending forever, so they are never removed (no value, no
-    # flow). The set below gates CURRENCY only; the pending/flush walk
-    # gates timing.
-    flow_eligible_symbols = {
-        symbol for symbol, currency in currency_by_symbol.items()
-        if currency == "CAD"
-        or (currency == "USD" and live_rate is not None)
-    }
+### 2.1 Edit `setupComparePicker` in `static/js/common.js`
+
+Keep the current function interface for input/results/chips/quick picks,
+`primarySymbol`, and `onChange`, except remove the `storageKey` option and its
+default.
+
+Make these exact state changes:
+
+1. Initialize `let symbols = [];` unconditionally.
+2. Delete the `try/catch` that parses `localStorage`.
+3. Delete the `persist()` function.
+4. In `notify()`, call only `renderChips()` and `onChange(getSymbols())`.
+5. Keep `getSymbols`, `addSymbol`, and `removeSymbol` behavior unchanged.
+6. Add a `clearSymbols({ notifyChange = true } = {})` helper:
+   - Return early only when the list is already empty and no repaint is needed.
+   - Set `symbols = []`.
+   - Call `renderChips()`.
+   - If `notifyChange` and `onChange` exist, call `onChange(getSymbols())`.
+7. Return `clearSymbols` with the existing picker methods.
+
+Do not remove the primary-symbol exclusion, de-duplication, uppercase
+normalization, maximum-three toast, chip removal, or quick-pick active state.
+
+### 2.2 Handle browser Back/Forward Cache
+
+Inside `setupComparePicker`, register:
+
+```javascript
+window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    clearSymbols();
+});
 ```
 
-### Step 2 — retarget `tx_flow`'s gate (`app.py:576`)
-Change:
-```python
-        if tx["ticker"] not in flowable_symbols:
-```
-to:
-```python
-        if tx["ticker"] not in flow_eligible_symbols:
-```
-Leave the rest of `tx_flow` unchanged.
+`clearSymbols()` must call the page's existing `onChange`, which invokes the
+chart handle's `reload()`. The resulting URL must omit `benchmark=` because
+`getSymbols()` is empty.
 
-### Step 3 — add the pending accumulator (`app.py:597`)
-After:
-```python
-    flows_by_label = {}  # label → net CAD cash contribution absorbed there
-```
-add:
-```python
-    pending_flows = {}   # symbol → flows absorbed BEFORE it first prices
-```
+Do not use `pagehide` to fetch during navigation. The destination page already
+starts empty, and `pageshow` handles restoration of a cached source page.
 
-### Step 4 — accumulate, do not remove, in the intraday branch (`app.py:622-624`)
-Replace:
-```python
-                        flows_by_label[label] = (
-                            flows_by_label.get(label, 0.0) + tx_flow(tx)
-                        )
-```
-with:
-```python
-                        pending_flows[tx["ticker"]] = (
-                            pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
-                        )
-```
-This block is the one indented 24 spaces (inside `if tx["transaction_date"] <= label_date_today:`).
+### 2.3 Correct stale comments
 
-### Step 5 — accumulate, do not remove, in the daily branch (`app.py:640-642`)
-Replace:
-```python
-                flows_by_label[label] = (
-                    flows_by_label.get(label, 0.0) + tx_flow(tx)
-                )
-```
-with:
-```python
-                pending_flows[tx["ticker"]] = (
-                    pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
-                )
-```
-This block is the one indented 16 spaces (inside the `while`).
+Update comments in both templates and JavaScript that currently claim the
+comparison list is shared or persisted. State that the picker is page-local.
+Do not alter persistence for `chartMode` or other unrelated preferences.
 
-### Step 6 — flush after the value/cost append (`app.py`, after line 687)
-Insert after `costs.append(sum(net_cost.values()))` and before the closing of the
-`for label in labels:` loop:
+## Part 3: Add Bottom Readout Markup and Styles
 
-```python
-        # Flush every held symbol's pending flows at the first label where
-        # that symbol has a measured price (a bar now, or a carried-forward
-        # last close). `last_closes` is the same "this symbol's value is
-        # real at this label" marker the value walk used just above, so a
-        # flow is removed on exactly the bar its value enters — no earlier.
-        # A symbol that never prices here stays in `pending_flows` forever,
-        # so its flows are never removed (the mirror rule, now per-bar).
-        for symbol in [s for s in pending_flows if s in last_closes]:
-            flow = pending_flows.pop(symbol)
-            if flow:
-                flows_by_label[label] = (
-                    flows_by_label.get(label, 0.0) + flow
-                )
+### 3.1 Template markup
+
+In `templates/index.html`, immediately after the closing `</div>` for the
+`.chart-box` containing `#portfolioChart`, add:
+
+```html
+<div id="portfolio-comparison-readout"
+     class="comparison-readout"
+     aria-live="polite"
+     hidden></div>
 ```
 
-Order matters: `last_closes` is updated inside the value loop, which runs
-before this flush, so the current label's price is visible. Do NOT move the
-flush above the value loop.
+In `templates/stock.html`, immediately after the `.chart-box` containing
+`#stockChart`, add:
 
-### Why Step 6 also covers sell-to-zero
-The value loop skips `held == 0`, so on the zeroing bar it does not re-add the
-symbol to `last_closes`; but `last_closes` keeps the entry from earlier bars.
-The condition `s in last_closes` is therefore true, and the sell flow flushes.
-A symbol that never priced at all is never in `last_closes`, so its flows stay
-pending forever.
+```html
+<div id="stock-comparison-readout"
+     class="comparison-readout"
+     aria-live="polite"
+     hidden></div>
+```
 
-## Files touched
-- `app.py` — the six edits above (comment block, set rename, pending
-  accumulator, two accumulation sites, flush).
-- `tests/test_twrr.py` — three new tests (A, B, C).
-- `roadmap.md` — `**Status:** in progress` under item #14.
+The container belongs below the chart and above timeframe controls. Do not put
+it inside the canvas wrapper; the canvas height must remain unchanged.
 
-No frontend change. The reply shape (`index_values`, `twrr_pct`) is unchanged.
-No `db.py`, `market_data.py`, template, or JS change.
+### 3.2 CSS in `static/style.css`
 
-## Verification and gates
-1. Write tests A, B, C into `tests/test_twrr.py`.
-2. Run `python -m pytest tests/test_twrr.py -q` and confirm A and B FAIL on the
-   current build while C passes. If A or B passes, the test does not reproduce
-   the bug — stop and fix the test before touching `app.py`.
-3. Apply the six `app.py` edits.
-4. Run `python -m pytest tests/test_twrr.py -q` — all must pass.
-5. Run `python -m pytest tests/test_chart_speed.py tests/test_history_costs.py
-   tests/test_routes.py -q`.
-6. Run the full suite `python -m pytest` (lead agent owns the final verdict).
-7. Wait for the user's browser GUI approval: open the dashboard, switch to the
-   Performance view, and confirm the index line is not truncated and the
-   Performance view still toggles correctly. A data gap is hard to create by
-   hand; the GUI gate confirms no visible regression, and the tests prove the
-   gap case.
-8. Ask before any commit or push; mark roadmap #14 shipped only in that commit.
+Add styles near the existing chart and comparison-picker rules.
+
+- `.comparison-readout`: flex row, centered vertically, compact gap, modest top
+  margin, and wrapping enabled. It is informational, not another card.
+- `.comparison-readout[hidden]`: `display: none`.
+- `.comparison-readout-item`: inline flex, center aligned, no decorative border
+  or pill background.
+- `.comparison-readout-marker`: small circular marker using inline
+  `background-color`; `flex: 0 0 auto`.
+- `.comparison-readout-value`: tabular numerals, semibold, immediately after the
+  marker.
+- `.comparison-readout-name`: secondary text after the value.
+- Positive/negative value classes must reuse the app's established positive and
+  negative colors. Do not introduce a new semantic palette.
+- On narrow screens, permit natural wrapping with readable row/column gaps. Do
+  not reduce text below the existing chart-control font size and do not clip or
+  truncate percentages.
+
+## Part 4: Render Dynamic Performance Below the Chart
+
+### 4.1 Extend `setupTimeframeChart`
+
+Add `comparisonReadout` to the options object accepted by
+`setupTimeframeChart`.
+
+Add closure state:
+
+```javascript
+let comparisonMode = false;
+let comparisonReadoutIndex = null;
+```
+
+`comparisonMode` is true only when overlays are actually visible:
+
+- Dashboard: at least one benchmark and mode is `performance`.
+- Stock: at least one benchmark and `data.normalized === true`.
+
+Do not equate `mode === "performance"` alone with comparison mode. Portfolio
+Performance without overlays retains its current tooltip.
+
+### 4.2 Build readout entries
+
+Add a local function `renderComparisonReadout(index = null)` inside the chart
+factory.
+
+Exact behavior:
+
+1. If no `comparisonReadout` element was supplied, return.
+2. If `comparisonMode` is false, clear the container and set `hidden = true`.
+3. If comparison mode is true, set `hidden = false` and clear old children.
+4. Iterate all currently visible chart datasets in chart order: primary first,
+   then comparison symbols.
+5. Resolve the requested index:
+   - If a valid hover index was supplied, try that index for every dataset.
+   - If no index was supplied, find each dataset's final finite value.
+   - If a dataset has no finite value at the hover index, display `—`; do not
+     silently use a value from another date.
+6. Calculate return as `(value / 100 - 1) * 100`.
+7. Format finite return with an explicit plus sign for values >= 0 and exactly
+   two decimals, followed by `%`.
+8. Build each item in marker -> value -> name DOM order.
+9. Marker color must match the actual dataset line:
+   - Primary uses its current resolved border color.
+   - Overlay `i` uses `getCompareColors()[i]`.
+10. Use the dataset label for the name. Preserve the primary labels already set
+    by `paint()`.
+
+Use `document.createElement` and `textContent`; do not concatenate untrusted
+symbols into `innerHTML`.
+
+### 4.3 Keep the readout synchronized
+
+At the end of `paint()`, after datasets and `comparisonMode` are updated but
+before the resize/update request, call `renderComparisonReadout()` so the
+latest-point values appear immediately.
+
+When the user switches dashboard Value/Performance mode, the existing `paint()`
+call must hide or show the readout correctly without another fetch.
+
+When all comparisons are removed, `paint()` must:
+
+- Remove overlay datasets through the existing reconciliation helper.
+- Set `comparisonMode = false`.
+- Clear and hide the bottom readout.
+- Restore the current non-comparison tooltip and raw-price tools.
+
+### 4.4 Track hover without re-fetching or rebuilding the chart
+
+Use Chart.js's existing interaction path. Add an `onHover` option or a small
+local plugin/event hook that receives active elements.
+
+- If comparison mode is false, do nothing.
+- If there is an active element, read its `index`, save it in
+  `comparisonReadoutIndex`, and call `renderComparisonReadout(index)`.
+- If there is no active element (mouse leaves the plot), set the index to null
+  and call `renderComparisonReadout()` for latest values.
+- Avoid `chart.update()` inside hover. Updating the external DOM is sufficient
+  and prevents hover recursion/layout churn.
+- Existing crosshair and tooltip positioning must continue to work.
+
+In existing touch-end/touch-cancel cleanup, restore the latest bottom values by
+calling `renderComparisonReadout()` after clearing the tooltip. Keep current
+ghost-event prevention intact.
+
+### 4.5 Make comparison tooltips date-only
+
+The existing `title(items)` callback remains unchanged.
+
+At the top of `label(item)`:
+
+```javascript
+if (comparisonMode) return [];
+```
+
+At the top of `footer(items)`:
+
+```javascript
+if (comparisonMode) return [];
+```
+
+At the top of `footerColor(items)` return the neutral current color when
+`comparisonMode` is true; there is no visible footer to color.
+
+Remove the old comparison-specific Return footer branches that use
+`chartNormalized`. Keep the non-comparison portfolio Performance Return footer
+and all Value/cost/gain behavior.
+
+### 4.6 Disable Chart.js's built-in comparison legend
+
+Keep `chart.options.plugins.legend.display = false` for all chart modes. The new
+bottom DOM readout is now the legend and performance display. Delete or replace
+the current line that sets built-in legend display to `showOverlays`.
+
+This avoids two legends and gives exact marker/value/name ordering.
+
+## Part 5: Wire Both Pages
+
+In `static/js/main.js`, add to the existing `setupTimeframeChart` options:
+
+```javascript
+comparisonReadout: document.getElementById("portfolio-comparison-readout"),
+```
+
+In `static/js/stock.js`, add:
+
+```javascript
+comparisonReadout: document.getElementById("stock-comparison-readout"),
+```
+
+Do not create a second picker or second chart. Keep each page's current
+`getBenchmarks` function and `onChange -> chartHandle.reload()` flow.
+
+## Part 6: Verification
+
+### 6.1 Focused tests
+
+Run:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_compare_ui.py tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
+python -m pytest tests/test_compare.py -q
+```
+
+Then run chart/frontend regressions:
+
+```bash
+python -m pytest \
+  tests/test_chart_speed.py \
+  tests/test_prev_close.py \
+  tests/test_price_diff.py \
+  tests/test_chart_axis.py \
+  tests/test_web_refresh_wiring.py -q
+```
+
+If Node is available, run:
+
+```bash
+node --check static/js/common.js
+node --check static/js/main.js
+node --check static/js/stock.js
+```
+
+### 6.2 Full suite
+
+The lead agent runs:
+
+```bash
+source .venv/bin/activate
+python -m pytest
+```
+
+Do not report the feature complete unless the full suite passes.
+
+### 6.3 Browser GUI gate
+
+After pytest is green, stop and ask the user to verify all items below.
+
+Dashboard:
+
+- Initial load has no comparison chips or bottom readout.
+- Add S&P 500: chart switches to Performance, date-only floating tooltip
+  appears on hover, and bottom entries show marker + percentage + name.
+- Hover early and late dates: every bottom percentage updates to that date.
+- Move away from the chart: bottom percentages return to latest values.
+- Switch to Value: overlays and bottom readout disappear.
+- Switch back to Performance: active page-local comparisons reappear.
+- Navigate to another page and return: comparisons are gone.
+- Use browser Back: comparisons are gone even if the page came from BFCache.
+
+Stock page:
+
+- Initial load is raw price with no bottom readout.
+- Add a comparison: primary and comparison normalize; tooltip contains only the
+  date; bottom readout includes both lines.
+- Marker colors match their lines in light and dark themes.
+- Remove all chips: bottom readout disappears and raw price tooltip,
+  previous-close line, and price-difference measurement return.
+- Navigate to a second stock: no comparison carries over.
+- Reload: no comparison carries over.
+
+Responsive/accessibility:
+
+- On a narrow phone viewport, entries wrap without clipping.
+- Percentage remains directly beside its marker.
+- Keyboard focus and picker operation remain usable.
+- Readout updates do not steal focus.
+
+## Scope Limits
+
+- No persistence option or preference toggle.
+- No backend/API changes.
+- No database changes.
+- No configurable legend ordering.
+- No absolute price/value in the bottom readout during comparison mode.
+- No new chart library or dependency.
+- No commit or push until browser approval and explicit user permission.
+
+## Handoff Notes
+
+- The current worktree also contains untracked `comparison.html` and
+  `ui-nomenclature-audit.html`. They are unrelated user files. Do not edit,
+  delete, stage, or commit them.
+- Existing comparison implementation files are already modified but uncommitted.
+  Work with those changes; do not revert them.
+- Keep the smallest correct diff. This refinement is primarily in
+  `common.js`, two templates, CSS, two page wiring files, and frontend tests.

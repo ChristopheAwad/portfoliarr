@@ -88,6 +88,24 @@ Currently only USD↔CAD via Yahoo's `USDCAD=X`. Extending to EUR, GBP, JPY, etc
 
 ---
 
+### 17. Arbitrary Comparison Overlays (supersedes #7)
+Overlay up to 3 user-chosen tickers (search + quick picks: S&P 500, Nasdaq,
+TSX) as growth-of-$100 lines. On the dashboard the overlays appear ONLY in the
+Performance (TWR) view, rebased onto the portfolio's own label axis. On the
+stock detail page, adding any comparison normalizes the primary symbol and all
+overlays to growth-of-$100 on a union axis (raw price when none are active).
+One shared picker in `common.js`; benchmark history is fetched inside the same
+request (no new endpoint). Currency-agnostic by construction (ratios only).
+
+**Files:** `app.py` (history routes + helpers), `static/js/common.js`
+(picker, multi-dataset, legend), `static/js/main.js`, `static/js/stock.js`,
+`templates/index.html`, `templates/stock.html`, `static/style.css`,
+`tests/test_compare.py`, `tests/test_compare_ui.py`
+**Depends on:** #13 (shipped) for the growth-of-$100 index
+**Status:** in progress
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period-Aware Return Pills
@@ -166,8 +184,9 @@ Tier 1 (all independent):
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
-  7. Benchmark Line ───────────────────┤── can be done in any order
-  8. Multi-Currency ───────────────────┘
+  7. Benchmark Line ────── superseded ─┤── can be done in any order
+  8. Multi-Currency ───────────────────┤   (#17 replaces #7)
+  17. Comparison Overlays ─────────────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on stock detail page version
@@ -194,8 +213,9 @@ For maximum compounding value:
 4. **Sector Breakdown** → deeper allocation insight
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app
-7. **Benchmark Line** → context for performance
+7. **Benchmark Line** → context for performance (superseded by #17)
 8. **Multi-Currency** → international expansion
+17. **Comparison Overlays** → arbitrary ticker/portfolio comparison; replaces #7
 9. **Dashboard Period Return** → extends stock page pattern to dashboard
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)

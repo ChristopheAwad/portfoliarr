@@ -85,6 +85,14 @@
                 <canvas id="stockChart"></canvas>
             </div>
 
+            <!-- Comparison readout: growth-of-$100 lines get their legend +
+                 live performance here (marker, %, name) instead of a
+                 floating tooltip; hidden while the chart is raw price. -->
+            <div id="stock-comparison-readout"
+                 class="comparison-readout"
+                 aria-live="polite"
+                 hidden></div>
+
             <div class="chart-timeframe-selectors">
                 <button class="time-btn">1D</button>
                 <button class="time-btn active">5D</button>
@@ -95,6 +103,30 @@
                 <button class="time-btn">1Y</button>
                 <button class="time-btn">5Y</button>
                 <button class="time-btn">MAX</button>
+            </div>
+
+            <!-- Adding a comparison switches every line to growth-of-$100;
+                 clearing all chips restores this page's raw-price chart. -->
+            <div class="compare-picker">
+                <div class="compare-quick-picks">
+                    <button class="compare-quick" type="button"
+                            data-symbol="^GSPC"
+                            aria-pressed="false">S&amp;P 500</button>
+                    <button class="compare-quick" type="button"
+                            data-symbol="^IXIC"
+                            aria-pressed="false">Nasdaq</button>
+                    <button class="compare-quick" type="button"
+                            data-symbol="^GSPTSE"
+                            aria-pressed="false">TSX</button>
+                </div>
+                <div class="compare-search">
+                    <input id="compare-input" type="text"
+                           autocomplete="off"
+                           placeholder="Compare to a ticker...">
+                    <div id="compare-results"
+                         class="search-results" hidden></div>
+                </div>
+                <div id="compare-chips" class="compare-chips"></div>
             </div>
         </div>
 

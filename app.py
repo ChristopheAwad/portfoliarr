@@ -288,6 +288,36 @@ def _time_weighted_return(values, flows):
     return index, (index[-1] / 100.0 - 1.0) * 100.0
 
 
+def _parse_compare_symbols(raw):
+    """Normalize an ordered, comma-separated comparison list."""
+    symbols = []
+    for part in raw.split(","):
+        symbol = part.strip().upper()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    if len(symbols) > 3:
+        raise ValueError("at most 3 benchmark symbols")
+    return symbols
+
+
+def _rebase_series(labels, closes):
+    """Forward-fill closes onto labels and rebase the first close to 100."""
+    values = []
+    base = None
+    last = None
+    for label in labels:
+        close = closes.get(label)
+        if close is not None and math.isfinite(close) and close > 0:
+            last = close
+        if last is None:
+            values.append(None)
+            continue
+        if base is None:
+            base = last
+        values.append(100.0 * last / base)
+    return values
+
+
 @app.route("/api/portfolio/history")
 def portfolio_history():
     """Return the portfolio's value over time as
@@ -328,6 +358,13 @@ Algorithm: walk every trading day in the range forward, keeping a
     if period not in PERIOD_MAP:
         options = ", ".join(sorted(PERIOD_MAP))
         return jsonify({"error": f"period must be one of: {options}"}), 400
+
+    try:
+        benchmark_symbols = _parse_compare_symbols(
+            request.args.get("benchmark", "")
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     # The ledger's default sort is newest-first; we need the opposite to
     # walk history forward, so sort ascending here.
@@ -395,6 +432,42 @@ Algorithm: walk every trading day in the range forward, keeping a
         # difference except the clock.
         for symbol, history in pool.map(fetch_history, unique_symbols):
             histories[symbol] = history
+
+    # Keep comparisons separate from the portfolio histories. Adding a
+    # benchmark must not add labels and therefore change the portfolio line.
+    benchmark_histories = {}
+    benchmark_errors = {}
+    missing_benchmarks = [
+        symbol for symbol in benchmark_symbols if symbol not in histories
+    ]
+
+    def fetch_benchmark_history(symbol):
+        try:
+            return symbol, get_history(symbol, period)
+        except Exception:
+            app.logger.warning(
+                "benchmark history failed for %s — comparison omitted",
+                symbol,
+                exc_info=True,
+            )
+            return symbol, None
+
+    if missing_benchmarks:
+        with ThreadPoolExecutor(
+            max_workers=min(len(missing_benchmarks), 8)
+        ) as pool:
+            for symbol, history in pool.map(
+                fetch_benchmark_history, missing_benchmarks
+            ):
+                if history is None:
+                    benchmark_errors[symbol] = (
+                        f"no history available for {symbol}"
+                    )
+                else:
+                    benchmark_histories[symbol] = history
+    for symbol in benchmark_symbols:
+        if symbol in histories:
+            benchmark_histories[symbol] = histories[symbol]
 
     # DISPLAY CURRENCY — the chart is ALWAYS CAD (the dashboard's ledger
     # toggle never touches it: this line IS the portfolio total). Each
@@ -709,10 +782,25 @@ Algorithm: walk every trading day in the range forward, keeping a
     flows = [flows_by_label.get(label, 0.0) for label in labels]
     index_values, twrr_pct = _time_weighted_return(values, flows)
 
-    return jsonify({
+    payload = {
         "labels": labels, "values": values, "costs": costs,
         "index_values": index_values, "twrr_pct": twrr_pct,
-    })
+    }
+    if benchmark_symbols:
+        payload["benchmarks"] = [
+            {
+                "symbol": symbol,
+                "values": (
+                    None if symbol in benchmark_errors
+                    else _rebase_series(
+                        labels, benchmark_histories.get(symbol, {})
+                    )
+                ),
+                "error": benchmark_errors.get(symbol),
+            }
+            for symbol in benchmark_symbols
+        ]
+    return jsonify(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -2688,11 +2776,11 @@ def stock_history(symbol):
     (validated against the same PERIOD_MAP), but no ledger math: the
     values ARE the closes.
 
-    get_history returns {label: close}; Chart.js wants parallel arrays, so
-    sort the labels once and walk them. Plain-string labels sort
-    chronologically in every shape: "YYYY-MM-DD" dates, "YYYY-MM-DD
-    HH:MM" (5D's 30-minute bars), and 1D's "HH:MM" times within their
-    single day.
+    Without comparisons, get_history returns {label: close} and this route
+    preserves the original raw-price reply. With `benchmark`, the primary
+    symbol and every benchmark are rebased to growth-of-$100 on their union
+    axis; failed benchmarks degrade independently while a failed primary
+    remains a 404.
     """
     symbol = symbol.strip().upper()
 
@@ -2704,20 +2792,73 @@ def stock_history(symbol):
         return jsonify({"error": f"period must be one of: {options}"}), 400
 
     try:
-        closes = get_history(symbol, period)
-    except Exception:
-        # TIER 1 at warning: a chart that can't load is degraded page state
-        # (the header/stats may still be fine) — the traceback says why.
-        app.logger.warning(
-            "history fetch failed for %s — serving 404", symbol,
-            exc_info=True,
+        benchmark_symbols = _parse_compare_symbols(
+            request.args.get("benchmark", "")
         )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    # The primary cannot be its own comparison. Keep this defensive rule at
+    # the route boundary even though the picker also blocks it.
+    benchmark_symbols = [
+        benchmark for benchmark in benchmark_symbols if benchmark != symbol
+    ]
+    symbols = [symbol] + benchmark_symbols
+    results = {}
+    errors = {}
+
+    def fetch_one(history_symbol):
+        try:
+            return history_symbol, get_history(history_symbol, period)
+        except Exception:
+            app.logger.warning(
+                "stock comparison history failed for %s",
+                history_symbol,
+                exc_info=True,
+            )
+            return history_symbol, None
+
+    with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
+        for history_symbol, history in pool.map(fetch_one, symbols):
+            if history is None:
+                errors[history_symbol] = (
+                    f"no history available for {history_symbol}"
+                )
+            else:
+                results[history_symbol] = history
+
+    if symbol in errors:
         return jsonify({"error": f"no history available for {symbol}"}), 404
 
-    labels = sorted(closes)
+    primary = results[symbol]
+    if not benchmark_symbols:
+        labels = sorted(primary)
+        return jsonify({
+            "labels": labels,
+            "values": [primary[label] for label in labels],
+        })
+
+    all_labels = set(primary)
+    for benchmark in benchmark_symbols:
+        if benchmark in results:
+            all_labels.update(results[benchmark])
+    labels = sorted(all_labels)
+
     return jsonify({
         "labels": labels,
-        "values": [closes[label] for label in labels],
+        "values": _rebase_series(labels, primary),
+        "normalized": True,
+        "benchmarks": [
+            {
+                "symbol": benchmark,
+                "values": (
+                    None if benchmark in errors
+                    else _rebase_series(labels, results[benchmark])
+                ),
+                "error": errors.get(benchmark),
+            }
+            for benchmark in benchmark_symbols
+        ],
     })
 
 

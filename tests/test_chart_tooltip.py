@@ -36,6 +36,40 @@ def tooltip_title_callback_body() -> str:
     return text[title_at:label_at]
 
 
+def tooltip_callback_bodies() -> tuple:
+    """Return (title, label, footer, footerColor) callback sources in order.
+
+    The footerColor body is bounded by the next `scales:` block so negative
+    assertions stay inside the callback and cannot match `chartNormalized`
+    later in the file (e.g. in paint()).
+    """
+    text = common_js()
+    callbacks_at = text.index("callbacks:")
+    title_at = text.index("title(items)", callbacks_at)
+    label_at = text.index("label(item)", title_at)
+    footer_at = text.index("footer(items)", label_at)
+    footer_color_at = text.index("footerColor(items)", footer_at)
+    scales_at = text.index("scales: {", footer_color_at)
+    return (
+        text[title_at:label_at],
+        text[label_at:footer_at],
+        text[footer_at:footer_color_at],
+        text[footer_color_at:scales_at],
+    )
+
+
+def tooltip_label_callback_body() -> str:
+    return tooltip_callback_bodies()[1]
+
+
+def tooltip_footer_callback_body() -> str:
+    return tooltip_callback_bodies()[2]
+
+
+def tooltip_footer_color_callback_body() -> str:
+    return tooltip_callback_bodies()[3]
+
+
 def test_opposite_positioner_latches_tooltip_to_far_edge():
     """The box must stay at its edge while the crosshair is near center."""
     js = common_js()
@@ -97,3 +131,29 @@ def test_five_day_tooltip_keeps_the_exact_bar_time():
     )
     body = tooltip_title_callback_body()
     assert "`${monthDay(p)}, ${m[4]}:${m[5]}`" in body
+
+
+def test_comparison_tooltip_body_and_footer_are_date_only():
+    """In comparison mode the floating tooltip shows only the hovered date.
+
+    The performance readout lives in the bottom comparison legend instead, so
+    the label and footer callbacks must empty their payloads while the title
+    callback keeps formatting the date.
+    """
+    title, label, footer, _ = tooltip_callback_bodies()
+    assert "monthDay" in title
+    assert "if (comparisonMode) return [];" in label
+    assert "if (comparisonMode) return [];" in footer
+
+
+def test_comparison_footer_color_is_neutral():
+    """There is no visible footer to color while comparing."""
+    body = tooltip_footer_color_callback_body()
+    assert "comparisonMode" in body
+    assert "chartNormalized" not in body
+
+
+def test_normal_tooltip_return_footer_is_preserved():
+    """Portfolio Performance WITHOUT overlays keeps its Return footer."""
+    footer = tooltip_footer_callback_body()
+    assert 'if (mode === "performance") {' in footer
