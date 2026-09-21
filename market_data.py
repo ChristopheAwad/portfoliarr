@@ -9,7 +9,9 @@ This module knows nothing about Flask or HTTP — routes decide that.
 """
 
 import math
+import threading
 import time
+from concurrent.futures import Future
 from numbers import Real
 
 import yfinance as yf
@@ -25,6 +27,19 @@ TTL_SECONDS = 120
 # Module-level cache: {symbol: {"data": <quote dict>, "fetched_at": <epoch seconds>}}
 # Lives as long as the Flask process does; starts empty on every restart.
 _cache = {}
+
+# In-flight coordination: {symbol: concurrent.futures.Future}. Held ONLY while
+# a Yahoo fetch for that symbol is running — it is not a cache and never
+# retains completed entries. A Flask install has ONE process; concurrent
+# threads (summary, allocation, watchlist all polling the same portfolio)
+# can miss the same cache entry in the same 120s window. Without this map
+# each thread fires its own Yahoo request for the same symbol. With it, the
+# first misser OWNS the fetch and every other misser WAITS on the same
+# future. `_market_lock` guards the cache dicts and this map while the
+# actual Yahoo network call happens OUTSIDE the lock, so different symbols
+# still fetch concurrently.
+_market_lock = threading.Lock()
+_inflight_quotes = {}
 
 # Company-name cache: {symbol: "Apple Inc"}. Different data, different
 # policy: a company's name never changes, so entries stay valid forever —
@@ -75,6 +90,11 @@ def clear_history_cache():
 # fine, missing DATA is not).
 _profile_cache = {}
 
+# Same per-symbol in-flight coordination as quotes: concurrent frontend
+# threads (summary + allocation profiles for the same ticker) share ONE
+# Ticker.info call while a miss is in flight. Guarded by _market_lock.
+_inflight_profiles = {}
+
 
 def clear_profile_cache():
     """Empty the profile cache — test isolation's escape hatch.
@@ -87,11 +107,17 @@ def clear_profile_cache():
 
 def clear_market_caches():
     """Clear every process-memory market cache for deterministic tests."""
-    _cache.clear()
-    _name_cache.clear()
-    _history_cache.clear()
-    _profile_cache.clear()
-    _volume_cache.clear()
+    with _market_lock:
+        _cache.clear()
+        _name_cache.clear()
+        _history_cache.clear()
+        _profile_cache.clear()
+        _volume_cache.clear()
+        # In-flight entries should be empty between tests already (no market
+        # operation is active at fixture time); clearing keeps stale state
+        # from leaking across tests if a test left one behind.
+        _inflight_quotes.clear()
+        _inflight_profiles.clear()
 
 
 def _finite_number(value):
@@ -182,44 +208,79 @@ def get_quote(symbol):
 
     Raises on network failure or bad data — the caller (route layer)
     decides how to translate that into an HTTP response.
+
+    Concurrent missers for the SAME symbol share one Yahoo fetch: the first
+    caller owns it and caches the result; the rest wait on its future.
+    Different symbols never wait on each other (the lock is dropped before
+    any network call).
     """
-    # 1. Cache check — is our copy young enough to trust?
+    # 1. Cache check under the lock — is our copy young enough to trust?
+    #    If not, either join an in-flight fetch for this symbol or start one.
     now = time.time()
-    entry = _cache.get(symbol)
-    if entry and (now - entry["fetched_at"]) < TTL_SECONDS:
-        return dict(entry["data"])  # callers cannot mutate the cache
+    with _market_lock:
+        entry = _cache.get(symbol)
+        if entry and (now - entry["fetched_at"]) < TTL_SECONDS:
+            return dict(entry["data"])  # callers cannot mutate the cache
 
-    # 2. Cache miss — pay the network cost, exactly as in the scratch script
-    fi = yf.Ticker(symbol).fast_info
-    price = fi["lastPrice"]
-    previous_close = fi["previousClose"]
+        in_flight = _inflight_quotes.get(symbol)
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_quotes[symbol] = future
 
-    # 3. Defensive guard: turn a would-be ZeroDivisionError (or None price)
-    #    into a deliberate, named error with a useful message.
-    #    The isnan checks matter because NaN is TRUTHY in Python — `not
-    #    price` cannot see it — and a NaN that slipped through would ride
-    #    every quote-bearing payload as a bare `NaN` token, which is
-    #    INVALID JSON for browsers (their JSON.parse throws and the whole
-    #    section degrades). A NaN here means Yahoo answered nonsense, not
-    #    "price = 0" — raise, and the route layer degrades per its rules.
-    price = _positive_finite_number(price)
-    previous_close = _positive_finite_number(previous_close)
-    if price is None or previous_close is None:
-        raise ValueError(f"incomplete quote data for {symbol}")
+    # 2. Waiter path: someone else already owns this symbol's fetch. Block
+    #    on their future (outside the lock) and hand back a defensive copy
+    #    of whatever they learned — success or the exact same failure.
+    if waiter is not None:
+        return dict(waiter.result())
 
-    # 4. Build the payload — raw floats only; formatting is the frontend's job
-    data = {
-        "symbol": symbol,
-        "price": price,
-        "previous_close": previous_close,
-        "currency": fi["currency"],
-    }
-    data["change"] = price - previous_close
-    data["change_pct"] = data["change"] / previous_close * 100
+    # 3. Owner path: pay the network cost, exactly as in the scratch script.
+    try:
+        fi = yf.Ticker(symbol).fast_info
+        price = fi["lastPrice"]
+        previous_close = fi["previousClose"]
 
-    # 5. Remember it (with its timestamp), then hand it back
-    _cache[symbol] = {"data": data, "fetched_at": now}
-    return dict(data)
+        # 4. Defensive guard: turn a would-be ZeroDivisionError (or None price)
+        #    into a deliberate, named error with a useful message.
+        #    The isnan checks matter because NaN is TRUTHY in Python — `not
+        #    price` cannot see it — and a NaN that slipped through would ride
+        #    every quote-bearing payload as a bare `NaN` token, which is
+        #    INVALID JSON for browsers (their JSON.parse throws and the whole
+        #    section degrades). A NaN here means Yahoo answered nonsense, not
+        #    "price = 0" — raise, and the route layer degrades per its rules.
+        price = _positive_finite_number(price)
+        previous_close = _positive_finite_number(previous_close)
+        if price is None or previous_close is None:
+            raise ValueError(f"incomplete quote data for {symbol}")
+
+        # 5. Build the payload — raw floats only; formatting is the frontend's job
+        data = {
+            "symbol": symbol,
+            "price": price,
+            "previous_close": previous_close,
+            "currency": fi["currency"],
+        }
+        data["change"] = price - previous_close
+        data["change_pct"] = data["change"] / previous_close * 100
+
+        # 6. Remember it under the lock (only SUCCESS is cached — a failure
+        #    must stay retryable), then complete the shared future and empty
+        #    the in-flight slot so the next refresh starts fresh.
+        with _market_lock:
+            _cache[symbol] = {"data": data, "fetched_at": time.time()}
+        future.set_result(data)
+        return dict(data)
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _market_lock:
+            # Identity check: never delete a NEWER future that a later caller
+            # registered after we finished.
+            if _inflight_quotes.get(symbol) is future:
+                del _inflight_quotes[symbol]
 
 
 def get_name(symbol):
@@ -358,29 +419,60 @@ def get_profile(symbol):
 
     Raises on failure — same boundary rule as get_quote: this layer
     reports problems, the route layer decides the HTTP response.
+
+    Concurrent missers for the SAME symbol share one Ticker.info call (the
+    same in-flight coordination as get_quote); different symbols fetch
+    concurrently.
     """
-    # Cache check: after the first success this is a pure dict lookup.
-    if symbol in _profile_cache:
-        return dict(_profile_cache[symbol])
+    # 1. Cache check under the lock, plus in-flight coordination: join an
+    #    existing fetch for this symbol or start (own) one.
+    with _market_lock:
+        if symbol in _profile_cache:
+            return dict(_profile_cache[symbol])
 
-    # Cache miss: pay the (slow) network cost once.
-    info = yf.Ticker(symbol).info
+        in_flight = _inflight_profiles.get(symbol)
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_profiles[symbol] = future
 
-    # An empty profile means Yahoo knows nothing about this symbol —
-    # fail loudly with a named error instead of returning Nones that
-    # masquerade as "real but empty" profiles.
-    if not info:
-        raise ValueError(f"no profile data for {symbol}")
+    # 2. Waiter path: share the owner's result (or its failure).
+    if waiter is not None:
+        return dict(waiter.result())
 
-    profile = {
-        "sector": info.get("sector"),
-        "country": info.get("country"),
-        "quote_type": info.get("quoteType"),
-        "market_cap": _finite_number(info.get("marketCap")),
-    }
+    # 3. Owner path: pay the (slow) network cost once.
+    try:
+        info = yf.Ticker(symbol).info
 
-    _profile_cache[symbol] = profile
-    return dict(profile)
+        # An empty profile means Yahoo knows nothing about this symbol —
+        # fail loudly with a named error instead of returning Nones that
+        # masquerade as "real but empty" profiles.
+        if not info:
+            raise ValueError(f"no profile data for {symbol}")
+
+        profile = {
+            "sector": info.get("sector"),
+            "country": info.get("country"),
+            "quote_type": info.get("quoteType"),
+            "market_cap": _finite_number(info.get("marketCap")),
+        }
+
+        # Only SUCCESS is cached (a failure must stay retryable), then the
+        # shared future completes and the in-flight slot empties.
+        with _market_lock:
+            _profile_cache[symbol] = profile
+        future.set_result(profile)
+        return dict(profile)
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _market_lock:
+            # Identity check so cleanup never deletes a newer future.
+            if _inflight_profiles.get(symbol) is future:
+                del _inflight_profiles[symbol]
 
 
 def get_history(symbol, period_key):

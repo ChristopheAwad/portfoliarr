@@ -1517,11 +1517,55 @@ def portfolio_allocation():
                 exc_info=True,
             )
 
+    # ── PASS 2.5: prefetch profiles in parallel ─────────────────────────
+    # Profile dimensions consult get_profile once per eligible ticker
+    # BEFORE pass 3 classifies. This is the exact set of symbols pass 3
+    # would call get_profile for (priced, long, supported currency, live
+    # rate present when USD) — an unsupported-currency or short ticker is
+    # excluded without ever touching the profile pool. Fetching here in
+    # parallel (≤8 workers, like the quotes) instead of serially inside the
+    # classification loop removes the slow Yahoo Ticker.info calls from the
+    # critical path. A fetch failure records None here; classification
+    # treats None as "couldn't fetch profile" — never fabricated metadata.
+    if profile_field is not None:
+        profile_pool = sorted(
+            symbol
+            for symbol, held in net_qty.items()
+            if held > 0
+            and quotes.get(symbol) is not None
+            and quotes[symbol]["currency"] in ("USD", "CAD")
+            and not (quotes[symbol]["currency"] == "USD"
+                     and live_rate is None)
+        )
+    else:
+        profile_pool = []
+
+    profiles = {}
+    if profile_pool:
+
+        def fetch_alloc_profile(symbol):
+            try:
+                return symbol, get_profile(symbol)
+            except Exception:
+                app.logger.warning(
+                    "allocation profile failed for %s — excluded from "
+                    "slices by %s",
+                    symbol, by,
+                    exc_info=True,
+                )
+                return symbol, None
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(profile_pool), 8)
+        ) as pool:
+            for symbol, profile in pool.map(fetch_alloc_profile,
+                                            profile_pool):
+                profiles[symbol] = profile
+
     # ── PASS 3: classify + aggregate ────────────────────────────────────
     # Walk every held ticker. Priced + classified → slice; otherwise →
-    # excluded with a reason. For profile dimensions, get_profile is
-    # called once per unique ticker (process-lifetime cached, so only
-    # the first request pays the cost).
+    # excluded with a reason. Profile lookups are already done in parallel
+    # (pass 2.5); this loop only reads the resulting dict.
     slices = {}    # {group_key: value}
     excluded = []  # [{ticker, reason}]
 
@@ -1558,16 +1602,13 @@ def portfolio_allocation():
             # Currency dimension: group off the quote's currency directly.
             group_key = currency
         else:
-            # Profile dimensions: consult get_profile (cached).
-            try:
-                profile = get_profile(symbol)
-            except Exception:
-                app.logger.warning(
-                    "allocation profile failed for %s — excluded from "
-                    "slices by %s",
-                    symbol, by,
-                    exc_info=True,
-                )
+            # Profile dimensions: read the parallel-prefetched profile.
+            # None means its fetch failed (missing keys are illegal here —
+            # prefetch ran before exclusion, so any reached symbol HAS an
+            # entry; a profile legitimately lacking this field is handled
+            # below as "no X data", never as a fabricated value).
+            profile = profiles.get(symbol)
+            if profile is None:
                 excluded.append({"ticker": symbol,
                                  "reason": "couldn't fetch profile"})
                 continue

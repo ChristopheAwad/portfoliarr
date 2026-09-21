@@ -243,9 +243,10 @@
                                     title="Next view">&rsaquo;</button>
                         </div>
                     </div>
-                    <div class="donut-box">
+                    <div class="donut-box" hidden>
                         <canvas id="allocationChart"></canvas>
                     </div>
+                    <p id="alloc-status" class="empty-state" role="status" aria-live="polite">Loading allocation&hellip;</p>
                     <nav id="alloc-pagination" class="alloc-pagination"
                          aria-label="Allocation views">
                         <div id="alloc-dots" class="alloc-dots"></div>

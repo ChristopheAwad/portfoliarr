@@ -19,6 +19,8 @@
 #        - excludes + note for unclassified/unpriced tickers (never
 #          fabricated into an "Unknown" category)
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -78,6 +80,193 @@ def seed(ticker, price, qty, tx_type="BUY", currency="CAD", fx_rate=1.0,
 
 
 # ── Market data: get_profile ────────────────────────────────────────────
+
+def _run_concurrently(fn, n=4, timeout=10):
+    """Run `fn` across `n` threads; return (answers, errors) with a bound so
+    a broken implementation cannot hang the suite forever."""
+    answers = []
+    errors = []
+    lock = threading.Lock()
+
+    def safe():
+        try:
+            value = fn()
+        except Exception as exc:  # noqa: BLE001 — every failure is collected
+            with lock:
+                errors.append(exc)
+        else:
+            with lock:
+                answers.append(value)
+
+    threads = [threading.Thread(target=safe) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout)
+    assert not any(t.is_alive() for t in threads), \
+        "concurrent callers hung — the in-flight coordination deadlocked"
+    return answers, errors
+
+
+def test_concurrent_profile_cache_misses_share_one_yahoo_request(monkeypatch):
+    calls = []
+    entered = []                     # one entry per thread inside .info
+    gate = threading.Event()
+    info = {
+        "sector": "Technology", "country": "United States",
+        "quoteType": "EQUITY", "marketCap": 2500000000000,
+    }
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)     # one entry per Yahoo fetch
+
+        @property
+        def info(self):
+            entered.append(self.symbol)
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            return dict(info)
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    answers = []
+
+    def fetch():
+        answers.append(market_data.get_profile("AAPL"))
+
+    threads = [threading.Thread(target=fetch) for _ in range(4)]
+    for t in threads:
+        t.start()
+    deadline = time.monotonic() + 5
+    while not entered and time.monotonic() < deadline:
+        time.sleep(0.005)
+    time.sleep(0.3)
+    gate.set()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "concurrent callers hung — the in-flight coordination deadlocked"
+
+    assert calls == ["AAPL"], \
+        f"concurrent missers must share ONE Yahoo profile fetch, got {calls}"
+    assert len(answers) == 4
+    for profile in answers:
+        assert profile == answers[0]
+        assert profile["sector"] == "Technology"
+    assert len({id(a) for a in answers}) == 4, \
+        "each caller must receive its own defensive dict"
+
+
+def test_different_profile_symbols_can_fetch_concurrently(monkeypatch):
+    barrier = threading.Barrier(2, timeout=5)
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        @property
+        def info(self):
+            barrier.wait()
+            return {"sector": "Technology", "country": "United States",
+                    "quoteType": "EQUITY", "marketCap": 2500000000000}
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    errors = []
+    results = {}
+
+    def fetch(symbol):
+        try:
+            results[symbol] = market_data.get_profile(symbol)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=fetch, args=("AAPL",)),
+        threading.Thread(target=fetch, args=("MSFT",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "different symbols must not serialize behind one lock"
+    assert errors == []
+    assert results["AAPL"]["sector"] == "Technology"
+    assert results["MSFT"]["sector"] == "Technology"
+
+
+def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
+        monkeypatch):
+    calls = []
+    entered = []                     # one entry per thread inside .info
+    gate = threading.Event()
+    fail = True
+    errors = []
+    error_lock = threading.Lock()
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)
+
+        @property
+        def info(self):
+            entered.append(self.symbol)
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            if fail:
+                raise RuntimeError("Yahoo is down")
+            return {"sector": "Technology", "country": "United States",
+                    "quoteType": "EQUITY", "marketCap": 2500000000000}
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    def fetch():
+        try:
+            market_data.get_profile("AAPL")
+        except Exception as exc:  # noqa: BLE001 — every failure is collected
+            with error_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=fetch) for _ in range(4)]
+    for t in threads:
+        t.start()
+    deadline = time.monotonic() + 5
+    while not entered and time.monotonic() < deadline:
+        time.sleep(0.005)
+    time.sleep(0.3)
+    gate.set()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "concurrent callers hung on a shared failure"
+    assert len(errors) == 4, "every waiter must receive the owner's failure"
+    for exc in errors:
+        assert isinstance(exc, RuntimeError)
+    assert "AAPL" not in market_data._profile_cache, \
+        "a failed profile must not be cached"
+    assert "AAPL" not in market_data._inflight_profiles, \
+        "a completed failure must not leave a stale in-flight entry"
+
+    # Round 2: Yahoo recovers — the next call starts a fresh fetch.
+    fail = False
+    profile = market_data.get_profile("AAPL")
+    assert profile["sector"] == "Technology"
+    assert calls == ["AAPL", "AAPL"], \
+        f"one failed round + one retry = two fetches, got {calls}"
+
 
 @pytest.fixture
 def fake_yf(monkeypatch):
@@ -486,3 +675,97 @@ def test_slice_values_descending(client, fake_market):
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert body["slices"][0]["key"] == "Financials"
     assert body["slices"][0]["value"] > body["slices"][1]["value"]
+
+
+# ── Allocation route: profile parallelism ──────────────────────────────
+
+def test_profile_dimensions_fetch_eligible_profiles_in_parallel(
+        client, fake_market, monkeypatch):
+    """Sector/Country/Type/Cap must consult get_profile in PARALLEL, not one
+    ticker at a time. Three eligible holdings must all cross a three-party
+    barrier before any returns — a serial loop would time out its first
+    call and exclude every ticker instead of producing correct slices."""
+    seed("AAPL", 100.0, 10, currency="USD", fx_rate=1.30)
+    seed("MSFT", 100.0, 5, currency="USD", fx_rate=1.30)
+    seed("RY.TO", 100.0, 10)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 150.0, 145.0, currency="USD")
+    fake_market.quotes["MSFT"] = make_quote("MSFT", 100.0, 99.0, currency="USD")
+    fake_market.quotes["RY.TO"] = make_quote("RY.TO", 100.0, 98.0)
+    fake_market.fx_rates["USDCAD"] = 1.30
+    fake_market.profiles["AAPL"] = make_profile(sector="Technology")
+    fake_market.profiles["MSFT"] = make_profile(sector="Technology")
+    fake_market.profiles["RY.TO"] = make_profile(sector="Financials")
+
+    barrier = threading.Barrier(3, timeout=5)
+    called = []
+    call_lock = threading.Lock()
+
+    def parallax_get_profile(symbol):
+        with call_lock:
+            called.append(symbol)
+        barrier.wait()  # a serial route never satisfies this before timeout
+        return fake_market.profiles[symbol]
+
+    monkeypatch.setattr(app_module, "get_profile", parallax_get_profile)
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert sorted(called) == ["AAPL", "MSFT", "RY.TO"]
+    # Technology: 10×150×1.30 + 5×100×1.30 = 2600; Financials: 10×100 = 1000
+    slices = body["slices"]
+    assert len(slices) == 2
+    assert slices[0]["key"] == "Technology"
+    assert slices[0]["value"] == pytest.approx(2600.0)
+    assert slices[1]["key"] == "Financials"
+    assert slices[1]["value"] == pytest.approx(1000.0)
+
+
+def test_unsupported_currency_ticker_never_fetches_profile(
+        client, fake_market, monkeypatch):
+    """A ticker priced in an unsupported currency is excluded before profile
+    work — the profile pool must never start a fetch for it."""
+    seed("EURX", 10.0, 5, currency="EUR", fx_rate=1.0)
+    fake_market.quotes["EURX"] = make_quote("EURX", 10.0, 9.0, currency="EUR")
+    calls = []
+    monkeypatch.setattr(app_module, "get_profile",
+                        lambda s: calls.append(s) or make_profile())
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert body["slices"] == []
+    assert calls == []
+    assert any(e["ticker"] == "EURX" for e in body["excluded"])
+
+
+def test_usd_without_live_rate_never_fetches_profile(
+        client, fake_market, monkeypatch):
+    """A USD holding with no live USDCAD rate is excluded before profile
+    work — the profile pool must not be started for it."""
+    seed("AAPL", 100.0, 10, currency="USD", fx_rate=1.30)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 150.0, 145.0, currency="USD")
+    # No fx_rates entry → get_fx_rate raises → live_rate stays None.
+    calls = []
+    monkeypatch.setattr(app_module, "get_profile",
+                        lambda s: calls.append(s) or make_profile())
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert body["slices"] == []
+    assert calls == []
+    assert any(e["ticker"] == "AAPL" and "rate" in e["reason"]
+               for e in body["excluded"])
+
+
+def test_short_ticker_never_fetches_profile(client, fake_market, monkeypatch):
+    """A short position is a bet against, not an allocation — it may be
+    fetched for profiles only when it has a long net qty to classify."""
+    seed("RBC.TO", 150.0, 10)
+    seed("SHORT.TO", 50.0, 4, tx_type="SELL", date="2026-08-01")
+    fake_market.quotes["RBC.TO"] = make_quote("RBC.TO", 150.0, 148.0)
+    fake_market.quotes["SHORT.TO"] = make_quote("SHORT.TO", 50.0, 49.0)
+    fake_market.profiles["RBC.TO"] = make_profile(sector="Financials")
+    calls = []
+    monkeypatch.setattr(app_module, "get_profile",
+                        lambda s: calls.append(s) or fake_market.profiles[s])
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert "SHORT.TO" not in calls
+    assert len(body["slices"]) == 1
+    assert body["slices"][0]["key"] == "Financials"
