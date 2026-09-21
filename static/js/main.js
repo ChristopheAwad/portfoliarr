@@ -387,8 +387,9 @@ function setPortfolioUnavailable(tooltipText = "") {
     clearPortfolioGeometryLocks();
 }
 
-// (The change-pill painter itself is common.js's paintChange — the stock
-// detail page paints the exact same shape, so the helper moved there.)
+// (The change-pill painter itself is common.js's paintChange. The stock
+// detail page has its own paintPeriodChange because its pill leads with the
+// timeframe and shows a "$" amount — a different shape.)
 
 // Is the portfolio header currently privacy-masked? The masking code and
 // the refresh cycle consult this ONE helper, so both read the same source
