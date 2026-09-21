@@ -107,11 +107,13 @@ def fake_market(monkeypatch):
 
     The FX helpers get the same treatment: fx_rates is keyed "USDCAD"
     (the live-rate lookup), fx_on is keyed (pair, "YYYY-MM-DD") (the
-    historical-rate lookup). An ABSENT key = "Yahoo couldn't answer" —
-    the exact failure path the routes' fallbacks exist for.
+    historical-rate lookup). prices_on is keyed (symbol, "YYYY-MM-DD") —
+    the ledger prefill's dated close. An ABSENT key = "Yahoo couldn't
+    answer" — the exact failure path the routes' fallbacks exist for.
     """
     quotes, names, histories, stats = {}, {}, {}, {}
     fx_rates, fx_on = {}, {}
+    prices_on = {}
     monkeypatch.setattr(app_module, "get_quote", lambda symbol: quotes[symbol])
     monkeypatch.setattr(app_module, "get_name", lambda symbol: names[symbol])
     monkeypatch.setattr(app_module, "get_history",
@@ -122,5 +124,8 @@ def fake_market(monkeypatch):
     monkeypatch.setattr(app_module, "get_fx_rate_on",
                         lambda base, target, date_iso:
                             fx_on[(f"{base}{target}", date_iso)])
+    monkeypatch.setattr(app_module, "get_price_on",
+                        lambda symbol, date_iso: prices_on[(symbol, date_iso)])
     return SimpleNamespace(quotes=quotes, names=names, histories=histories,
-                           stats=stats, fx_rates=fx_rates, fx_on=fx_on)
+                           stats=stats, fx_rates=fx_rates, fx_on=fx_on,
+                           prices_on=prices_on)

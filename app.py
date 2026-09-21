@@ -31,7 +31,7 @@ from werkzeug.exceptions import HTTPException
 from market_data import (
     get_quote, get_name, get_stats, get_profile, get_history,
     search_tickers,
-    get_fx_rate, get_fx_rate_on, PERIOD_MAP, get_volume_leaders
+    get_fx_rate, get_fx_rate_on, get_price_on, PERIOD_MAP, get_volume_leaders
 )
 import db
 
@@ -2767,9 +2767,34 @@ def quote(symbol):
     routes: case-normalized, and an unquotable symbol is a plain 404 — the
     prefill silently leaves the price empty and the user types it (the POST
     route re-validates the ticker anyway).
+
+    Optional `?date=YYYY-MM-DD` asks for the recorded close ON-OR-BEFORE
+    that date instead of the live quote — the ledger uses it to price a
+    past transaction by the selected Date. Its reply shape is narrower
+    (symbol, price, date) because a historical close has no change fields.
+    A malformed date is a 400; a date with no covered bar is a 404.
     """
     # Same normalize-to-canonical-form rule as every symbol route.
     symbol = symbol.strip().upper()
+
+    date_arg = request.args.get("date")
+    if date_arg is not None:
+        # Reject impossible calendar days (2026-02-30) here: the client
+        # only ever sends a real date, so a bad one is a bug, not data.
+        try:
+            date_iso = date.fromisoformat(date_arg).isoformat()
+        except ValueError:
+            return jsonify({"error": "date must be YYYY-MM-DD (a real calendar date)"}), 400
+
+        try:
+            price = get_price_on(symbol, date_iso)
+        except Exception:
+            # TIER 1 at INFO — a date before the symbol existed needs no
+            # stack trace; the form just leaves the price empty.
+            app.logger.info("price lookup failed for %s on %s — serving 404", symbol, date_iso)
+            return jsonify({"error": f"no price for {symbol} on {date_iso}"}), 404
+
+        return jsonify({"symbol": symbol, "price": price, "date": date_iso})
 
     try:
         # Keep the route's response object independent from the data-layer

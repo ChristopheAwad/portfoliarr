@@ -62,3 +62,45 @@ def test_quote_unquotable_symbol_returns_404(client, fake_market):
     transaction-log routes: the prefill silently leaves the price empty,
     and the user types it (the backend re-validates at submit anyway)."""
     assert client.get("/api/quote/NOPE").status_code == 404
+
+
+# ── The dated path (?date=): the ledger's recorded close ───────────────
+#
+# The ledger prefill wants the price AT THE SELECTED DATE, not always the
+# live quote. The same route serves that with a `?date=` query; without
+# the query it stays the byte-for-byte live quote above. The date lookup
+# is faked through market_data.get_price_on (app.prices_on).
+
+def test_quote_with_date_returns_historical_price(client, fake_market):
+    """A dated request returns that date's recorded close — NOT the live
+    quote dict, which has no bar for a past date."""
+    fake_market.prices_on[("AAPL", "2026-08-31")] = 123.45
+    body = client.get("/api/quote/AAPL?date=2026-08-31").get_json()
+    assert set(body) == {"symbol", "price", "date"}, (
+        "the dated reply is deliberately narrower than the live quote — a "
+        "historical close has no previous_close/change fields"
+    )
+    assert body["symbol"] == "AAPL"
+    assert body["price"] == 123.45
+    assert body["date"] == "2026-08-31"
+
+
+def test_quote_with_date_does_not_touch_live_quote(client, fake_market):
+    """The dated path must call get_price_on only — quotes dict empty, so a
+    200 proves the live get_quote path was never used."""
+    fake_market.prices_on[("AAPL", "2026-08-31")] = 123.45
+    assert client.get("/api/quote/AAPL?date=2026-08-31").status_code == 200
+
+
+def test_quote_with_bad_date_returns_400(client, fake_market):
+    """A garbage date is a 400: fromisoformat rejects both non-dates and
+    impossible calendar dates (Feb 30), same rule as the transaction
+    validator."""
+    assert client.get("/api/quote/AAPL?date=not-a-date").status_code == 400
+    assert client.get("/api/quote/AAPL?date=2026-02-30").status_code == 400
+
+
+def test_quote_with_uncovered_date_returns_404(client, fake_market):
+    """A valid date with no bar on-or-before it (Yahoo gap, listing later)
+    is a 404 — the prefill leaves the field empty for the user to type."""
+    assert client.get("/api/quote/AAPL?date=2026-08-31").status_code == 404

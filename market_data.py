@@ -626,6 +626,52 @@ def get_fx_rate_on(base, target, date_iso):
     return rate
 
 
+def get_price_on(symbol, date_iso):
+    """Return the symbol's daily CLOSE on-or-before `date_iso` — the
+    recorded price for a ledger row whose Date is in the past.
+
+    Why on-or-before: the ledger's dates are calendar days, markets close
+    on weekends/holidays, and a Saturday trade's "price at the time of
+    trading" is the last close the market actually printed (Friday's).
+    This is the exact rule `get_fx_rate_on` applies to conversion rates.
+
+    The fetch is a small calendar WINDOW (ten days back covers every
+    long weekend; one day forward so the date itself is included —
+    yfinance's `end` is exclusive) rather than a PERIOD_MAP period,
+    because the input here is a specific date, not a chart button.
+
+    Un-cached on purpose, same as `get_fx_rate_on`: the lookups are
+    user-driven (one per date change) and effectively unique, so a cache
+    would almost never hit.
+
+    Raises ValueError when no bar covers the date (a Yahoo gap, or a
+    date before the symbol existed) — the route layer turns that into a
+    404 and the form leaves the price empty for the user to type.
+    """
+    d = date.fromisoformat(date_iso)
+    df = yf.Ticker(symbol).history(
+        start=(d - timedelta(days=10)).isoformat(),
+        end=(d + timedelta(days=1)).isoformat(),
+        interval="1d",
+    )
+
+    # Walk the (ascending) bars and keep the last close whose calendar
+    # day is on-or-before the target date. A bar AFTER it means we've
+    # walked past the answer — stop early.
+    price = None
+    for ts, row in df.iterrows():
+        if ts.date() <= d:
+            candidate = _positive_finite_number(row["Close"])
+            if candidate is not None:
+                price = float(candidate)
+        else:
+            break
+
+    if price is None:
+        raise ValueError(f"no price for {symbol} on or before {date_iso}")
+    return price
+
+
 def search_tickers(query, limit=8):
     """Search Yahoo's ticker universe for a free-text query.
 
