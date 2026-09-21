@@ -1618,6 +1618,11 @@ input[type="date"]::-moz-placeholder {
     color: var(--text-secondary);
 }
 
+/* Let Chrome draw its native calendar icon for the dark input surface. */
+.dark input[type="date"] {
+    color-scheme: dark;
+}
+
 /* The Log button — one of the three primary buttons (with .btn-action
    and the import panel's buttons); they share this exact recipe. */
 .tx-form button {
