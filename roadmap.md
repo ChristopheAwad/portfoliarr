@@ -87,7 +87,7 @@ and a missing historical bar leaves the field empty rather than guessing.
 **Effort:** 1 day
 **Files:** `market_data.py`, `app.py`, `static/js/ledger.js`, `conftest.py`, `tests/test_market_data.py`, `tests/test_quote.py`, `tests/test_price_autofill.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-21 (PR #67)
 
 ---
 

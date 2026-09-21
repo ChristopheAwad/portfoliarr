@@ -2,10 +2,10 @@
 
 ## Status
 
-IMPLEMENTED 2026-09-21. Tests written first, production code in
+SHIPPED 2026-09-21 (PR #67). Tests written first, production code in
 `market_data.py`, `app.py`, and `static/js/ledger.js`, and the full
-`python -m pytest` suite passes (762 passed). Awaiting the user's browser GUI
-approval before any commit or push.
+`python -m pytest` suite passes (762 passed). The user approved the browser
+behavior before the PR was opened.
 
 ## Problem
 
