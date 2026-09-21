@@ -719,13 +719,13 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
 const COMPARE_MAX = 3;
 
 // The three benchmark recommendations offered inside the comparison search
-// dropdown. Raw Yahoo symbols pair with the friendly `name` labels; the
-// optional type/exchange values reuse the normal search-row meta text. The
-// stock detail page filters out its own symbol before wiring these in.
+// dropdown. Raw Yahoo symbols pair with friendly `name` labels; `type` fills
+// the normal search-row meta text ("Index"). The stock detail page filters
+// out its own symbol before wiring these in.
 const COMPARE_RECOMMENDATIONS = [
-    { symbol: "^GSPC", name: "S&P 500", type: "Index", exchange: "S&P 500" },
-    { symbol: "^IXIC", name: "Nasdaq", type: "Index", exchange: "Nasdaq" },
-    { symbol: "^GSPTSE", name: "TSX", type: "Index", exchange: "TSX" },
+    { symbol: "^GSPC", name: "S&P 500", type: "Index" },
+    { symbol: "^IXIC", name: "Nasdaq", type: "Index" },
+    { symbol: "^GSPTSE", name: "TSX", type: "Index" },
 ];
 
 function setupComparePicker({
@@ -747,16 +747,25 @@ function setupComparePicker({
             chip.className = "compare-chip";
             chip.dataset.symbol = symbol;
 
-            const label = document.createElement("span");
             const rec = COMPARE_RECOMMENDATIONS.find(
                 (item) => item.symbol === symbol,
             );
-            label.textContent = rec ? rec.name : symbol;
+            // One friendly display name feeds both the visible chip label
+            // and the remove button's accessible name, so the button never
+            // reads "Remove ^GSPC comparison" beside a chip that says
+            // "S&P 500".
+            const displayName = rec ? rec.name : symbol;
+
+            const label = document.createElement("span");
+            label.textContent = displayName;
 
             const remove = document.createElement("button");
             remove.type = "button";
             remove.className = "compare-chip-remove";
-            remove.setAttribute("aria-label", `Remove ${symbol} comparison`);
+            remove.setAttribute(
+                "aria-label",
+                `Remove ${displayName} comparison`,
+            );
             remove.append(icon("x"));
             remove.addEventListener("click", () => removeSymbol(symbol));
             chip.append(label, remove);

@@ -58,8 +58,7 @@ def _css_rule(selector: str, *, start: int = 0) -> str:
 def test_picker_is_compact_labelled_control_on_both_pages():
     rejected = (
         "compare-selections",
-        "compare-quick-picks",
-        'class="compare-quick"',
+        "compare-quick",
         'data-symbol="^GSPC"',
         'data-symbol="^IXIC"',
         'data-symbol="^GSPTSE"',
@@ -199,7 +198,9 @@ def test_picker_renders_one_chip_per_selection():
     assert 'remove.className = "compare-chip-remove";' in render_body
     assert "chip.dataset.symbol = symbol;" in render_body
     assert "COMPARE_RECOMMENDATIONS.find" in render_body
-    assert "rec.name : symbol" in render_body
+    assert "const displayName = rec ? rec.name : symbol;" in render_body
+    assert "label.textContent = displayName" in render_body
+    assert "`Remove ${displayName} comparison`" in render_body
     assert "removeSymbol(symbol)" in render_body
     assert "chipsEl.hidden = symbols.length === 0;" in render_body
 
@@ -348,7 +349,6 @@ def test_comparison_picker_has_compact_shared_styles():
 
 def test_comparison_picker_has_deliberate_mobile_layout():
     mobile_at = STYLE_CSS.rindex("@media (max-width: 600px)")
-    mobile_css = STYLE_CSS[mobile_at:]
     picker_rule = _css_rule(".compare-picker", start=mobile_at)
     assert "grid-template-columns: 1fr" in picker_rule
     for rule in (
