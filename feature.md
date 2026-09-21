@@ -1,381 +1,265 @@
-# Feature #9: Dashboard Period Return Readout
+# Feature #18: Ledger Quick Sell
 
 ## Status
 
-IMPLEMENTED 2026-09-21. All 708 tests pass and the user approved the dashboard
-GUI, including the final grouped label/value alignment. Roadmap item #9 ships
-with this PR.
+IMPLEMENTED 2026-09-21. Tests written first (16 new in
+`tests/test_ledger_quick_sell.py`), production code in `static/js/ledger.js`,
+and all 728 tests pass. Awaiting the user's browser GUI approval before any
+commit or push.
 
-This plan replaces the stale allocation-donut handoff that shipped in PR #62.
+This plan replaces the shipped Feature #9 handoff. Feature #9 shipped in PR
+#63 and remains recorded in `roadmap.md`.
 
 ## Problem
 
-The dashboard header always shows two portfolio changes:
+Selling a complete holding currently requires the user to copy five facts into
+the transaction form: ticker, net quantity still held, current native price,
+current local date, and the `SELL` operation. The collapsed ticker row already
+has these facts. Retyping them is slow and can cause quantity, price, or
+operation mistakes.
 
-- `Today`, calculated from live quote changes relative to previous close; and
-- `Total`, calculated from current value relative to net cost basis.
-
-The chart can display 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, or MAX, but the page
-does not show the portfolio return for the selected chart period. Changing the
-timeframe therefore changes the line without providing a concise result for
-that period.
-
-Replacing `Today` is not correct. It would remove a useful live fact, and the
-chart's 1D span starts at its first available intraday bar rather than at the
-previous close used by the live daily calculation. Adding a third hero pill is
-also not desirable because it crowds the headline on mobile and mixes a
-chart-specific metric with the live summary facts.
-
-Calculating `last portfolio value - first portfolio value` is not an honest
-investment return. A buy can make the value line rise without investment
-performance, and a sell can make it fall. The history endpoint already returns
-`twrr_pct`, a time-weighted return that removes those cash flows.
+The quick action must only prepare a transaction. It must not submit the sale
+without review because price and quantity become permanent ledger facts.
 
 ## Goal
 
-Add one quiet, period-aware return readout directly above the dashboard chart.
-It must:
-
-- keep the header's `Today`, `Total`, and cost-basis facts unchanged;
-- show the selected chart period, for example `5D return`;
-- show the history endpoint's cash-flow-neutral `twrr_pct`;
-- explain the metric with `Deposits and withdrawals excluded`;
-- update only when matching chart data successfully becomes visible;
-- remain correct through cached loads, rapid period changes, failed requests,
-  chart mode changes, comparison changes, and mobile-tab recovery; and
-- degrade to `Return unavailable` when the selected response cannot define a
-  return.
-
-## Approved Design
-
-The readout is part of the chart card, not the portfolio hero:
-
-```text
-5D return                         +2.14%
-Deposits and withdrawals excluded
-
-┌─────────────────────────────────────────┐
-│               chart                     │
-└─────────────────────────────────────────┘
- Value  Performance
- 1D  5D  1M  3M  6M  YTD  1Y  5Y  MAX
-```
-
-Design rules:
-
-1. Keep the established typefaces, spacing system, and light/dark palettes.
-2. Use an unboxed, left-aligned text treatment. Do not add a card, pill, icon,
-   border, gradient, or decorative label.
-3. Use tabular numerals for the percentage.
-4. Use the existing `--green-pos` and `--red-neg` tokens for finite results.
-5. Keep the explanatory sentence in `--text-secondary` and visually quieter
-   than the result.
-6. Let the row wrap or stack deliberately on narrow screens. It must not cause
-   horizontal page overflow.
-7. Use plain sentence case. Do not expose `TWR` as unexplained jargon in the
-   visible interface.
+Add a `Sell` action to each eligible ticker summary row on `/ledger`. Clicking
+it prepares the existing transaction form to sell the complete positive
+position at the latest available native-market price on the user's local date.
+The user can change every prepared value before pressing `Log`.
 
 ## Locked Product Decisions
 
-1. The portfolio header keeps its current `Today` and `Total` pills.
-2. The ledger keeps `Day Gain` and `Day %`; this feature does not alter ledger
-   columns, group math, sorting, or the 11-column contract.
-3. The displayed result is always `twrr_pct` from
-   `GET /api/portfolio/history`, not a first-to-last value delta.
-4. The result remains TWR in both Value and Performance chart modes. Changing
-   chart mode must not change the period result or its wording.
-5. The readout describes the portfolio only. Comparison overlays do not alter
-   it, average into it, or replace it.
-6. `1D` is labeled `1D return`, not `Today`, because its chart span is not the
-   live quote's previous-close span.
-7. `MAX` means the available portfolio chart history, which starts at the
-   earliest logged transaction under the existing backend contract.
-8. Finite values show an explicit sign and two decimal places:
-   `+2.14%`, `-2.14%`, and `+0.00%`.
-9. Zero uses the positive color, matching existing gain/change presentation.
-10. Null, missing, non-finite, empty, or otherwise non-computable results show
-    `Return unavailable`, with no positive or negative class.
-11. Privacy mode leaves this percentage visible, matching the current behavior
-    of the header's percentage portions. The readout contains no dollar value.
-12. No endpoint, database, market-data, cache-TTL, or response-shape change is
-    needed. The backend already computes and tests `twrr_pct`.
+1. Put the action on ticker group rows, not transaction detail rows.
+2. Reuse the existing transaction form. Do not add a modal or second form.
+3. Fill quantity with `sum(BUY qty) - sum(SELL qty)` for the ticker.
+4. Fill price from `price_now`. This is the exact native quote even when the
+   ledger currently displays CAD-converted values.
+5. Display the price to two decimals but retain exact `price_now` through the
+   existing `autofillPrice` state. A user edit continues to override it.
+6. Fill date with the existing local-time `todayLocalISO()` helper.
+7. Set the operation to `SELL`.
+8. Never submit automatically. The user must review and press `Log`.
+9. Show the action only when net quantity is greater than the existing `1e-9`
+   flat-position tolerance and `price_now` is finite and positive.
+10. Hide it for closed, near-zero, short, SELL-only, and unquoted groups. Do
+    not show a disabled control.
+11. If a complete refresh fails while old rows remain, remove rendered Sell
+    actions when live cells are marked unavailable. Do not offer a quote that
+    the page has just identified as stale.
+12. A per-symbol quote failure hides the action only for that ticker.
+13. Share the existing actions cell with bulk delete. Do not change columns.
+14. Keep the action available on touch through the existing action visibility
+    rule and on pointer devices through row hover and keyboard focus.
+15. Preserve fractional quantity exactly; do not round it before form fill.
+16. Keep the existing POST route as the authority for validation, currency,
+    historical FX, persistence, and errors.
 
 ## Existing Contracts To Preserve
 
-1. `PERIOD_MAP` remains the only timeframe source.
-2. `/api/portfolio/history` retains
-   `{labels, values, costs, index_values, twrr_pct}` plus optional benchmarks.
-3. `index_values` may be null or shorter than labels. `twrr_pct` is null exactly
-   when the backend cannot compute it.
-4. Value mode continues to plot `values`; Performance mode continues to plot
-   `index_values`.
-5. Dashboard comparisons remain visible only in Performance mode.
-6. Stock-detail chart behavior remains unchanged. Its existing
-   `onPeriodData` callback continues to calculate one stock's first-to-last
-   price return.
-7. A silent chart prefetch warms the cache without painting any visible state.
-8. Only the latest visible request can paint after A -> B or A -> B -> A races.
-9. The active timeframe button describes data that successfully reached the
-   canvas. A failed later request leaves the old chart and old button intact.
-10. Frontend cache keys continue to include the period and ordered comparison
-    list.
-11. Reconnect and foreground recovery continue to retry `requestedPeriod`.
-12. Chart mode swaps continue to repaint from `lastReply` without fetching.
-13. Backend raw floats remain unformatted; all percentage formatting stays in
-    frontend code.
-14. Privacy state remains the localStorage string under `hidePortfolio`, with
-    `data-hidden` as the painter source of truth.
-15. The comparison readout under the chart remains unchanged.
+1. The ledger keeps exactly 11 columns. Template headers,
+   `setLedgerMessage.colSpan`, `buildGroupRow`, and `buildTxRow` stay aligned.
+2. The actions column stays pinned last and cannot be dragged.
+3. Group clicks still expand rows, except clicks from links or
+   `.tx-action-btn` controls.
+4. Group delete-all and detail edit/delete actions remain unchanged.
+5. `groupSortKeys()` remains the frontend source for exact net quantity.
+6. Closed-position visibility remains controlled by `showClosedPositions`.
+7. Shorts remain visible active positions but receive no Sell action.
+8. The ledger currency toggle must not convert the prepared native price.
+9. Backend floats remain raw; display formatting stays in JavaScript.
+10. Programmatic prices retain exact precision through `autofillPrice`, with
+    `priceEdited = false`; a user edit sets it true and wins at submit.
+11. Quick Sell exits edit mode first, enabling the ticker and ensuring POST is
+    used instead of PUT.
+12. Successful POST behavior remains: expand ticker, reset form, refresh data.
+13. Privacy mode may mask displayed quantity but cannot alter the exact value
+    used for form preparation.
+14. Polling continues through `setupAutoRefresh`; add no interval.
+15. No database, route, response-shape, market-data, Android, dependency, or
+    deployment change is needed.
 
 ## Files
 
-Planned production changes:
+Production:
 
-- `templates/index.html`
-- `static/js/common.js`
-- `static/js/main.js`
-- `static/style.css`
+- `static/js/ledger.js`
+- `static/style.css` only if a minimal Sell-specific focus, hover, or spacing
+  rule is necessary
 
-Planned tests:
+Tests:
 
-- add `tests/test_period_return_ui.py`
-- update another focused test only if an existing helper contract makes that
-  more precise than duplicating it
+- add `tests/test_ledger_quick_sell.py`
+- update an existing ledger CSS test only if it is the precise home for a
+  touch-visibility assertion
 
-Planning/status files:
+Planning:
 
 - `feature.md`
 - `roadmap.md`
 
-No changes are planned for `app.py`, `market_data.py`, `db.py`, ledger files,
-stock-detail files, Android files, dependencies, or deployment files.
+No template, Python, database, Android, dependency, or deployment edit is
+planned.
 
 ## Test-First Plan
 
-Create `tests/test_period_return_ui.py` before production edits. Follow the
-repository's existing source/meta-test style because pytest does not execute a
-browser JavaScript runtime. Read rendered HTML through the Flask `client` when
-the test concerns server output; read source files only for JS/CSS contracts.
+Create `tests/test_ledger_quick_sell.py` before production edits. Pytest does
+not run browser JavaScript, so use focused source/meta-tests in the repository's
+existing style. Do not lock unrelated comments or broad file layout.
 
-### A. Template Structure And Copy
+### A. Eligibility And Construction
 
-1. Request `/` and assert a period-return container exists.
-2. Assert the container includes stable JS hooks for:
-   - the changing period label; and
-   - the changing return value.
-3. Assert the readout appears before `.chart-box` / `#portfolioChart` in the
-   dashboard chart card.
-4. Assert the visible explanatory copy is exactly
-   `Deposits and withdrawals excluded`.
-5. Assert the container has `aria-live="polite"` so an asynchronously loaded
-   period is announced without interrupting the user.
-6. Assert the readout is dashboard-only and does not appear on `/stock/AAPL` or
-   `/ledger`.
-7. Assert no extra dashboard hero pill is added and the existing
-   `portfolio-day-change` and `portfolio-total-return` hooks remain present.
+1. Assert `buildGroupRow()` reuses `groupSortKeys(txs).netQty` for displayed
+   quantity and Sell eligibility.
+2. Assert one Sell button is created in the existing group actions cell.
+3. Assert it has `.tx-action-btn`, a stable `.ticker-sell-btn` hook, and a
+   button type that cannot submit any surrounding form accidentally.
+4. Assert it stores the canonical ticker in `data-ticker`; quantity and price
+   must not be serialized from rounded DOM text.
+5. Assert it is ordered before destructive delete-all.
+6. Assert eligibility requires `netQty > 1e-9`.
+7. Assert eligibility requires finite, positive `txs[0].price_now`.
+8. Assert exactly one action is produced for a multi-transaction group.
+9. Assert no action for zero, `1e-9`, smaller positive residue, negative,
+   SELL-only, missing-price, null-price, NaN, infinite-price, or non-positive
+   price cases.
+10. Assert eligibility is independent of group value, `price_display`, display
+    currency, privacy state, and expansion state.
 
-### B. Shared Chart Callback Wiring
+### B. Form Preparation
 
-Add a new optional callback to `setupTimeframeChart`; use a distinct name such
-as `onPeriodSummary`. Do not overload or change the stock page's existing
-`onPeriodData` semantics.
+Add a focused helper such as `prepareFullSale(ticker, txs)` and assert:
 
-Tests must lock these behaviors:
+1. It defensively rechecks exact net quantity and exact live price at click.
+2. It returns without changing the form if either is no longer eligible.
+3. It calls `exitEditMode()` before filling to clear an old edit target,
+   re-enable ticker, restore `Log`, hide edit state, and clear old errors.
+4. It fills ticker from the group identity.
+5. It fills unrounded net quantity from transaction facts, not cell text.
+6. It fills date with `todayLocalISO()` rather than UTC ISO conversion.
+7. It selects `SELL`.
+8. It assigns exact live price to `autofillPrice`.
+9. It sets `priceEdited = false`.
+10. It displays `price.toFixed(2)` without changing exact backing precision.
+11. It scrolls the existing form into view with smooth/nearest behavior.
+12. It does not call `requestSubmit`, dispatch submit, call `fetch`, show a
+    confirmation, or directly invoke POST.
 
-1. The factory destructures the optional callback.
-2. A successful visible `paint(data, period)` calls it with:
-   - the exact period that is being painted; and
-   - `data.twrr_pct` only when it is finite, otherwise `null`.
-3. The callback is reached from `paint`, after stale-request guards and before
-   or with the successful visible state update. It must never run directly from
-   a timeframe click.
-4. Silent prefetches return before `paint`, so they cannot update the readout.
-5. Stale visible responses return before `paint`, so they cannot update it.
-6. A successful response with empty labels or null `twrr_pct` still calls the
-   summary callback with `null`; unavailable is a valid painted state, not a
-   reason to preserve a stale number.
-7. A mode-only repaint from `lastReply` can call the callback again with the
-   same period/result; it must not derive a different value from the active
-   mode.
-8. A comparison reload can call the callback from its matching response, but it
-   still passes only the portfolio's `data.twrr_pct`.
-9. The existing `onPeriodData` callback and its finite primary endpoint payload
-   remain intact for the stock page.
+### C. Delegated Click Wiring
 
-### C. Failure And Recovery State
+1. Assert the existing delegated actions listener recognizes
+   `.ticker-sell-btn` before delete branches.
+2. Assert it reads the ticker and filters the current `lastTransactions` rows
+   for that ticker.
+3. Assert it sends cached rows to the preparation helper and returns.
+4. Assert the group expansion listener continues to ignore it through the
+   shared `.tx-action-btn` guard.
+5. Assert no formatted table cells are scraped.
 
-The initial request and later-request cases must differ:
+### D. Failed Refresh Safety
 
-1. Track whether any reply has painted by using the existing `lastReply` state;
-   do not create a second competing source of chart readiness.
-2. If the initial visible request fails while `lastReply` is null, call the new
-   summary callback with the requested period and `null`. This replaces an
-   endless loading appearance with `Return unavailable`.
-3. If a later visible request fails after a prior reply painted, do not call the
-   summary callback. Preserve the existing readout because the old chart and
-   active button are also preserved.
-4. A later reconnect, foreground recovery, or successful retry paints and
-   replaces the unavailable state through the normal callback.
-5. Silent prefetch failure must never affect the visible readout, including on
-   first load.
-6. Add source-order assertions that make the initial-failure callback subject
-   to the same visible request generation guard. An old failed request must not
-   overwrite a newer successful result with unavailable.
+1. Assert `markLedgerUnavailable()` removes rendered `.ticker-sell-btn`
+   controls on a complete refresh failure.
+2. Assert live cells still become `—` and lose sign classes.
+3. Assert edit, detail delete, and bulk delete controls remain.
+4. Assert later successful rendering recreates eligible actions naturally.
+5. Assert per-symbol missing `price_now` suppresses only that ticker's action.
+6. Do not clear a form already prepared before a later poll fails; copied
+   values are now editable user input awaiting review.
 
-### D. Dashboard Painter
+### E. Precision And Submission Regression
 
-Tests must lock a small dashboard-only painter in `static/js/main.js`:
+1. Keep all `tests/test_price_autofill.py` precision contracts green.
+2. Assert untouched Quick Sell uses exact `autofillPrice` at submit.
+3. Assert a manually edited prepared price uses the typed number.
+4. Assert fractional quantity flows through existing `Number(fields.qty)`.
+5. Assert prepared type flows through existing FormData as `SELL`.
+6. Assert no second submit implementation is introduced.
 
-1. The dashboard passes the new callback to `setupTimeframeChart`.
-2. The period label is rendered as `${period} return` without special-casing
-   `1D` to `Today`.
-3. A finite positive value renders `+N.NN%` and adds `pos` while removing
-   `neg`.
-4. A finite negative value renders `-N.NN%` and adds `neg` while removing
-   `pos`.
-5. Zero renders `+0.00%` and uses `pos`.
-6. Null and non-finite values render `Return unavailable` and remove both sign
-   classes.
-7. The painter does not calculate `(lastValue - firstValue) / firstValue`.
-8. The painter does not inspect chart mode, benchmark datasets, costs, summary
-   data, or live quote data.
-9. The period return elements are not added to the privacy geometry-lock target
-   list and are not replaced with `****`.
-10. The summary poll does not own or overwrite the period return.
+### F. Layout And Accessibility
 
-### E. Styling And Responsive Behavior
+1. Assert visible text or accessible labeling clearly identifies Sell and the
+   ticker where appropriate.
+2. Assert it shares the actions cell rather than adding a column.
+3. Assert shared action controls remain visible under `@media (hover: none)`.
+4. If CSS is needed, assert existing tokens, visible keyboard focus, and no
+   destructive red treatment for the non-destructive preparation action.
+5. Assert no fixed viewport width, overflow workaround, or breakpoint is added.
+6. Keep all 11-column tests unchanged and green.
 
-Tests must assert focused CSS contracts without over-locking exact decoration:
+### G. Regression Scope
 
-1. The readout selector exists and uses a simple flex or grid layout.
-2. The result uses `font-variant-numeric: tabular-nums`.
-3. Positive and negative states use `var(--green-pos)` and
-   `var(--red-neg)`.
-4. The explanatory text uses `var(--text-secondary)`.
-5. The base readout does not add a background, border, box-shadow, or pill-like
-   radius.
-6. A `@media (max-width: 600px)` rule gives the readout a deliberate narrow
-   layout that can stack or wrap without fixed viewport widths.
-7. The mobile rule does not use `100vw` or hidden overflow as a workaround.
-8. Existing comparison-readout and chart-control mobile rules remain intact.
-
-### F. Existing Backend Coverage
-
-Do not duplicate the complete TWR calculation suite. Confirm that the existing
-`tests/test_twrr.py` coverage remains green for:
-
-- empty and fewer-than-two-bar histories;
-- deposits and withdrawals;
-- buys and sells on bars;
-- null/unpriceable cases;
-- truncation at non-positive bases;
-- pending flow timing; and
-- finite positive, negative, and zero returns.
-
-Add backend tests only if implementation reveals an untested API contract. A
-frontend-only readout must not trigger speculative backend refactoring.
+Run existing coverage for grouping/net quantity, column count, price autofill,
+ledger page and mobile CSS, transaction POST, privacy, closed-position display,
+sorting, column ordering, refresh, and recovery. Add backend tests only if an
+uncovered backend contract is discovered; no backend change is expected.
 
 ## Implementation Plan
 
-Implementation starts only after the tests above fail for the intended missing
+Implementation begins only after the tests above fail for the intended missing
 behavior.
 
-### 1. Add The Dashboard Markup
+### 1. Add The Group Action
 
-In `templates/index.html`:
+1. In `buildGroupRow(ticker, txs)`, reuse its existing `netQty` value.
+2. Read native `price_now` from the group's first transaction.
+3. Calculate eligibility from tolerance and finite positive price.
+4. For eligible groups, create one text button labeled `Sell` with shared and
+   dedicated classes, `data-ticker`, and a concise accessible title.
+5. Append it before `deleteTickerBtn` in `actionsCell`.
+6. Leave ineligible actions absent.
+7. Do not change the `cells` map, column ordering, or row data.
 
-1. Inside `.chart-card`, insert the readout immediately before `.chart-box`.
-2. Use one semantic container with `aria-live="polite"`.
-3. Add a label span with a stable id, initially describing the default period
-   as `5D return`.
-4. Add an empty value span with a stable id. The browser painter owns its
-   content; do not ship a mock return.
-5. Add the fixed explanatory sentence in a secondary text element.
-6. Keep the canvas, comparison readout, mode tray, timeframe tray, and compare
-   picker in their current relative order.
+### 2. Prepare The Existing Form
 
-### 2. Extend The Shared Chart Factory
+1. Add one helper near `enterEditMode()` and `exitEditMode()`.
+2. Recheck eligibility from passed cached transaction rows.
+3. Call `exitEditMode()` first.
+4. Fill ticker, exact quantity, local date, and `SELL`.
+5. Back the two-decimal price display with exact `autofillPrice` and clear
+   `priceEdited`.
+6. Scroll the form into view.
+7. Do not submit, fetch, confirm, or refresh.
 
-In `static/js/common.js`:
+### 3. Wire The Action
 
-1. Add optional `onPeriodSummary` to the `setupTimeframeChart` options.
-2. Keep `onPeriodData` unchanged for stock-detail consumers.
-3. In `paint(data, period)`, normalize the summary value with
-   `Number.isFinite(data.twrr_pct) ? data.twrr_pct : null`.
-4. Invoke `onPeriodSummary({period, returnPct})` for every successful visible
-   paint, including a valid unavailable result.
-5. Do not derive this callback from `plotValues`; `index_values` can truncate,
-   and the backend's `twrr_pct` is the authority for the same covered span.
-6. Ensure silent prefetch and stale-generation exits remain before `paint`.
-7. In `refresh`'s catch path, report `{period, returnPct: null}` only when:
-   - the request is visible;
-   - it is still the latest visible generation; and
-   - `lastReply` is null.
-8. Preserve an existing readout after a later failure, matching the preserved
-   chart and selected timeframe button.
-9. Do not change cache policy, request URLs, generation counters, button sync,
-   recovery listeners, or returned chart-handle methods.
+1. In the delegated action listener, detect `.ticker-sell-btn` before delete.
+2. Filter `lastTransactions` by its ticker.
+3. Call the preparation helper and return immediately.
+4. Preserve edit and both delete branches exactly.
 
-### 3. Add The Dashboard Painter
+### 4. Remove Stale Actions
 
-In `static/js/main.js`:
+1. Extend `markLedgerUnavailable()` to remove only Quick Sell buttons.
+2. Keep current live-cell degradation intact.
+3. Let the next successful `renderLedger()` recreate valid controls.
 
-1. Query the two new element ids once near the dashboard chart setup.
-2. Define a small painter that accepts `{period, returnPct}`.
-3. Always update the label to `${period} return` for the state being painted.
-4. For a finite value:
-   - use `toFixed(2)`;
-   - prepend `+` when the value is zero or positive;
-   - append `%`;
-   - apply exactly one of `pos` or `neg`.
-5. For an unavailable value:
-   - render `Return unavailable`;
-   - remove both sign classes.
-6. Pass the painter as `onPeriodSummary` in the dashboard's existing
-   `setupTimeframeChart` call.
-7. Do not add the readout to `lastPortfolioPaint`, `applyPortfolioPrivacy`,
-   `clearPortfolioGeometryLocks`, or `refreshPortfolioSummary`.
+### 5. Use Minimal Styling
 
-### 4. Style The Readout
+Prefer existing `.tx-action-btn` styles. Add CSS only if browser inspection
+shows a spacing or focus defect. If needed, reuse tokens, retain hover/touch
+visibility, keep focus visible, avoid destructive red, and do not alter table
+or mobile-card geometry.
 
-In `static/style.css`:
+### 6. Comments
 
-1. Add a compact top-of-card readout style before the chart canvas rules.
-2. Align the period label and result on a clear shared baseline.
-3. Give the result modest emphasis rather than hero-size typography.
-4. Put the explanation on a quiet secondary line.
-5. Reuse the existing sign-color tokens and tabular-number convention.
-6. Add a narrow-screen rule in the established final mobile section so the
-   label/result and explanation fit without clipping.
-7. Do not move or redesign the Value/Performance and timeframe controls.
+Document only non-obvious rules: `price_now` remains native in CAD display,
+exact precision backs the rounded field, eligibility requires positive owned
+quantity plus a quote, and failed refreshes invalidate unclicked actions.
 
-### 5. Keep Documentation Accurate
+## Verification
 
-Code comments must explain only non-obvious contracts:
-
-- why TWR is used instead of first-to-last portfolio value;
-- why initial failure becomes unavailable but later failure preserves the old
-  result; and
-- why `1D return` is not called `Today`.
-
-Do not add comments that restate assignments or CSS declarations.
-
-## Focused Verification
-
-Run these commands after implementation:
+Run focused tests:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_period_return_ui.py
-python -m pytest tests/test_chart_refresh.py tests/test_chart_recovery.py tests/test_compare_ui.py
-python -m pytest tests/test_twrr.py tests/test_privacy_toggles.py tests/test_ui_revamp.py
+python -m pytest tests/test_ledger_quick_sell.py
+python -m pytest tests/test_price_autofill.py tests/test_ledger_groups.py tests/test_ledger_col_count.py
+python -m pytest tests/test_ledger_page.py tests/test_ledger_css.py tests/test_privacy_toggles.py
+python -m pytest tests/test_routes.py
 ```
 
-Resolve every failure without weakening unrelated contracts.
-
-## Full Verification
-
-The lead agent must run:
+Then the lead agent runs:
 
 ```bash
 source .venv/bin/activate
@@ -386,49 +270,43 @@ No implementation is complete until the full suite passes.
 
 ## Browser GUI Approval Checklist
 
-After pytest passes, stop and ask the user to inspect the browser. Do not commit
-or push before this approval.
+After pytest passes, stop for user inspection before any commit or push.
 
-The browser check must cover:
-
-1. Desktop light mode: the readout is above the chart and visually quiet.
-2. Desktop dark mode: text and green/red results have clear contrast.
-3. Mobile width: no horizontal page overflow, clipped copy, or collision with
-   the chart.
-4. Default load: `5D return` matches the default 5D chart.
-5. Every timeframe: label and return update together after the chart loads.
-6. Rapid 1M -> 1Y -> 1M clicks: only the final successfully painted chart and
-   return are shown.
-7. Value/Performance switching: return stays the same while the line mode
-   changes.
-8. Add/remove comparison overlays: the portfolio return stays correct and the
-   existing comparison readout remains usable.
-9. Privacy on/off: the period percentage remains visible and no hero layout
-   shift is introduced.
-10. Empty or non-computable portfolio history: `Return unavailable` appears
-    without green/red styling.
-11. Temporary failed period request after a valid chart: the prior chart,
-    selected button, and readout remain paired.
-12. Reconnect or return from a hidden tab: a successful retry updates the
-    readout with the recovered chart.
+1. Desktop light and dark modes: Sell and delete fit without crowding.
+2. Pointer and keyboard: Sell reveals/focuses and does not expand the group.
+3. Mobile/touch: Sell is visible without hover and causes no overflow.
+4. Positive and partially sold holdings: full remaining quantity is filled.
+5. Fractional holding: precise complete quantity is filled.
+6. Ticker, current native price, local date, and SELL are all filled.
+7. Price shows two decimals; untouched submission stores exact quote precision.
+8. User changes to price or quantity are honored.
+9. Clicking Sell during edit mode prepares a new POST, not a PUT correction.
+10. Closed, near-zero, short, SELL-only, and unquoted groups show no Sell.
+11. CAD/native toggle does not change the prepared native price.
+12. Privacy mode still prepares actual quantity despite masking its display.
+13. Successful sale refreshes normally and respects closed-position settings.
+14. Complete refresh failure removes unclicked Sell actions; recovery restores
+    eligible actions.
+15. Existing bulk delete, detail actions, sorting, dragging, expansion, and
+    polling remain functional.
 
 ## Completion Gates
 
-1. Detailed plan written and roadmap item pulled: this document.
+1. Detailed plan and roadmap item #18 `in progress`: complete after this edit.
 2. User approves this plan before implementation.
-3. Failing tests are written first.
-4. Production code is implemented.
-5. Focused tests pass.
-6. Full `python -m pytest` passes.
-7. User approves the browser GUI.
+3. Write failing tests first.
+4. Implement production code.
+5. Pass focused tests.
+6. Pass full `python -m pytest`.
+7. Obtain browser GUI approval.
 8. Only then ask whether to commit and push.
-9. Mark roadmap item #9 shipped only in the approved commit, with the required
-   date and PR number or direct-main date.
+9. Mark #18 shipped only in the approved commit, with PR number and date or a
+   direct-main date.
 
 ## Definition Of Done
 
-The feature is complete when the dashboard keeps its stable live summary,
-shows an honest cash-flow-neutral return for the successfully displayed chart
-period, preserves request-order correctness and graceful failure behavior,
-fits desktop and mobile in both themes, passes the full test suite, and has the
-user's browser approval.
+Every positively held and currently quoted ticker has one safe Quick Sell
+action that prepares, but never submits, an exact full-position SELL in the
+existing form. Closed, short, unavailable, and stale positions cannot offer the
+action. Precision, ledger layout, mobile, accessibility, and existing actions
+remain correct; all tests pass; and the user approves browser behavior.

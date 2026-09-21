@@ -62,6 +62,21 @@ authenticate or secure the Flask server.
 
 ---
 
+### 18. Ledger Quick Sell
+Add a Sell action to each positively held, currently quoted ticker group in the
+ledger. It prepares the existing transaction form with the ticker, complete net
+quantity, exact current native price, local date, and SELL operation. The user
+reviews and logs the transaction; the action never submits automatically. Hide
+it for closed, short, and unquoted groups, and remove it when a failed refresh
+makes the displayed quote stale.
+
+**Effort:** 1 day
+**Files:** `static/js/ledger.js`, `static/style.css` if needed, `tests/test_ledger_quick_sell.py`
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 6. Dividend Tracking
@@ -188,7 +203,8 @@ Tier 1 (all independent):
   3. Transaction Fees ─────────────────┤── can be done in any order
   4. Sector Breakdown ─────────────────┤
   5. Cash Balance ─────────────────────┤
-  16. Android Biometric/PIN Lock ──────┘
+  16. Android Biometric/PIN Lock ────────┤
+  18. Ledger Quick Sell ─────────────────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -218,6 +234,7 @@ For maximum compounding value:
 2. **Average Cost** → displays the now-real cost basis
 3. **CSV Export** → makes data portable
 16. **Android Biometric/PIN Lock** → protects financial information on the phone
+18. **Ledger Quick Sell** → prepares an exact full-position sale for review from the ledger row
 4. **Sector Breakdown** → deeper allocation insight
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app
