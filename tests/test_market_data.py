@@ -25,6 +25,8 @@
 #   - the error GUARD (incomplete data → named ValueError)
 #   - get_history's label formatting (dates for daily bars, times for 1D)
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pandas as pd
@@ -171,6 +173,212 @@ def test_quote_cache_returns_defensive_copies(fake_yf):
     second = market_data.get_quote("AAPL")
     assert second["price"] == 150.0
     assert fake_yf.calls == ["AAPL"]
+
+
+# ── Concurrency: one in-flight request per symbol ──────────────────────
+#
+# A cold dashboard starts summary + allocation + watchlist requests at the
+# same time. Without coordination every route can miss the same cache entry
+# and call Yahoo for the same symbol independently. These tests lock the
+# fix: concurrent missers share ONE network fetch, different symbols still
+# fetch concurrently, and a failed fetch wakes every waiter and stays
+# retryable.
+
+def test_concurrent_quote_cache_misses_share_one_yahoo_request(monkeypatch):
+    calls = []
+    entered = []                     # one entry per thread inside .fast_info
+    gate = threading.Event()
+    state = {
+        "fast_info": {"lastPrice": 150.0, "previousClose": 145.0,
+                      "currency": "USD"},
+    }
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)     # one entry per Yahoo fetch
+
+        @property
+        def fast_info(self):
+            entered.append(self.symbol)
+            # Hold the "network" open so threads cannot complete before the
+            # test proves how many reached it. A genuine cache miss shares
+            # ONE fetch; a naive implementation fires one per caller.
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            return dict(state["fast_info"])
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    def fetch():
+        answers.append(market_data.get_quote("AAPL"))
+
+    answers = []
+    threads = [threading.Thread(target=fetch) for _ in range(4)]
+    for t in threads:
+        t.start()
+    # Wait until the first caller is inside the fake network operation, then
+    # give every other caller time to reach it too — the gate keeps the
+    # cache cold, so a straggler can only arrive at a second fetch, not a
+    # cache hit.
+    deadline = time.monotonic() + 5
+    while not entered and time.monotonic() < deadline:
+        time.sleep(0.005)
+    time.sleep(0.3)
+    gate.set()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "concurrent callers hung — the in-flight coordination deadlocked"
+
+    assert calls == ["AAPL"], \
+        f"concurrent missers must share ONE Yahoo fetch, got {calls}"
+    assert len(answers) == 4
+    for quote in answers:
+        assert quote == answers[0]
+        assert quote["price"] == 150.0
+    assert len({id(a) for a in answers}) == 4, \
+        "each caller must receive its own defensive dict"
+
+
+def test_different_quote_symbols_can_fetch_concurrently(monkeypatch):
+    barrier = threading.Barrier(2, timeout=5)
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        @property
+        def fast_info(self):
+            # Both symbols must be inside their network fetch AT THE SAME
+            # TIME — a single global lock during Yahoo work would deadlock
+            # this barrier into a BrokenBarrierError (test failure).
+            barrier.wait()
+            return {"lastPrice": 150.0, "previousClose": 145.0,
+                    "currency": "USD"}
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    errors = []
+    results = {}
+
+    def fetch(symbol):
+        try:
+            results[symbol] = market_data.get_quote(symbol)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=fetch, args=("AAPL",)),
+        threading.Thread(target=fetch, args=("MSFT",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "different symbols must not serialize behind one lock"
+    assert errors == []
+    assert results["AAPL"]["symbol"] == "AAPL"
+    assert results["MSFT"]["symbol"] == "MSFT"
+
+
+def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
+        monkeypatch):
+    calls = []
+    gate = threading.Event()
+    fail = True
+    state = {
+        "fast_info": {"lastPrice": 150.0, "previousClose": 145.0,
+                      "currency": "USD"},
+    }
+    errors = []
+    error_lock = threading.Lock()
+    # All threads cross the same start gate right before calling get_quote,
+    # so the four callers begin their lock-section race together; the main
+    # thread waits for the owner's in-flight slot below, then a short
+    # settle absorbs the join window for the remaining three waiters.
+    arrivals = 0
+    arrival_lock = threading.Lock()
+    start = threading.Barrier(4, timeout=10)
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)
+
+        @property
+        def fast_info(self):
+            # Hold the fetch open so every caller either joins the shared
+            # future (fixed) or reaches its own fetch (naive) BEFORE the
+            # first one raises — otherwise threads would serialize and the
+            # test would never measure sharing.
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            if fail:
+                raise RuntimeError("Yahoo is down")
+            return dict(state["fast_info"])
+
+    class FakeYf:
+        Ticker = FakeTicker
+
+    monkeypatch.setattr(market_data, "yf", FakeYf)
+
+    def fetch():
+        nonlocal arrivals
+        with arrival_lock:
+            arrivals += 1
+        try:
+            start.wait()
+            market_data.get_quote("AAPL")
+        except Exception as exc:  # noqa: BLE001 — every failure is collected
+            with error_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=fetch) for _ in range(4)]
+    for t in threads:
+        t.start()
+    # Wait until ALL four callers are about to run get_quote, then for the
+    # owner's in-flight slot to be registered (it is, before the network
+    # call). Opening the gate any later would let a straggler become a
+    # SECOND owner after the first failure cleared its slot — the exact
+    # duplicate-fetch race this whole PR removes.
+    deadline = time.monotonic() + 5
+    while arrivals < 4 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert arrivals == 4, "all four callers must reach the start gate"
+    deadline = time.monotonic() + 5
+    while market_data._inflight_quotes.get("AAPL") is None \
+            and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert market_data._inflight_quotes.get("AAPL") is not None, \
+        "the owner must register its in-flight slot before the network call"
+    time.sleep(0.3)
+    gate.set()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads), \
+        "concurrent callers hung on a shared failure"
+    assert len(errors) == 4, "every waiter must receive the owner's failure"
+    for exc in errors:
+        assert isinstance(exc, RuntimeError)
+    assert "AAPL" not in market_data._cache, \
+        "a failed fetch must not be cached"
+    assert "AAPL" not in market_data._inflight_quotes, \
+        "a completed failure must not leave a stale in-flight entry"
+
+    # Round 2: Yahoo recovers — the next call starts a fresh fetch.
+    fail = False
+    quote = market_data.get_quote("AAPL")
+    assert quote["price"] == 150.0
+    assert calls == ["AAPL", "AAPL"], \
+        f"one failed round + one retry = two fetches, got {calls}"
 
 
 # ── get_name: permanent cache ─────────────────────────────────────────

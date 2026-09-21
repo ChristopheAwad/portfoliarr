@@ -872,6 +872,18 @@ a.logo { text-decoration: none; }
     position: relative;
 }
 
+/* The donut canvas must fill its parent box. Chart.js reads the parent's
+   size to pick its own canvas box (responsive + maintainAspectRatio:false
+   makes it hug whatever dimensions it inherits) — a plain <canvas> is an
+   inline element by default and would sit at a tiny intrinsic size, and
+   the box starts hidden then becomes visible on first data, so the size
+   must come from CSS, not from whatever layout pass ran while hidden. */
+.donut-box > canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+}
+
 /* Allocation carousel controls — the prev/next arrows and dimension
    label inside the donut card header. The label is centred between
    the two arrow buttons so the whole row sits neatly under the

@@ -544,112 +544,128 @@ if (hidePortfolioToggle) {
 }
 
 // One summary refresh cycle: GET -> paint the three spans.
+// SINGLE-FLIGHT: the boot call, the privacy-unmask call, and the 60s poll
+// can all fire within one slow round-trip. Duplicate concurrent fetches
+// would each hammer Yahoo AND race each other's paints. The first call
+// owns the cycle; everyone behind it shares that one reply — a single
+// response paints the same header, so joining costs nothing. The slot
+// empties when the cycle settles so the NEXT cycle fetches fresh.
+let summaryInflight = null;
+
 async function refreshPortfolioSummary() {
-    try {
-        const response = await fetch("/api/portfolio/summary");
-        // fetch does NOT throw on 4xx/5xx — only on network failure.
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
+    // Join the in-flight cycle instead of starting a duplicate request.
+    if (summaryInflight) return summaryInflight;
+    summaryInflight = (async () => {
+        try {
+            const response = await fetch("/api/portfolio/summary");
+            // fetch does NOT throw on 4xx/5xx — only on network failure.
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
 
-        // Privacy guard: when masked, skip painting dollar-only spans
-        // (portfolio value and cost basis) but still paint the change
-        // pills so percentages stay fresh during the refresh cycle.
-        const masked = portfolioMasked();
+            // Privacy guard: when masked, skip painting dollar-only spans
+            // (portfolio value and cost basis) but still paint the change
+            // pills so percentages stay fresh during the refresh cycle.
+            const masked = portfolioMasked();
 
-        // "unpriced" lists the tickers the backend couldn't quote this
-        // cycle. They were excluded from EVERY sum, so if the sums are
-        // all zero WHILE that list is non-empty, nothing priced is
-        // contributing — degrade the whole header instead of showing a
-        // hollow "0.00" that would imply worthless holdings.
-        const nothingPriced = data.unpriced.length > 0 &&
-            data.total_value === 0 &&
-            data.day_gain === 0 &&
-            data.total_gain === 0;
-        if (nothingPriced) {
-            // While masked, keep the existing mask — don't overwrite with
-            // error text that would break the privacy look.
+            // "unpriced" lists the tickers the backend couldn't quote this
+            // cycle. They were excluded from EVERY sum, so if the sums are
+            // all zero WHILE that list is non-empty, nothing priced is
+            // contributing — degrade the whole header instead of showing a
+            // hollow "0.00" that would imply worthless holdings.
+            const nothingPriced = data.unpriced.length > 0 &&
+                data.total_value === 0 &&
+                data.day_gain === 0 &&
+                data.total_gain === 0;
+            if (nothingPriced) {
+                // While masked, keep the existing mask — don't overwrite with
+                // error text that would break the privacy look.
+                if (!masked) {
+                    setPortfolioUnavailable(
+                        `Couldn't price: ${data.unpriced.join(", ")}`
+                    );
+                }
+                return;
+            }
+
+            // Partial case: paint the priced totals, but say on hover which
+            // tickers are missing. title="" wipes a stale tooltip from an
+            // earlier cycle — the hover text must always match THIS payload.
+            // While masked, skip the title to avoid leaking which tickers
+            // couldn't be priced over the privacy **** mask.
             if (!masked) {
-                setPortfolioUnavailable(
-                    `Couldn't price: ${data.unpriced.join(", ")}`
+                portfolioValueEl.title = data.unpriced.length > 0
+                    ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
+                    : "";
+            }
+            // The summary is ALWAYS CAD (the ledger toggle never touches it)
+            // and the reply declares that — paint the code so a converted
+            // total can't be misread as native.
+            if (!masked) {
+                portfolioValueEl.textContent =
+                    `${formatNumber(data.total_value)} ${data.currency || "CAD"}`;
+            }
+            // Cache raw values so applyPortfolioPrivacy can call paintChange
+            // with hideValue=true when the toggle is activated mid-cycle.
+            if (!lastPortfolioPaint) lastPortfolioPaint = {};
+            lastPortfolioPaint.dayValue = data.day_gain;
+            lastPortfolioPaint.dayPct = data.day_gain_pct;
+            lastPortfolioPaint.totalValue = data.total_gain;
+            lastPortfolioPaint.totalPct = data.total_gain_pct;
+            paintChange(portfolioDayChangeEl, data.day_gain, data.day_gain_pct,
+                        "Today", masked);
+            paintChange(portfolioTotalReturnEl, data.total_gain,
+                        data.total_gain_pct, "Total", masked);
+            // The strip's fourth fact: what the position(s) cost. Raw float
+            // from the backend — same formatter, same CAD label as the total
+            // above (the cost basis is a CAD figure: stored per-transaction
+            // rates make it so). The caption's "Cost basis" wording lives in
+            // index.html; only the number is painted here.
+            if (!masked) {
+                portfolioCostBasisEl.textContent =
+                    `${formatNumber(data.cost_basis)} ${data.currency || "CAD"}`;
+            }
+            // Release geometry locks only when NOT masked — while masked,
+            // the locks keep the layout stable around the shorter percentage-
+            // only text. Unmasking calls this via applyPortfolioPrivacy.
+            if (!masked) {
+                clearPortfolioGeometryLocks();
+            }
+
+            // The donut eats the same reply: the holdings slice arrives
+            // already priced-only, CAD, and value-sorted — the backend's math,
+            // painted verbatim. Convert to the unified slices shape (key/value/
+            // weight) so both the ticker view and the allocation views share
+            // one paintAllocation function.
+            const tickerSlices = data.holdings.map(
+                (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
+            );
+            lastSummaryHoldings = tickerSlices;
+
+            // Paint ONLY if the ticker view is currently active — the other
+            // views have their own fetch cycle. Painting a non-active view
+            // would overwrite the chart with stale data on the next arrow flip.
+            if (allocViewIndex === 0) {
+                paintAllocation(tickerSlices, null);
+            }
+
+            // Feed yesterday's portfolio value into the chart handle so the
+            // 1D view can draw a horizontal reference line at yesterday's close.
+            if (portfolioChartHandle) {
+                portfolioChartHandle.updatePrevClose(
+                    data.total_value != null && data.day_gain != null
+                        ? data.total_value - data.day_gain
+                        : null
                 );
             }
-            return;
+        } catch (err) {
+            console.error("portfolio summary refresh failed:", err);
+            setPortfolioUnavailable();
+        } finally {
+            // Empty the slot so the next cycle starts a fresh request.
+            summaryInflight = null;
         }
-
-        // Partial case: paint the priced totals, but say on hover which
-        // tickers are missing. title="" wipes a stale tooltip from an
-        // earlier cycle — the hover text must always match THIS payload.
-        // While masked, skip the title to avoid leaking which tickers
-        // couldn't be priced over the privacy **** mask.
-        if (!masked) {
-            portfolioValueEl.title = data.unpriced.length > 0
-                ? `Excludes ${data.unpriced.join(", ")} — couldn't be priced`
-                : "";
-        }
-        // The summary is ALWAYS CAD (the ledger toggle never touches it)
-        // and the reply declares that — paint the code so a converted
-        // total can't be misread as native.
-        if (!masked) {
-            portfolioValueEl.textContent =
-                `${formatNumber(data.total_value)} ${data.currency || "CAD"}`;
-        }
-        // Cache raw values so applyPortfolioPrivacy can call paintChange
-        // with hideValue=true when the toggle is activated mid-cycle.
-        if (!lastPortfolioPaint) lastPortfolioPaint = {};
-        lastPortfolioPaint.dayValue = data.day_gain;
-        lastPortfolioPaint.dayPct = data.day_gain_pct;
-        lastPortfolioPaint.totalValue = data.total_gain;
-        lastPortfolioPaint.totalPct = data.total_gain_pct;
-        paintChange(portfolioDayChangeEl, data.day_gain, data.day_gain_pct,
-                    "Today", masked);
-        paintChange(portfolioTotalReturnEl, data.total_gain,
-                    data.total_gain_pct, "Total", masked);
-        // The strip's fourth fact: what the position(s) cost. Raw float
-        // from the backend — same formatter, same CAD label as the total
-        // above (the cost basis is a CAD figure: stored per-transaction
-        // rates make it so). The caption's "Cost basis" wording lives in
-        // index.html; only the number is painted here.
-        if (!masked) {
-            portfolioCostBasisEl.textContent =
-                `${formatNumber(data.cost_basis)} ${data.currency || "CAD"}`;
-        }
-        // Release geometry locks only when NOT masked — while masked,
-        // the locks keep the layout stable around the shorter percentage-
-        // only text. Unmasking calls this via applyPortfolioPrivacy.
-        if (!masked) {
-            clearPortfolioGeometryLocks();
-        }
-
-        // The donut eats the same reply: the holdings slice arrives
-        // already priced-only, CAD, and value-sorted — the backend's math,
-        // painted verbatim. Convert to the unified slices shape (key/value/
-        // weight) so both the ticker view and the allocation views share
-        // one paintAllocation function.
-        const tickerSlices = data.holdings.map(
-            (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
-        );
-        lastSummaryHoldings = tickerSlices;
-
-        // Paint ONLY if the ticker view is currently active — the other
-        // views have their own fetch cycle. Painting a non-active view
-        // would overwrite the chart with stale data on the next arrow flip.
-        if (allocViewIndex === 0) {
-            paintAllocation(tickerSlices, null);
-        }
-
-        // Feed yesterday's portfolio value into the chart handle so the
-        // 1D view can draw a horizontal reference line at yesterday's close.
-        if (portfolioChartHandle) {
-            portfolioChartHandle.updatePrevClose(
-                data.total_value != null && data.day_gain != null
-                    ? data.total_value - data.day_gain
-                    : null
-            );
-        }
-    } catch (err) {
-        console.error("portfolio summary refresh failed:", err);
-        setPortfolioUnavailable();
-    }
+    })();
+    return summaryInflight;
 }
 
 // ---------------------------------------------------------------------------
@@ -754,12 +770,10 @@ document.addEventListener("themechange", () => {
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
 
-// The canvas from the HTML, plus the card/box around it (found by walking
-// UP from the canvas with closest() — the donut is where the canvas is,
-// no matter how the card markup shifts).
+// The canvas from the HTML, plus the box around it (found by walking UP
+// from the canvas with closest() — the donut is where the canvas is, no
+// matter how the card markup shifts).
 const allocationCanvas = document.getElementById("allocationChart");
-const donutCardEl = allocationCanvas
-    ? allocationCanvas.closest(".donut-card") : null;
 const donutBoxEl = allocationCanvas
     ? allocationCanvas.closest(".donut-box") : null;
 
@@ -770,6 +784,7 @@ const allocLabelEl = document.getElementById("alloc-label");
 const allocExcludedEl = document.getElementById("alloc-excluded");
 const allocDotsEl = document.getElementById("alloc-dots");
 const allocPositionEl = document.getElementById("alloc-position");
+const allocStatusEl = document.getElementById("alloc-status");
 
 // The holdings/slices array the donut currently plots. The tooltip
 // callbacks need each wedge's CAD value, but Chart.js hands a tooltip
@@ -784,14 +799,13 @@ let currentHoldings = [];
 let allocationChart = null;
 let animateNextAllocationPaint = false;
 
-// The empty-state line. Created ONCE and shown/hidden by moving it in and
-// out of the card (the watchlist rebuilds its rows every cycle because the
-// rows ARE the data; here only the presence of a message toggles, so one
-// persistent element is simpler).
-const donutEmptyState = document.createElement("p");
-donutEmptyState.className = "empty-state";
-donutEmptyState.textContent =
-    "No priced holdings yet — log a buy and your allocation appears here.";
+// The last payload THIS page successfully painted, keyed by dimension
+// (null = the By Ticker view). A stale-while-revalidate cycle keeps the
+// donut from the PREVIOUS fetch on screen while the next one loads, and a
+// failed revalidation restores this payload instead of blanking the chart.
+// A payload is reusable ONLY for its own dimension — restoring a "sector"
+// donut under a "country" slide would lie about the data it shows.
+let lastAllocPayload = null;
 
 // Respect the OS "reduce motion" accessibility setting: users who opted
 // out of animation get none — Chart.js accepts `false` to disable its
@@ -809,14 +823,31 @@ function donutBorderColor() {
         .getPropertyValue("--card-bg").trim();
 }
 
-// Show exactly one of: the donut box, the empty-state line.
-function setDonutEmpty(empty) {
-    if (!donutBoxEl || !donutCardEl) return;
-    donutBoxEl.style.display = empty ? "none" : "";
-    if (empty && !donutEmptyState.parentNode) {
-        donutCardEl.append(donutEmptyState);
-    } else if (!empty && donutEmptyState.parentNode) {
-        donutEmptyState.remove();
+// Show exactly one of: the donut box, or the status line. Each state owns
+// its message; "ready" (and "stale", where the old chart still has value)
+// keep the box visible. The box ships `hidden` in the template and the
+// global [hidden] rule does the hiding — toggling the ATTRIBUTE, not
+// style.display, so a reveal also lets CSS layout measure the canvas.
+function setAllocState(state) {
+    if (!allocStatusEl || !donutBoxEl) return;
+    const messages = {
+        loading: "Loading allocation\u2026",
+        empty: "No priced holdings yet \u2014 log a buy and your allocation appears here.",
+        unavailable: "Allocation unavailable right now.",
+        stale: "Refreshing allocation with the latest prices\u2026",
+        ready: "",
+    };
+    const message = messages[state] ?? "";
+    donutBoxEl.hidden = !(state === "ready" || state === "stale");
+    allocStatusEl.textContent = message;
+    allocStatusEl.hidden = !message;
+    if (state === "ready") {
+        // The box just became visible, so the canvas's real size changed —
+        // Chart.js needs to re-measure AFTER the browser lays the new box
+        // out, or the donut renders at the tiny size it had while hidden.
+        requestAnimationFrame(() => {
+            if (allocationChart) allocationChart.resize();
+        });
     }
 }
 
@@ -866,7 +897,11 @@ try {
 // The ticker view (key null) uses the summary poll directly — no
 // cache entry needed.
 const allocCache = {};
-const allocRequestGenerations = {};
+// Per-dimension in-flight promise: {by_key: Promise}. One fetch per
+// dimension at a time — the 60s poll, the boot restore, and an arrow flip
+// can all fire within a single slow round-trip, and they all share that
+// one request. The slot empties (identity-checked) when the fetch settles.
+const allocInFlight = {};
 const ALLOC_CACHE_TTL = REFRESH_MS; // refresh alongside the poll
 
 function allocCacheStale(key) {
@@ -910,10 +945,6 @@ function isActiveAllocView(by) {
     return ALLOCATION_VIEWS[allocViewIndex].key === by;
 }
 
-function isLatestAllocRequest(by, requestGeneration) {
-    return allocRequestGenerations[by] === requestGeneration;
-}
-
 function runAllocationCrossfade() {
     const shouldAnimate = animateNextAllocationPaint && !REDUCED_MOTION;
     animateNextAllocationPaint = false;
@@ -952,33 +983,93 @@ function switchAllocView(newIndex) {
 }
 
 // Fetch one allocation dimension, painting on arrival.
+// SINGLE-FLIGHT: the 60s poll, the boot restore, and a carousel flip can
+// all fire for the same dimension within one slow round-trip — the first
+// caller owns the fetch; the rest join it (their paint arrives when its
+// reply lands). STALE-WHILE-REVALIDATE: a request that finds a stale cache
+// entry repaints that entry first (the CORRECT donut for this dimension
+// stays visible while the network refreshes it) and shows a soft
+// "refreshing" note instead of blanking to a skeleton; only a first-load
+// paints "loading".
 async function fetchAllocDimension(by) {
-    if (!allocCacheStale(by)) {
-        // Cache hit: paint instantly.
+    // Navigation guard: never paint (or queue work) for a slide the user
+    // already left — a late reply for an old view must not appear under
+    // the current label.
+    if (!isActiveAllocView(by)) return;
+
+    // Paint this dimension's last-known payload NOW when we have one
+    // (fresh, stale, or mid-revalidate): the flip must show ITS OWN donut
+    // instantly. Without this, a flip to a dimension whose cache is stale
+    // (or re-fetching) leaves the previous slide's donut on the canvas
+    // under the new label until the network answers. Honest-empties carry
+    // their own message via paintAllocation's states.
+    if (allocCache[by]) {
         const entry = allocCache[by];
-        if (isActiveAllocView(by)) {
-            paintAllocation(entry.data.slices, entry.data.excluded);
-        }
-        return;
+        paintAllocation(entry.data.slices, entry.data.excluded, by);
     }
-    const requestGeneration = (allocRequestGenerations[by] || 0) + 1;
-    allocRequestGenerations[by] = requestGeneration;
-    try {
+
+    // Single-flight: join the request already in flight for this dimension
+    // instead of starting a second one.
+    if (allocInFlight[by]) return allocInFlight[by];
+
+    // Fresh cache — just painted above, nothing to fetch this cycle.
+    if (!allocCacheStale(by)) return;
+
+    const flight = (async () => {
+        // Stale or first visit: the cache TTL mirrors the 60s poll, so
+        // every poll is a revalidate. A donut with real wedges shows a
+        // soft "refreshing" note; an honest empty keeps its empty message
+        // (the revalidate paints nothing new yet); a first load says
+        // clearly that data is on the way.
+        const cached = allocCache[by];
+        if (cached && cached.data.slices &&
+            cached.data.slices.length > 0) {
+            setAllocState("stale");
+        } else if (!cached) {
+            setAllocState("loading");
+        }
+
         const response = await fetch(
             `/api/portfolio/allocation?by=${encodeURIComponent(by)}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        if (!isLatestAllocRequest(by, requestGeneration)) return;
+        // Reply landed after the user moved on: cache it, but never paint
+        // it over the current slide — their next flip reads the cache.
         allocCache[by] = { data, fetchedAt: Date.now() };
         if (isActiveAllocView(by)) {
-            paintAllocation(data.slices, data.excluded);
+            paintAllocation(data.slices, data.excluded, by);
         }
-    } catch (err) {
-        if (!isLatestAllocRequest(by, requestGeneration)) return;
+    })().catch((err) => {
+        if (!isActiveAllocView(by)) return;
         console.error(`allocation fetch (${by}) failed:`, err);
-        if (isActiveAllocView(by)) paintAllocation([], []);
-    }
+        // The prior payload is reusable ONLY when it belongs to THIS
+        // dimension — restoring a "sector" donut under a "country" slide
+        // would lie about the data it shows.
+        const prior = lastAllocPayload && lastAllocPayload.by === by
+            ? lastAllocPayload
+            : null;
+        if (prior && prior.slices && prior.slices.length > 0) {
+            // A revalidation failed — this dimension's donut is still
+            // painted: drop the "refreshing" note and keep the chart.
+            // Failures are transient; blanking a valid donut over a blip
+            // is not a kindness, and the next poll retries anyway.
+            setAllocState("ready");
+        } else if (prior) {
+            // This dimension's last honest result was an empty portfolio —
+            // keep its message instead of pretending it broke.
+            setAllocState("empty");
+        } else {
+            // Nothing for THIS dimension was ever painted. Hide whatever
+            // other dimension's data is on the canvas and say so plainly.
+            setAllocState("unavailable");
+        }
+    }).finally(() => {
+        if (allocInFlight[by] === flight) delete allocInFlight[by];
+    });
+
+    allocInFlight[by] = flight;
+    return flight;
 }
 
 // Arrow button handlers.
@@ -1031,14 +1122,19 @@ initializeAllocCarousel();
 // endpoint's slices already match.
 // ---------------------------------------------------------------------------
 
-function paintAllocation(slices, excluded) {
+function paintAllocation(slices, excluded, by = null) {
     // No canvas (defensive — index.html ships one) or no Chart.js (the
-    // CDN script failed to load): degrade to the empty-state text rather
+    // CDN script failed to load): degrade to the unavailable state rather
     // than throwing — same spirit as the chart handle's null guard.
     if (!allocationCanvas || typeof Chart === "undefined") {
-        setDonutEmpty(true);
+        setAllocState("unavailable");
         return;
     }
+    // Remember which dimension THIS donut shows and the payload it was
+    // built from: a failed revalidation for the SAME dimension can safely
+    // keep it (lastAllocPayload.by === by), but no other dimension may be
+    // restored into its place.
+    lastAllocPayload = { by: by ?? null, slices, excluded };
     currentHoldings = slices;
     runAllocationCrossfade();
 
@@ -1064,10 +1160,10 @@ function paintAllocation(slices, excluded) {
             allocationChart.destroy();
             allocationChart = null;
         }
-        setDonutEmpty(true);
+        setAllocState("empty");
         return;
     }
-    setDonutEmpty(false);
+    setAllocState("ready");
 
     const labels = slices.map((s) => s.key ?? s.ticker);
     const weights = slices.map((s) => s.weight);

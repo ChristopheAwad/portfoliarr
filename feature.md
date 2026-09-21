@@ -1,485 +1,745 @@
-# Feature: Refine the Comparison Picker UI
-
-## Roadmap
-
-- Parent feature: Roadmap #17, Arbitrary Comparison Overlays.
-- Parent status: `shipped 2026-09-20 (PR #60)`.
-- This is a post-ship UI refinement to #17, not a new roadmap item.
-- Do not change the shipped roadmap status and do not add a new permanent ID.
+# Bug Fix: Fast and Reliable Allocation Donut Refresh
 
 ## Status
 
-IMPLEMENTED. Awaiting user browser GUI approval.
+SHIPPED 2026-09-20 (PR #62). All 673 tests pass (full `python -m pytest`);
+dashboard GUI verified by the user before the PR was opened.
 
-The six intended comparison-picker contracts failed before implementation.
-After the template, JavaScript, and CSS changes, the focused comparison and
-frontend regression groups pass. The final full suite passes (`647 passed`).
-Node is not installed in this environment, so the optional `node --check`
-commands could not run. Do not commit or push before browser approval and
-explicit user permission.
+This is a performance and reliability bug fix for the existing allocation
+donut carousel. It is not a new roadmap feature. Do not add a roadmap item or
+change any shipped roadmap status.
+
+The previous `feature.md` described comparison-picker work that shipped in
+commit `e66c805` through PR #61. This plan replaces that stale handoff.
+
+## Problem
+
+The dashboard allocation donut can stay blank for too long, load malformed, or
+appear to lose data after a browser refresh. The problem is most visible after
+the Flask process restarts, when the selected allocation view uses company
+profiles, or when Yahoo temporarily fails.
+
+The Chart.js drawing operation is not the primary delay. The donut cannot draw
+until its market-data request finishes, and the current request path has these
+problems:
+
+1. Concurrent routes can miss the same process-memory cache and make duplicate
+   Yahoo requests for one symbol.
+2. Sector, Country, Type, and Cap allocation views fetch company profiles one
+   ticker at a time. A cold request therefore waits for the sum of all slow
+   `Ticker.info` calls.
+3. Repeated frontend refresh triggers can start more than one request for the
+   same allocation dimension or portfolio summary.
+4. The first load has no explicit donut loading state. The user sees an empty
+   canvas while requests are pending.
+5. A failed non-ticker refresh calls `paintAllocation([], [])`, which destroys
+   a valid donut and incorrectly presents a temporary failure as an empty
+   portfolio.
+6. A failed portfolio-summary request leaves the By Ticker donut blank or stale
+   without explaining its state.
+7. The donut canvas does not have the explicit sizing rule used by the line
+   chart. A hidden-to-visible transition can leave Chart.js with stale canvas
+   dimensions in a browser or Android WebView.
+
+Warm reloads are usually faster because the Python quote/profile caches and the
+browser's Chart.js resource cache are already warm. That difference makes the
+cold-refresh behavior look intermittent.
 
 ## Goal
 
-Make the comparison picker read as one clear chart tool instead of an unlabeled
-row of unrelated buttons, search input, and duplicate chips.
+Make every allocation view load as quickly as the available Yahoo response
+allows and always show an honest state.
 
-The finished desktop control must read in this order:
+After this fix:
 
-```text
-Compare   S&P 500   Nasdaq   TSX   [custom comparison chips]   Search ticker...
-```
+- concurrent callers share one in-flight quote or profile fetch per symbol;
+- different symbols still fetch concurrently;
+- cold profile-based allocation requests fetch eligible profiles in parallel;
+- the browser starts at most one active request per allocation dimension and
+  one portfolio-summary request;
+- stale cached allocation data remains visible while it is refreshed;
+- temporary failures never masquerade as an empty portfolio;
+- first-load loading, successful empty, initial failure, and stale-after-failure
+  states are visibly different;
+- the displayed donut always belongs to the selected carousel dimension; and
+- the donut resizes correctly after it becomes visible.
 
-On a narrow viewport, the label and selections stay together above a full-width
-search input:
+## Locked Scope
 
-```text
-Compare   S&P 500   Nasdaq   TSX   [AAPL x]
-[Search ticker...                              ]
-```
+This is the focused fix approved by the user.
 
-The picker remains visually inside the existing chart card. Do not add another
-card, panel, outline, heading block, modal, disclosure, or popover around it.
-The search suggestions continue to use the existing anchored dropdown.
+In scope:
 
-## Design Decision
+- per-symbol in-flight request deduplication for `get_quote()` and
+  `get_profile()`;
+- bounded parallel profile loading in `/api/portfolio/allocation`;
+- per-dimension frontend allocation request deduplication;
+- frontend portfolio-summary request deduplication;
+- stale-while-revalidate behavior for cached allocation dimensions;
+- explicit donut loading, empty, unavailable, and stale-warning states; and
+- explicit responsive canvas sizing plus resize-after-reveal behavior.
 
-Use a persistent inline comparison tool, not a hidden `+ Add comparison`
-control.
+Out of scope:
 
-Reasons:
+- changing the Chart.js or annotation-plugin CDN delivery;
+- changing `setupAutoRefresh()` for every page;
+- redesigning all dashboard startup request scheduling;
+- changing the 60-second browser refresh interval;
+- changing quote, history, or allocation cache persistence;
+- moving process-memory caches into SQLite;
+- changing allocation calculations, supported currencies, or API response
+  shapes;
+- changing the six allocation dimensions, their order, localStorage format,
+  arrows, swipe behavior, pagination, labels, or animations;
+- adding a dependency; and
+- changing database code or schema.
 
-- The three benchmark shortcuts are useful and should remain discoverable.
-- Hiding all controls behind a disclosure adds a click to a small, frequent
-  chart action.
-- The chart card is already the correct structural boundary. Another outlined
-  box would create nested-card clutter.
-- A visible `Compare` label explains the controls without adding help text.
-- Portfoliarr's printed-money identity is restrained. Existing typography,
-  borders, inset backgrounds, radii, focus rings, and theme tokens are enough.
+## Existing Contracts To Preserve
 
-The picker must use the existing Instrument Sans UI face and current design
-tokens. Do not introduce new colors, shadows, radii, typefaces, icons, or
-motion. Green and red remain reserved for market direction.
+1. Successful market data only is cached. A Yahoo failure must remain
+   retryable.
+2. The quote cache keeps its 120-second TTL.
+3. The profile cache remains process-lifetime and separate from the name
+   cache.
+4. Cache callers receive defensive dictionaries that they cannot mutate for
+   another caller.
+5. Different symbols must not wait behind one global network lock.
+6. Flask routes own exception logging and HTTP degradation. `market_data.py`
+   continues to raise.
+7. Allocation values remain long-only, priced-only, and CAD-based.
+8. USD values use the live USDCAD rate. Missing conversion excludes the ticker;
+   it never assumes 1:1.
+9. Unsupported currencies remain excluded.
+10. Missing profile fields remain honest exclusions rather than an `Unknown`
+    category.
+11. Slice weights divide by classified slice values only.
+12. Slices remain sorted by descending value.
+13. `/api/portfolio/allocation` retains
+    `{by, currency, slices, excluded}`.
+14. `/api/portfolio/summary` retains its current payload, including holdings.
+15. Currency allocation must not call `get_profile()`.
+16. A short or flat position must not call `get_profile()` or receive a wedge.
+17. Only the selected allocation dimension can paint the shared canvas.
+18. By Ticker continues to use the summary response instead of the allocation
+    endpoint.
+19. Poll updates remain animation-free. Carousel navigation retains its
+    reduced-motion-safe crossfade.
+20. The page continues to use `setupAutoRefresh()` from `common.js`.
 
-## Locked Interaction Contract
+## Part 1: Write Failing Market-Data Concurrency Tests
 
-1. Show the visible text label `Compare` on both the dashboard and stock page.
-2. Give the whole control `role="group"` and connect it to the visible label
-   with `aria-labelledby="compare-label"`.
-3. Keep S&P 500, Nasdaq, and TSX visible as quick-pick toggle buttons.
-4. Keep each quick pick's current `aria-pressed` behavior.
-5. A selected quick-pick symbol is represented only by its active quick-pick
-   button. Do not also render a removable chip for it.
-6. A selected custom ticker is represented by one removable chip between the
-   quick picks and search input.
-7. Keep the custom chip's existing remove button and accessible label.
-8. Rename the input placeholder from `Compare to a ticker...` to
-   `Search ticker...`.
-9. Add `aria-label="Search ticker to compare"` to the input. The placeholder is
-   visual guidance, not its accessible name.
-10. Keep the maximum at three total symbols across quick picks and custom
-    tickers.
-11. Keep uppercase normalization and ordered, de-duplicated state.
-12. Keep the stock page's primary-symbol exclusion.
-13. Keep comparison state page-local and clear it on BFCache restoration.
-14. Keep the dashboard's first-comparison switch to Performance mode.
-15. Keep the stock chart's raw-price/normalized-chart transitions unchanged.
-16. Keep search selection behavior: add the selected symbol, clear the input,
-    and reload the current chart.
-17. Keep comparison readout behavior and placement unchanged.
-18. Keep all backend requests, endpoint shapes, chart math, error degradation,
-    line colors, tooltip behavior, and maximum-three toast unchanged.
+Write tests before changing `market_data.py`.
 
-## DOM Structure
+### 1.1 Quote callers share one in-flight cache miss
 
-Use the same structure on both pages. Exact IDs already differ only where the
-existing page requires them; comparison picker IDs stay as they are because
-only one picker exists per page.
+Add a test to `tests/test_market_data.py` named similarly to
+`test_concurrent_quote_cache_misses_share_one_yahoo_request`.
 
-```html
-<div class="compare-picker" role="group" aria-labelledby="compare-label">
-    <span id="compare-label" class="compare-label">Compare</span>
-    <div class="compare-selections">
-        <div class="compare-quick-picks">
-            <!-- Existing three buttons, unchanged. -->
-        </div>
-        <div id="compare-chips" class="compare-chips"></div>
-    </div>
-    <div class="compare-search">
-        <input id="compare-input"
-               type="text"
-               autocomplete="off"
-               aria-label="Search ticker to compare"
-               placeholder="Search ticker...">
-        <div id="compare-results" class="search-results" hidden></div>
-    </div>
-</div>
-```
+The test must:
 
-Do not use a heading element for `Compare`; it labels a compact control, not a
-new content section. Do not connect the visible span with `for`, because it
-labels the full group rather than only the search input.
+- call `market_data.get_quote("AAPL")` concurrently from at least four worker
+  threads;
+- hold the fake Yahoo operation open with `threading.Event` or a barrier until
+  all callers have had time to enter `get_quote()`;
+- release the fake operation once the concurrent callers are waiting;
+- assert that `yf.Ticker("AAPL")` or its `fast_info` network stand-in was
+  invoked exactly once;
+- assert that every caller receives the expected quote values; and
+- assert that callers receive distinct dictionary objects.
 
-## Part 1: Write Failing Tests First
+The test must fail before implementation because each thread can currently see
+the empty cache and start its own Yahoo operation.
 
-All new tests belong in `tests/test_compare_ui.py`. Keep the existing comparison
-backend, chart, tooltip, refresh, and readout tests unchanged.
+Do not use `sleep()` as the only synchronization mechanism. Use deterministic
+thread synchronization and give every wait a finite timeout so a broken test
+cannot hang pytest.
 
-### 1.1 Add a reusable picker-markup assertion
+### 1.2 Profile callers share one in-flight cache miss
 
-Add a small helper that receives one template string and checks only the
-comparison picker span. Extract from `class="compare-picker"` through that
-container's closing markup narrowly enough that the global navbar search cannot
-satisfy comparison-picker assertions.
+Add a test to `tests/test_allocation.py` named similarly to
+`test_concurrent_profile_cache_misses_share_one_yahoo_request`.
 
-If reliable nested-element extraction would make the test parser complex, use
-ordered marker positions bounded by the existing comparison-picker comment and
-the parent chart-card closing marker. Do not add BeautifulSoup or another
-dependency for this source contract.
+Use the same deterministic synchronization pattern as the quote test. Require:
 
-### 1.2 Test the labelled group on both pages
+- at least four concurrent `get_profile("AAPL")` calls;
+- exactly one fake `Ticker.info` fetch;
+- equivalent profile values for every caller; and
+- distinct returned dictionaries.
 
-Add `test_picker_is_a_labelled_chart_control_on_both_pages`.
+### 1.3 Different quote symbols are not globally serialized
 
-For both `INDEX_HTML` and `STOCK_HTML`, require:
+Add `test_different_quote_symbols_can_fetch_concurrently` to
+`tests/test_market_data.py`.
 
-- `class="compare-picker"`.
-- `role="group"` on that element.
-- `aria-labelledby="compare-label"` on that element.
-- one `id="compare-label" class="compare-label"` containing exactly
-  `Compare`.
-- one `class="compare-selections"`.
-- the DOM order: label, selections, search.
+The fake Yahoo implementation for `AAPL` and `MSFT` must wait at a two-party
+barrier. Call both symbols from separate worker threads. Both calls must cross
+the barrier and return successfully.
 
-This test must fail before implementation because the current picker has no
-visible label, group semantics, or selections wrapper.
+This test prevents an incorrect implementation that holds one global mutex
+during all Yahoo network work. A global mutex would deduplicate requests but
+would make a multi-ticker dashboard slower by fetching every symbol in series.
 
-### 1.3 Test search copy and accessible naming
+### 1.4 Different profile symbols are not globally serialized
 
-Add `test_picker_search_has_specific_copy_and_accessible_name`.
+Add the equivalent profile test to `tests/test_allocation.py`. Two distinct
+symbols must both enter their fake `Ticker.info` operations before either is
+released.
 
-For both templates, require the comparison input to contain:
+### 1.5 Quote failures wake waiters and remain retryable
 
-- `id="compare-input"`.
-- `placeholder="Search ticker..."`.
-- `aria-label="Search ticker to compare"`.
+Add a concurrent failure test to `tests/test_market_data.py`.
 
-Also assert that `Compare to a ticker...` is absent from each comparison picker
-span. Do not search all rendered HTML because unrelated copy can change without
-breaking this control.
+Require:
 
-This test must fail before implementation because the current input has the old
-placeholder and no explicit accessible name.
+- concurrent calls for one symbol share the first in-flight operation;
+- the first fake Yahoo operation raises a named exception;
+- every caller finishes and receives that failure rather than hanging;
+- the failed result is absent from `_cache`;
+- the symbol has no stale in-flight entry after completion; and
+- a later call starts one new Yahoo operation and can succeed.
 
-### 1.4 Test quick-pick and custom-chip grouping
+Do not require permanent negative caching. Failed market data must remain
+retryable.
 
-Update `test_picker_markup_is_present_on_both_pages` rather than duplicating all
-of its assertions. Retain the existing IDs and classes, and additionally
-require:
+### 1.6 Profile failures wake waiters and remain retryable
 
-- `.compare-quick-picks` and `#compare-chips` are both descendants of
-  `.compare-selections`.
-- `.compare-selections` appears before `.compare-search`.
-- all three quick-pick symbols remain present on both pages.
+Add the equivalent test for `get_profile()` in `tests/test_allocation.py`.
+Require no `_profile_cache` entry after failure and a successful later retry.
 
-Do not change `test_quick_pick_symbols_match_supported_index_symbols`.
+### 1.7 Preserve existing cache behavior
 
-### 1.5 Test that quick picks do not get duplicate chips
+Keep all existing tests for:
 
-Add `test_picker_renders_chips_for_custom_symbols_only` using `_picker_body()`.
+- quote TTL expiry;
+- finite-number validation;
+- profile missing fields;
+- empty profiles raising;
+- successful process-lifetime profile caching; and
+- defensive copies.
 
-Require the implementation to:
-
-- build a set of quick-pick symbols from `quickPickBar` button
-  `data-symbol` values;
-- check that set inside `renderChips()` before creating a `.compare-chip`;
-- skip chip creation for a symbol in that set;
-- continue to create `.compare-chip` and `.compare-chip-remove` elements for
-  symbols outside that set;
-- continue to update every quick-pick button's `active` class and
-  `aria-pressed` value from the full `symbols` array.
-
-Use narrow source assertions around `renderChips()`. Do not assert incidental
-whitespace or an entire function snapshot.
-
-This test must fail before implementation because every selected symbol
-currently gets a chip, including quick picks.
-
-### 1.6 Lock empty, invalid, duplicate, and boundary behavior
-
-Add or extend narrow source-contract tests so the UI-only refactor cannot alter
-picker state rules:
-
-- Empty input returns before changing state.
-- A symbol equal to `primarySymbol` shows the existing error and is not added.
-- A symbol already in `symbols` returns without adding a duplicate.
-- Exactly three total comparisons remain allowed.
-- A fourth comparison shows `Up to 3 comparisons` and is not added.
-- Removal filters only the requested symbol and notifies the chart once.
-- Clearing state empties the same full symbol array, not only visible custom
-  chips.
-- BFCache restoration still calls `clearSymbols()`.
-
-Prefer assertions against `_picker_body()` and the existing `COMPARE_MAX`
-constant. Do not introduce a JavaScript test dependency for this small UI
-refinement.
-
-### 1.7 Lock desktop and mobile layout contracts
-
-Extend `test_comparison_picker_has_shared_styles` and add
-`test_comparison_picker_has_deliberate_mobile_layout`.
-
-Require shared style selectors for:
-
-- `.compare-picker`.
-- `.compare-label`.
-- `.compare-selections`.
-- `.compare-quick-picks`.
-- `.compare-chips`.
-- `.compare-search`.
-
-Require the base `.compare-picker` rule to use an aligned grid with three
-conceptual columns: label, selections, and flexible search. Do not lock exact
-pixel values, but require `display: grid` and a `grid-template-columns`
-declaration.
-
-Require `.compare-selections` to use flex layout with wrapping, so custom chips
-join the quick picks without creating a detached third region.
-
-Inside a `max-width: 600px` media query, require:
-
-- `.compare-picker` uses two columns for label plus selections.
-- `.compare-search` spans the full row with `grid-column: 1 / -1`.
-- no fixed width that can exceed the viewport.
-- no `overflow: hidden` on the picker, selections, or search wrapper.
-
-Do not lock exact gaps, padding, or font sizes. Those are visual tuning values,
-not behavioral contracts.
-
-### 1.8 Run the red tests
+### 1.8 Run the first red tests
 
 Run:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py -q
+python -m pytest tests/test_market_data.py tests/test_allocation.py -q
 ```
 
-Expected pre-implementation failures:
+Expected pre-implementation failures are duplicate same-symbol Yahoo calls and
+failure of the in-flight-map cleanup assertions. Existing tests must stay
+green. If the different-symbol concurrency tests fail before implementation
+because the current code already permits concurrency, record them as
+regression guards rather than expected red tests.
 
-- no visible `Compare` label or labelled group;
-- no `.compare-selections` wrapper;
-- old search placeholder and missing input `aria-label`;
-- quick-pick selections still produce duplicate chips;
-- picker still uses a wrapping flex row rather than the locked grid layout;
-- no mobile full-row search rule.
+## Part 2: Deduplicate In-Flight Market Requests
 
-If any new test passes before implementation, verify that it matches the
-comparison picker specifically and is not finding the navbar search or another
-unrelated rule.
+Edit `market_data.py` only after Part 1 has produced the intended failures.
 
-## Part 2: Update Both Templates
+### 2.1 Add coordination state
 
-Edit `templates/index.html` and `templates/stock.html` in parallel. The two
-pickers must retain matching structure.
+Use one short-held `threading.Lock` to protect cache inspection and in-flight
+map mutation. Add two separate in-flight maps:
 
-For each picker:
+- quote symbol to `concurrent.futures.Future`; and
+- profile symbol to `concurrent.futures.Future`.
 
-1. Add `role="group"` and `aria-labelledby="compare-label"` to
-   `.compare-picker`.
-2. Add `<span id="compare-label" class="compare-label">Compare</span>` as its
-   first child. Each template is a separate page, so this ID remains unique in
-   the rendered document.
-3. Add `<div class="compare-selections">` as its second child.
-4. Move the existing `.compare-quick-picks` block into that wrapper without
-   changing button text, symbols, types, or `aria-pressed` values.
-5. Move the existing `#compare-chips` element directly after quick picks inside
-   the same wrapper.
-6. Keep `.compare-search` as the final child of `.compare-picker`.
-7. Change the input placeholder to `Search ticker...`.
-8. Add `aria-label="Search ticker to compare"` to the input.
-9. Keep `autocomplete="off"`, existing IDs, and the hidden results element.
-10. Update nearby teaching comments to describe quick picks, custom chips, and
-    page-local state accurately. Do not add a long design rationale to HTML.
+The maps coordinate work only while a request is running. They are not caches
+and must not retain completed entries.
 
-Do not change the chart canvas, readout, mode selector, timeframe selector, or
-their relative order.
+Do not hold the coordination lock while calling yfinance. The lock can protect
+dictionary operations, but unrelated symbols must perform network work in
+parallel.
 
-## Part 3: Stop Duplicate Quick-Pick Chips
+### 2.2 Change `get_quote()`
 
-Edit only `setupComparePicker()` in `static/js/common.js`.
+Implement this exact ownership flow:
 
-### 3.1 Capture quick-pick symbols once
+1. Normalize nothing new; retain the caller's current symbol contract.
+2. Acquire the coordination lock.
+3. Check `_cache` and return a defensive copy when the entry is still inside
+   `TTL_SECONDS`.
+4. If an in-flight future already exists for the symbol, retain that future and
+   mark this caller as a waiter.
+5. Otherwise create and store a future and mark this caller as the owner.
+6. Release the lock.
+7. A waiter calls `future.result()` outside the lock and returns a defensive
+   copy of the successful dictionary. The same exception must propagate if the
+   owner fails.
+8. The owner performs the existing `fast_info` fetch, validation, and payload
+   construction outside the lock.
+9. On success, acquire the lock, write the completed quote and a completion-time
+   `fetched_at`, complete the future, and remove that exact future from the
+   in-flight map.
+10. On failure, acquire the lock, complete the future with the exception, remove
+    that exact future, and re-raise.
 
-Immediately after `let symbols = [];`, create one set from the quick-pick
-buttons supplied through `quickPickBar`.
+Use an identity check before removing an in-flight entry so cleanup cannot
+delete a newer future if later code changes allow an immediate retry.
 
-The set must:
+Successful data remains the only data written to `_cache`.
 
-- be empty when `quickPickBar` is absent;
-- read each button's `data-symbol` value;
-- avoid querying the full document;
-- be created once during picker setup, because the three button symbols are
-  static markup.
+### 2.3 Change `get_profile()`
 
-Use one local name such as `quickPickSymbols`. Do not add this state globally.
+Use the same owner/waiter flow with `_profile_cache` and the profile in-flight
+map.
 
-### 3.2 Render custom chips only
+Preserve:
 
-Inside the existing `for (const symbol of symbols)` loop in `renderChips()`,
-continue to iterate the full ordered symbol list but skip DOM chip creation when
-`quickPickSymbols.has(symbol)` is true.
+- the existing `Ticker.info` source;
+- empty-profile `ValueError` behavior;
+- the four returned fields;
+- finite market-cap filtering; and
+- defensive copies for owners, waiters, and later cache hits.
 
-Do not remove quick-pick symbols from `symbols`. The full array remains the
-single source for:
+### 2.4 Keep cache clearing safe
 
-- the maximum-three boundary;
-- request ordering;
-- `getSymbols()`;
-- active button state;
-- `aria-pressed` state;
-- chart reloads and benchmark query parameters;
-- removal and BFCache clearing.
+`clear_market_caches()` must clear completed cache data as it does now. Tests
+call it only when no market operation is active. Do not add production logic
+that cancels active futures or leaves waiters blocked.
 
-After custom chip rendering, keep the current quick-pick repaint loop exactly
-in purpose: selected quick picks receive `.active` and `aria-pressed="true"`;
-unselected buttons receive the inverse state.
+Add short comments beside the lock and in-flight maps. Explain that the lock is
+released before Yahoo calls so same-symbol work is deduplicated without
+serializing different symbols.
 
-### 3.3 Preserve all add/remove paths
+### 2.5 Verify the data layer
 
-Do not change `addSymbol()`, `removeSymbol()`, `clearSymbols()`, `notify()`,
-search suggestion setup, or the delegated quick-pick click handler except for
-any strictly necessary local rename caused by the new set.
+Run:
 
-In particular, do not create separate quick/custom state arrays. Two arrays
-would make ordering, limits, removal, and requests easier to desynchronize.
+```bash
+python -m pytest tests/test_market_data.py tests/test_allocation.py -q
+```
 
-## Part 4: Restyle the Picker as an Inline Tool
+All concurrency, retry, TTL, validation, and defensive-copy tests must pass
+before changing the route.
 
-Edit the existing comparison-control section in `static/style.css`. Keep the
-rules next to the chart controls and comparison readout.
+## Part 3: Write a Failing Allocation-Route Parallelism Test
 
-### 4.1 Desktop layout
+Add the route test to `tests/test_allocation.py` before editing `app.py`.
 
-Change `.compare-picker` from a free-form flex row to a three-column grid:
+### 3.1 Prove eligible profiles overlap
 
-- column 1: intrinsic-width `Compare` label;
-- column 2: intrinsic/flexible selections group;
-- column 3: search input with a practical minimum and remaining width;
-- vertically center all three regions;
-- retain a modest top margin from the timeframe controls;
-- use the existing spacing rhythm rather than a new decorative container.
+Add `test_profile_dimensions_fetch_eligible_profiles_in_parallel`.
 
-Use a template equivalent to:
+The test must:
+
+- seed at least three positive, priced, supported-currency holdings;
+- patch `app_module.get_profile`, because the route uses the imported name;
+- make each fake profile call wait at a barrier whose party count equals the
+  number of eligible symbols;
+- give the barrier a finite timeout;
+- request `/api/portfolio/allocation?by=sector`;
+- assert every profile call crossed the barrier;
+- assert every ticker appears in the correct slice; and
+- assert the route retains its value, weight, and sorting contracts.
+
+The current serial profile loop must fail this test. A broken barrier must make
+the route result fail its slice assertions rather than hang the suite.
+
+### 3.2 Lock the eligible-symbol boundary
+
+Add or extend tests to prove profile workers are not started for:
+
+- a quote failure;
+- a flat position;
+- a short position;
+- an unsupported quote currency; and
+- a USD holding when the required live USDCAD conversion failed.
+
+Retain the existing Currency test that proves `get_profile()` is never called.
+
+### 3.3 Preserve per-symbol failure degradation
+
+Keep the existing profile-failure test and strengthen it if necessary so one
+worker failure excludes only that symbol while successful workers still
+produce slices.
+
+### 3.4 Run the route red test
+
+Run:
+
+```bash
+python -m pytest tests/test_allocation.py -q
+```
+
+The new profile-overlap test must fail before the route change. Existing
+grouping and resilience tests must remain green.
+
+## Part 4: Parallelize Cold Profile Loading
+
+Edit `portfolio_allocation()` in `app.py`.
+
+### 4.1 Identify eligible symbols first
+
+After quotes and the optional live FX rate are available, derive the symbols
+that can contribute to a profile-based allocation:
+
+- `held > 0`;
+- quote exists;
+- quote currency is CAD or USD; and
+- a USD quote has an available live USDCAD rate.
+
+Do not fetch a profile for a symbol that already has a final exclusion reason
+or cannot receive a wedge.
+
+### 4.2 Skip profile work for Currency
+
+When the selected dimension has `profile_field is None`, do not create a
+profile executor and do not call `get_profile()`.
+
+### 4.3 Fetch profiles through a bounded pool
+
+For Sector, Country, Type, and Cap:
+
+- define a small route-local worker that returns `(symbol, profile)`;
+- catch and log `get_profile()` failures at the route boundary;
+- return `(symbol, None)` for a failed profile;
+- use `ThreadPoolExecutor(max_workers=min(len(eligible_symbols), 8))` when the
+  list is non-empty; and
+- collect results into a symbol-keyed dictionary before aggregation.
+
+Do not make Flask calls, database calls, or `jsonify()` calls in worker
+threads.
+
+### 4.4 Aggregate with the prefetched profiles
+
+Keep the existing aggregation pass and exclusion wording. Replace the serial
+`get_profile(symbol)` call with the prefetched dictionary lookup.
+
+The response must be byte-for-byte equivalent in shape and equivalent in
+meaning. Only request timing and execution order change.
+
+### 4.5 Verify the route
+
+Run:
+
+```bash
+python -m pytest tests/test_allocation.py tests/test_portfolio_summary.py -q
+```
+
+All allocation calculations and failure paths must pass.
+
+## Part 5: Write Failing Frontend State Contracts
+
+The repository does not run JavaScript in pytest. Add narrow source-contract
+tests to `tests/test_allocation_ui.py`; do not snapshot whole functions or add a
+JavaScript dependency.
+
+### 5.1 One in-flight request per allocation dimension
+
+Replace the generation-based same-dimension test with a test that requires:
+
+- one `allocInFlight` object keyed by dimension;
+- `fetchAllocDimension(by)` to return the existing promise when that key is
+  already in flight;
+- a newly created promise to be stored before callers can start another fetch;
+- cleanup in `finally`; and
+- cleanup to delete only the promise that is still registered for that key.
+
+Remove requirements for `allocRequestGenerations` and
+`isLatestAllocRequest()`. Same-key requests cannot arrive out of order when
+only one can exist.
+
+### 5.2 Retain active-view protection
+
+Keep a source contract that successful and failed requests inspect
+`isActiveAllocView(by)` before changing visible state.
+
+A request may populate its cache after the user leaves that slide. It must not
+paint or show a warning on another slide.
+
+### 5.3 Stale-while-revalidate
+
+Add a test that requires an existing `allocCache[by]` entry to paint before a
+stale entry starts its network refresh. A fresh entry must still paint and
+return without fetching.
+
+The cached entry can contain a successful empty result. Do not use truthiness
+of `slices.length` as the test for whether a valid cache entry exists.
+
+### 5.4 Failed refresh preserves valid state
+
+Add contracts that require the allocation catch path to:
+
+- avoid `paintAllocation([], [])`;
+- keep the matching last valid data visible when it exists;
+- show a stale warning for that selected dimension; and
+- show an unavailable state when no valid result exists for the selected
+  dimension.
+
+### 5.5 Portfolio summary is single-flight
+
+Add a test that requires one module-level summary promise. Repeated
+`refreshPortfolioSummary()` calls must return that promise while it is active,
+and `finally` must clear it after success or failure.
+
+### 5.6 By Ticker failure states
+
+Add contracts requiring the summary failure and `nothingPriced` paths to
+update donut state when By Ticker is active:
+
+- retain the previous By Ticker donut and mark it stale if valid prior ticker
+  data exists; and
+- otherwise show unavailable, never a successful empty-portfolio message.
+
+The portfolio header's existing unavailable behavior must remain.
+
+### 5.7 Explicit accessible status markup
+
+Add a rendered-template test requiring one allocation status element inside
+`.donut-card` with:
+
+- `id="alloc-status"`;
+- `class="empty-state"` or an existing compatible quiet status style;
+- `role="status"`;
+- `aria-live="polite"`; and
+- initial text `Loading allocation...`.
+
+Require the donut box to start hidden until valid data is painted. Use the HTML
+`hidden` attribute rather than an inline `display` declaration.
+
+### 5.8 Distinct state messages
+
+Add narrow source assertions for four semantic states:
+
+- loading before the selected dimension has returned;
+- successful empty using the existing no-priced-holdings wording;
+- unavailable after initial failure; and
+- stale warning after a refresh failure with valid prior data.
+
+Do not lock punctuation if that would make the test brittle. Lock the distinct
+state-setting calls and their important wording.
+
+### 5.9 Canvas sizing and reveal resize
+
+Add CSS and JavaScript source contracts requiring:
+
+- `.donut-box` to keep its fixed height and positioned ancestor;
+- `.donut-box > canvas` to use `display: block`;
+- width and height to be `100% !important`, matching `.chart-box > canvas`;
+- a scheduled `allocationChart.resize()` after a hidden donut box is revealed;
+  and
+- the resize to tolerate a null chart handle.
+
+Use `requestAnimationFrame()` for the resize so layout has completed before
+Chart.js measures the box.
+
+### 5.10 Run the frontend red tests
+
+Run:
+
+```bash
+python -m pytest tests/test_allocation_ui.py -q
+```
+
+Expected failures include no in-flight promise map, destructive failure paint,
+no explicit status element, no donut canvas sizing rule, and no reveal resize.
+
+## Part 6: Implement Frontend Request Coordination
+
+Edit `static/js/main.js` after Part 5 is red.
+
+### 6.1 Track valid displayed data
+
+Keep these pieces of state local to the allocation section:
+
+- the existing per-dimension `allocCache`;
+- an `allocInFlight` object keyed by non-ticker dimension;
+- the dimension key represented by the currently displayed chart, where
+  `null` means By Ticker; and
+- whether successful By Ticker data has been received.
+
+Do not add localStorage fields. Only the existing selected index persists.
+
+### 6.2 Replace request generations with one promise per key
+
+Refactor `fetchAllocDimension(by)` in this order:
+
+1. Read any cache entry.
+2. If it exists, paint it immediately when `by` is active.
+3. If it exists and is fresh, return without fetching.
+4. If no cache entry exists and `by` is active, show loading unless the exact
+   same dimension already has valid displayed data.
+5. If `allocInFlight[by]` exists, return that promise.
+6. Create an async request promise and store it in `allocInFlight[by]` before
+   yielding control.
+7. On success, cache `{data, fetchedAt}` and paint only if `by` is still active.
+8. On failure, log once and change visible state only if `by` is still active.
+9. In `finally`, delete the map entry only when it still equals this request
+   promise.
+10. Return the promise to every caller.
+
+Do not use `AbortController` for this fix. Cached background completion is
+useful when the user returns to a slide.
+
+### 6.3 Preserve stale data on allocation failure
+
+If the selected dimension has a prior successful cache entry, repaint or retain
+that exact entry and show the stale-warning state. Do not change its
+`fetchedAt`; it must stay stale and retry on the next refresh.
+
+If it has no prior successful entry, hide data from any previous dimension and
+show unavailable.
+
+Never call `paintAllocation([], [])` from a request catch block. Empty arrays
+are valid only when the server successfully returned an empty result.
+
+### 6.4 Make portfolio summary single-flight
+
+Wrap the existing summary fetch/paint operation in one stored promise:
+
+- return the existing promise when present;
+- preserve every current summary paint and privacy behavior;
+- clear the promise in `finally`; and
+- continue to catch and log at the frontend boundary.
+
+Do not debounce or delay the initial summary request.
+
+### 6.5 Handle By Ticker degradation honestly
+
+On a successful summary response, cache and paint its holdings as now.
+
+If all quotes failed (`nothingPriced`) or the summary request failed:
+
+- when By Ticker is active and prior successful ticker slices exist, retain
+  them and show the stale warning;
+- when By Ticker is active without prior successful ticker slices, hide any
+  other dimension and show unavailable; and
+- when another view is active, do not alter that view's visible donut status.
+
+Do not treat `[]` as failure. A successful summary can honestly report no
+holdings.
+
+## Part 7: Implement Explicit Donut States and Sizing
+
+Edit `templates/index.html`, `static/js/main.js`, and `static/style.css`.
+
+### 7.1 Add status markup
+
+Inside `.donut-card`, keep the header first. Add the status element before or
+after `.donut-box`, but keep it in the card and outside the canvas box.
+
+Initial markup:
+
+```html
+<p id="alloc-status" class="empty-state" role="status"
+   aria-live="polite">Loading allocation...</p>
+```
+
+Add `hidden` to `.donut-box` initially. Keep pagination and the excluded note in
+their current order and preserve all existing IDs.
+
+### 7.2 Replace the dynamically created empty paragraph
+
+Remove the JavaScript-created `donutEmptyState`. Use the template's persistent
+`#alloc-status` element for all non-chart state and refresh warnings.
+
+Create small state functions with one responsibility each, or one function
+with an explicit state argument. It must support:
+
+- loading: chart hidden when no matching valid data exists, status visible;
+- ready: chart visible, status hidden;
+- empty: chart hidden, status visible with the no-holdings message;
+- unavailable: chart hidden, status visible with failure wording; and
+- stale: matching chart remains visible, status visible with warning wording.
+
+Use `hidden` properties or attributes as the source of truth. Do not mix them
+with inline `style.display` state.
+
+### 7.3 Prevent cross-dimension stale displays
+
+When loading an uncached slide, data from the previously selected dimension
+must not remain visible under the new label. Hide the box and show loading.
+
+Only show stale data when its recorded dimension key equals the selected key.
+
+### 7.4 Paint successful empty responses
+
+`paintAllocation()` must continue to destroy the Chart.js instance after a
+successful empty response so no obsolete wedges remain associated with an
+honest empty result. Record the dimension as successfully loaded even when its
+slice list is empty.
+
+This is different from a catch path, which must never pass fabricated empty
+arrays into the painter.
+
+### 7.5 Resize after reveal
+
+When ready or stale state changes `.donut-box.hidden` from true to false,
+schedule:
+
+```javascript
+requestAnimationFrame(() => allocationChart?.resize());
+```
+
+Creating a new chart can proceed normally. Updating an existing hidden chart
+must still receive the scheduled resize after reveal.
+
+### 7.6 Add the canvas sizing contract
+
+Immediately after `.donut-box`, add:
 
 ```css
-grid-template-columns: auto auto minmax(220px, 1fr);
+.donut-box > canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
 ```
 
-The implementation may tune the second track to prevent crowding, but it must
-not force the chart card wider than its grid column.
+Do not change the 220px donut-box height in this fix.
 
-### 4.2 Label treatment
+### 7.7 Preserve carousel behavior
 
-Style `.compare-label` as a quiet UI label:
+Keep:
 
-- Instrument Sans through the inherited UI font;
-- sentence case, never uppercase or tracked lettering;
-- semibold;
-- existing chart-control text size;
-- secondary text color;
-- no border, background, icon, or accent color.
+- the six-view source array;
+- saved `allocationDimension` parsing;
+- previous/next wrapping;
+- clickable pagination dots;
+- position counter;
+- swipe threshold;
+- crossfade on deliberate navigation only;
+- reduced-motion behavior;
+- excluded-ticker note; and
+- tooltip privacy behavior.
 
-### 4.3 Selections group
+## Part 8: Focused Verification
 
-Add `.compare-selections` as an inline flex container that:
-
-- aligns items centrally;
-- allows wrapping;
-- uses the existing six-pixel control gap;
-- has `min-width: 0` so it can contract inside the chart card.
-
-Keep `.compare-quick-picks` and `.compare-chips` as flex containers. Remove only
-declarations made redundant by the wrapper; do not change the established
-quick-pick and custom-chip visual recipes.
-
-The active benchmark remains a bordered state button using the existing accent
-and inset background. A custom symbol remains a removable accent-bordered chip.
-They differ because one is a persistent toggle and the other is a user-added
-selection.
-
-### 4.4 Search treatment
-
-Keep `.compare-search` positioned relative so the existing absolute suggestion
-dropdown remains anchored to the input.
-
-In the grid:
-
-- use `min-width: 0` to prevent card overflow;
-- let the input fill its grid track;
-- retain the current inset background, border, radius, focus ring, text size,
-  and result-dropdown minimum width;
-- do not add a search icon or submit button.
-
-### 4.5 Mobile layout
-
-In the existing final `@media (max-width: 600px)` block, add picker rules next
-to the comparison-readout rules.
-
-At this breakpoint:
-
-- set `.compare-picker` to `grid-template-columns: auto minmax(0, 1fr)`;
-- keep `.compare-label` in the first column;
-- keep `.compare-selections` in the second column and allow it to wrap;
-- set `.compare-search` to `grid-column: 1 / -1` so it occupies the full next
-  row;
-- reduce only gaps if necessary; do not reduce text below the existing
-  chart-control size;
-- keep all controls inside the viewport without clipping;
-- do not add horizontal scroll, scroll snap, or legacy momentum-scrolling
-  properties to this control.
-
-The expected common empty-state phone layout is two rows: label plus three
-quick picks, then search. Additional custom chips may wrap the selections row
-naturally before the search row.
-
-## Part 5: Focused Verification
-
-After implementation, run:
+Run the core changed areas:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py -q
-python -m pytest tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
-python -m pytest tests/test_compare.py -q
+python -m pytest \
+  tests/test_market_data.py \
+  tests/test_allocation.py \
+  tests/test_allocation_ui.py \
+  tests/test_portfolio_summary.py -q
 ```
 
-Then run frontend layout and chart regressions:
+Run nearby frontend and route regressions:
 
 ```bash
 python -m pytest \
   tests/test_ui_redesign.py \
-  tests/test_chart_speed.py \
-  tests/test_prev_close.py \
-  tests/test_price_diff.py \
-  tests/test_chart_axis.py \
-  tests/test_web_refresh_wiring.py -q
+  tests/test_web_refresh_wiring.py \
+  tests/test_routes.py \
+  tests/test_quote.py \
+  tests/test_ledger_groups.py -q
 ```
 
 If Node is available, run:
 
 ```bash
-node --check static/js/common.js
 node --check static/js/main.js
-node --check static/js/stock.js
 ```
 
-`main.js` and `stock.js` are not expected to change, but syntax-check them
-because both call the shared picker and chart factory.
+Node was not installed during the prior feature. Its absence is not a pytest
+failure; report it accurately.
 
-## Part 6: Full-Suite Gate
+## Part 9: Full-Suite Gate
 
-The lead agent runs:
+The lead agent must run:
 
 ```bash
 source .venv/bin/activate
@@ -487,604 +747,118 @@ python -m pytest
 ```
 
 Do not report implementation complete unless the full suite passes. Do not
-weaken existing tests to accommodate a visual change.
+weaken existing tests to accommodate this fix.
 
-## Part 7: Browser GUI Approval Gate
+## Part 10: Browser GUI Approval Gate
 
-After pytest is green, stop and ask the user to verify the UI before any commit
-or push.
+After pytest is green, stop and wait for the user's browser approval before any
+commit or push.
 
-### Dashboard, desktop
+### Cold-load preparation
 
-- `Compare` clearly labels the benchmark buttons and ticker search.
-- S&P 500, Nasdaq, and TSX remain visible without opening another control.
-- Selecting S&P 500 activates its button but does not add an S&P 500 chip.
-- Selecting Nasdaq and TSX behaves the same way.
-- Searching for and selecting AAPL adds one removable AAPL chip.
-- The custom chip appears between the quick picks and search input.
-- Three total selections are allowed across both selection types.
-- A fourth selection shows the existing limit toast.
-- Removing a quick pick by pressing its active button updates the chart.
-- Removing a custom ticker through its chip updates the chart.
-- The first comparison still switches the dashboard to Performance.
-- The bottom comparison readout remains correctly aligned with line colors.
+- Restart the Flask process so quote and profile caches are empty.
+- Open the dashboard with browser developer tools visible.
+- Test once with By Ticker saved and once with a profile-based view such as By
+  Sector saved.
 
-### Stock page, desktop
+### Initial loading
 
-- The picker has the same structure and visual rhythm as the dashboard.
-- Searching for the current stock shows the existing exclusion error.
-- A quick pick does not produce a duplicate chip.
-- A custom ticker produces one removable chip.
-- Removing all comparisons restores raw-price tools and tooltip behavior.
+- The selected view label and pagination position are correct immediately.
+- `Loading allocation...` appears instead of an unexplained blank canvas.
+- Data from a previously selected dimension never appears under the new label.
+- The donut becomes visible when its data arrives.
+- The donut has a circular shape and correct legend placement on first paint.
 
-### Mobile, light and dark themes
+### Profile-based cold load
 
-- The first row shows `Compare` and visible benchmark shortcuts.
-- The search input occupies the full next row.
-- A custom chip wraps without widening or clipping the chart card.
-- Search results remain anchored below the comparison input and fit the
-  viewport.
-- Focus rings are visible for quick picks, search, results, and remove buttons.
-- Text and active states have sufficient contrast in both themes.
-- The picker adds no nested-card appearance, unnecessary shadow, or decorative
-  color.
+- Sector, Country, Type, and Cap no longer wait for profiles one ticker at a
+  time.
+- The request completes near the duration of the slowest worker batch, not the
+  sum of every ticker's profile duration.
+- Currency remains faster and does not require profile metadata.
 
-### State and navigation regression
+### Refresh and stale behavior
 
-- Reload starts with no comparisons.
-- Navigating to another page starts with no comparisons.
-- Browser Back does not restore stale comparisons from BFCache.
-- Changing timeframe retains active comparisons on the current page.
-- Dashboard Value/Performance switching retains page-local selections while
-  showing overlays only in Performance.
+- Refresh after a successful load keeps the existing donut visible while new
+  data is pending.
+- A temporary failed refresh keeps the previous valid donut and displays a
+  clear stale warning.
+- A first-load failure displays unavailable, not the no-holdings message.
+- Reconnecting and triggering refresh restores ready state without reloading
+  the page.
+- A successful genuinely empty portfolio shows the existing no-holdings
+  message.
 
-## Files Expected To Change
+### Rapid interaction
 
-- `tests/test_compare_ui.py`: new markup, behavior, boundary, accessibility,
-  and responsive CSS contracts.
-- `templates/index.html`: labelled picker structure and search copy.
-- `templates/stock.html`: matching labelled picker structure and search copy.
-- `static/js/common.js`: suppress duplicate chips for selected quick picks.
-- `static/style.css`: desktop grid and mobile two-row picker layout.
-- `feature.md`: this approved implementation contract and eventual handoff.
+- Click arrows and pagination dots quickly across all six views.
+- Swipe rapidly on a phone-sized viewport.
+- The selected label, dots, counter, wedges, legend, tooltip, excluded note,
+  and status always refer to the same dimension.
+- Repeated selection of one stale dimension does not launch duplicate browser
+  requests while its first request remains active.
+
+### Layout and recovery
+
+- Test desktop and phone widths in light and dark themes.
+- Hide and restore the tab, then return to the donut.
+- If available, repeat the hide/restore test in Android WebView.
+- The canvas fills its 220px box after every hidden-to-visible transition.
+- No zero-size canvas, clipped legend, horizontal overflow, or stretched donut
+  appears.
+- Reduced-motion preference still disables the crossfade and first-build
+  Chart.js animation as before.
+
+## Success Criteria
+
+Implementation is complete only when all of these are true:
+
+1. Concurrent same-symbol quote misses perform one Yahoo quote operation.
+2. Concurrent same-symbol profile misses perform one Yahoo profile operation.
+3. Different symbols still perform network operations concurrently.
+4. Failed market operations wake all waiters, cache nothing, and permit retry.
+5. Profile-based allocation requests use at most eight workers and preserve all
+   existing response semantics.
+6. One browser request exists per active allocation dimension at a time.
+7. One portfolio-summary browser request exists at a time.
+8. No request failure destroys valid donut data or pretends the portfolio is
+   empty.
+9. Every first load has a visible loading or error explanation.
+10. The displayed chart and status always belong to the selected dimension.
+11. The donut canvas has correct dimensions after it is revealed.
+12. Focused tests and the full pytest suite pass.
+13. The user approves the browser behavior.
+
+## Files Expected To Change During Implementation
+
+- `feature.md`: plan, progress, verification results, and final handoff.
+- `market_data.py`: per-symbol quote/profile in-flight coordination.
+- `app.py`: bounded parallel profile retrieval in the allocation route.
+- `static/js/main.js`: request coordination, stale cache behavior, and donut
+  states.
+- `static/style.css`: explicit donut canvas sizing.
+- `templates/index.html`: persistent accessible allocation status element and
+  initial hidden canvas box.
+- `tests/test_market_data.py`: quote concurrency and retry tests.
+- `tests/test_allocation.py`: profile concurrency and route parallelism tests.
+- `tests/test_allocation_ui.py`: frontend state, request, markup, and sizing
+  contracts.
 
 No expected changes:
 
-- `app.py`.
-- `db.py`.
-- `market_data.py`.
-- `static/js/main.js`.
-- `static/js/stock.js`.
-- API response shapes or request parameters.
-- comparison readout markup or rendering.
-- `roadmap.md`.
-
-## Scope Limits
-
-- No new endpoint or backend behavior.
-- No comparison persistence.
-- No modal, popover, drawer, disclosure, or bottom sheet.
-- No new outer card or decorative comparison box.
-- No collapse/expand preference.
-- No drag reordering.
-- No configurable quick picks.
-- No symbol names inside custom chips; retain ticker symbols.
-- No line-color markers inside the picker; the bottom readout remains the
-  authoritative line legend.
-- No changes to benchmark normalization or performance calculations.
-- No new dependency.
-- No commit or push until browser approval and explicit user permission.
+- `roadmap.md`;
+- `project-brief.md`;
+- `db.py`;
+- `static/js/common.js`;
+- `templates/base.html`;
+- dependency files;
+- API response shapes; or
+- Docker and Android files.
 
 ## Worktree Note
 
 The untracked files `comparison.html` and `ui-nomenclature-audit.html` are user
-files unrelated to this refinement. Do not edit, delete, stage, or commit them.
+files unrelated to this bug. Do not edit, delete, stage, or commit them.
 
----
-
-## Feature context (documented by document-bug)
-
-### Authoritative status override
-
-The plan and `IMPLEMENTED. Awaiting user browser GUI approval.` status above are
-historical. **Do not continue to its browser gate and do not commit its current
-UI.** The user reviewed that result and rejected the always-visible S&P 500,
-Nasdaq, and TSX buttons because the control still looks crowded.
-
-The new design below supersedes every earlier instruction that says to keep
-benchmark quick-pick buttons permanently visible, to suppress chips for those
-buttons, or to use a three-column label/selections/search grid.
-
-Current status: **IMPLEMENTED AND TESTED. Awaiting user browser GUI
-approval.** All new tests below were written and confirmed red first, then
-the production code was adapted. Focused comparison/ticker-suggestion suites,
-chart regressions, and the full pytest suite pass (`655 passed`). Node is not
-installed, so the optional `node --check` commands could not run. Do not
-commit or push before browser approval and explicit user permission.
-
-### Feature summary
-
-Replace the crowded comparison picker with one compact search control. At rest,
-both the dashboard and stock page show only:
-
-```text
-Compare   [Search ticker or benchmark...]
-```
-
-Focusing the empty field opens its normal suggestion dropdown with three local
-recommendations:
-
-```text
-Suggested
-S&P 500    ^GSPC
-Nasdaq     ^IXIC
-TSX        ^GSPTSE
-```
-
-Typing replaces those recommendations with the existing `/api/search` results.
-Selecting either a suggested benchmark or a search result creates one removable
-chip below the input. The chart behavior and bottom performance readout do not
-change.
-
-### Locked design and behavior
-
-1. Keep the visible `Compare` label and its accessible group association.
-2. Remove S&P 500, Nasdaq, and TSX from the permanent picker surface.
-3. Do not replace them with another button, disclosure, modal, drawer, or
-   separate card.
-4. Use the existing `.search-results` dropdown as the only selection surface.
-5. When the comparison input gains focus while empty, show a sentence-case
-   `Suggested` heading followed by S&P 500, Nasdaq, and TSX rows.
-6. When the user deletes all typed text while the field remains focused, show
-   the three suggested rows again instead of closing the dropdown.
-7. When the user types non-empty text, use the existing debounce,
-   `/api/search?q=...` request, stale-response guard, no-match state, and failure
-   state without behavioral changes.
-8. Escape and outside clicks close the dropdown. Refocusing the still-empty
-   input opens suggestions again.
-9. Clicking a suggested row and pressing Enter on the first visible suggested
-   row use the same `addSymbol()` path as a remote search result.
-10. Every selected comparison gets exactly one removable chip, including
-    `^GSPC`, `^IXIC`, and `^GSPTSE`.
-11. Benchmark chips use friendly labels (`S&P 500`, `Nasdaq`, `TSX`). Custom
-    symbols use their uppercase ticker. Internal state and API requests always
-    retain raw symbols.
-12. Hide `#compare-chips` when there are no selections. Reveal it when at least
-    one chip exists.
-13. On a stock detail page, omit the primary symbol from local suggested
-    benchmarks. For example, `/stock/%5EGSPC` must not suggest S&P 500. The
-    existing primary-symbol rejection remains as a defense for typed results.
-14. Keep one ordered `symbols` array as the source of truth. Do not split
-    benchmark and custom state.
-15. Keep the maximum at three total symbols, uppercase normalization,
-    de-duplication, primary-symbol rejection, remove behavior, and BFCache reset.
-16. Keep comparisons page-local. Do not add localStorage, sessionStorage, URL,
-    cookie, or backend persistence.
-17. Keep dashboard first-selection auto-switch to Performance mode.
-18. Keep stock raw-price/normalized transitions and restoration unchanged.
-19. Keep comparison request parameters, backend routes, response shapes,
-    growth-of-$100 math, degraded benchmark behavior, line colors, date-only
-    comparison tooltip, and bottom readout unchanged.
-20. Use current printed-money tokens. Add no new palette, shadow, radius,
-    typeface, animation, or decorative container.
-
-### Final markup contract
-
-Both `templates/index.html` and `templates/stock.html` must use the same picker
-shape:
-
-```html
-<div class="compare-picker" role="group" aria-labelledby="compare-label">
-    <span id="compare-label" class="compare-label">Compare</span>
-    <div class="compare-search">
-        <input id="compare-input"
-               type="text"
-               autocomplete="off"
-               aria-label="Search ticker or benchmark to compare"
-               placeholder="Search ticker or benchmark...">
-        <div id="compare-results" class="search-results" hidden></div>
-    </div>
-    <div id="compare-chips" class="compare-chips" hidden></div>
-</div>
-```
-
-Remove `.compare-selections`, `.compare-quick-picks`, and every `.compare-quick`
-button from the picker markup. Keep the chart canvas, readout, mode selector,
-and timeframe selector in their current relative positions.
-
-### Detailed test-first plan
-
-All production files currently contain the rejected visible-button design. Edit
-`tests/test_compare_ui.py` first and run it red before changing production code.
-Keep `_picker_markup()`, `_picker_body()`, `_comparison_readout_body()`, and the
-useful existing state/readout tests.
-
-#### Test A: compact picker markup on both pages
-
-Replace the current quick-pick grouping assertions with a test that checks each
-picker span contains, in order:
-
-- `compare-label`;
-- `compare-search` with `#compare-input` and `#compare-results`;
-- `#compare-chips` with the `hidden` attribute.
-
-Require `role="group"`, `aria-labelledby="compare-label"`, the visible text
-`Compare`, placeholder `Search ticker or benchmark...`, and input
-`aria-label="Search ticker or benchmark to compare"`.
-
-Inside the extracted picker markup, assert these rejected elements are absent:
-
-- `compare-selections`;
-- `compare-quick-picks`;
-- `compare-quick`;
-- `data-symbol="^GSPC"`;
-- `data-symbol="^IXIC"`;
-- `data-symbol="^GSPTSE"`.
-
-Do not search all of `index.html` for those symbols because the separate market
-index chips legitimately use them.
-
-#### Test B: local benchmark recommendation definitions
-
-Replace `test_quick_pick_symbols_match_supported_index_symbols` with a test that
-requires `common.js` to define one shared immutable/local recommendation list
-containing exact symbol/name pairs:
-
-- `^GSPC` / `S&P 500`;
-- `^IXIC` / `Nasdaq`;
-- `^GSPTSE` / `TSX`.
-
-Still assert each raw symbol exists in `app_module.INDEX_SYMBOLS`. The frontend
-names and backend-supported index set must not drift.
-
-#### Test C: optional default-result support in the shared factory
-
-Add source contracts around `setupTickerSuggestions()` that require:
-
-- optional default results and an optional default heading are read from
-  `options`;
-- a local helper renders defaults only when the list is non-empty;
-- the input `focus` handler renders defaults only when `inputEl.value.trim()` is
-  empty;
-- the existing `input` handler renders defaults, rather than calling `hide()`,
-  when text becomes empty and defaults exist;
-- a typed non-empty query still schedules `runSearch(query)`;
-- Escape and outside-click paths still call `hide()`;
-- the delegated `.search-row` click and Enter paths still call `onPick(symbol)`.
-
-Do not require default-result behavior from navbar or ledger callers. The new
-factory options must default to no recommendations, leaving those call sites
-byte-for-byte behaviorally unchanged.
-
-#### Test D: suggested heading renderer
-
-Add a narrow source test around `renderSearchResults()` that requires an
-optional heading argument and safe DOM construction:
-
-- create an element with class `.search-section-label` only when a heading was
-  supplied;
-- assign the heading through `textContent`, never `innerHTML`;
-- append the heading before result rows;
-- keep `message` rendering for `No matches` and `Search unavailable`;
-- keep all result rows built through `buildSearchRow()`.
-
-#### Test E: picker wires filtered defaults
-
-Replace `test_picker_renders_chips_for_custom_symbols_only` with contracts that
-require `setupComparePicker()` to:
-
-- filter the default recommendation list against `primarySymbol`;
-- pass the filtered list and `Suggested` heading to
-  `setupTickerSuggestions()`;
-- route suggested and remote picks through the same callback and
-  `addSymbol(symbol)` call;
-- clear `inputEl.value` after a successful pick attempt, as it does now.
-
-The default recommendation objects must have the same fields expected by
-`buildSearchRow()` (`symbol`, `name`, and suitable `type`/`exchange` values), so
-the dropdown reuses normal result rows without special click logic.
-
-#### Test F: every selection renders one removable chip
-
-Require `renderChips()` to iterate every symbol without a
-`quickPickSymbols.has(symbol)` skip. Require:
-
-- one `.compare-chip` per symbol;
-- one `.compare-chip-remove` button per chip;
-- benchmark-friendly label lookup with ticker fallback;
-- raw symbol retained in `chip.dataset.symbol`;
-- remove button calls `removeSymbol(symbol)`;
-- chips container `hidden` state is set from whether `symbols.length === 0`.
-
-Assert `quickPickBar`, `quickPickSymbols`, quick-pick active classes, and
-quick-pick `aria-pressed` handling are absent from `_picker_body()`.
-
-#### Test G: invalid, empty, boundary, and failure paths
-
-Keep or add source contracts for all of these paths:
-
-- empty symbol does nothing;
-- primary symbol shows `That symbol is already the chart` and is not added;
-- duplicate symbol does nothing;
-- exactly three symbols are allowed;
-- fourth symbol shows `Up to 3 comparisons` and is not added;
-- removal changes only the requested symbol and notifies once;
-- clearing empties all symbols, hides the chip row, and reloads without
-  benchmarks through the existing callback;
-- BFCache `pageshow` with `event.persisted` still calls `clearSymbols()`;
-- typed search with zero results still shows `No matches`;
-- network/HTTP/JSON search failure still shows `Search unavailable`;
-- a stale typed response cannot overwrite the current empty-input suggested
-  list because the existing query/value equality guard remains.
-
-For the last case, preserve the current check
-`inputEl.value.trim() !== query`; do not build a second request-generation
-system.
-
-#### Test H: compact desktop and mobile CSS
-
-Replace the current three-column and quick-control CSS assertions. Require:
-
-- `.compare-picker`, `.compare-label`, `.compare-search`, `.compare-chips`,
-  `.compare-chip`, `.compare-chip-remove`, and `.search-section-label` rules;
-- no `.compare-selections`, `.compare-quick-picks`, or `.compare-quick` rules;
-- desktop `.compare-picker` uses a two-column grid: intrinsic label plus
-  flexible search;
-- `.compare-chips` occupies the search column on a second row, wraps, and is
-  hidden through the global `[hidden]` contract when empty;
-- `.compare-search` remains `position: relative` and `min-width: 0`;
-- comparison results cannot exceed the available input width;
-- at `max-width: 600px`, the picker becomes one column so label, search, and
-  chips stack without viewport overflow;
-- no horizontal scrolling, `100vw`, fixed over-wide width, scroll snap, or
-  legacy momentum scrolling is added.
-
-#### Required red run
-
-Run before production edits:
-
-```bash
-source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q
-```
-
-Expected failures include permanent quick controls still present, old search
-copy, no default results or heading support, benchmark chip suppression still
-present, and old three-column CSS still present. If all new tests pass before
-implementation, they are not testing the intended change.
-
-### Production implementation plan
-
-#### 1. Extend shared result rendering in `static/js/common.js`
-
-Change `renderSearchResults(resultsEl, results, message)` to accept a fourth,
-optional heading argument. Clear the container as now. If heading is truthy,
-create a `div.search-section-label`, set `textContent`, and append it before the
-message/results. Preserve message and row rendering exactly otherwise.
-
-Do not use `innerHTML` for headings, symbols, names, or search results.
-
-#### 2. Extend `setupTickerSuggestions()` with optional defaults
-
-Read options with defaults equivalent to:
-
-```javascript
-const defaultResults = options.defaultResults || [];
-const defaultHeading = options.defaultHeading || null;
-```
-
-Add one local `showDefaults()` helper. It returns false without defaults;
-otherwise it calls `renderSearchResults(resultsEl, defaultResults, null,
-defaultHeading)` and returns true.
-
-Register an input `focus` listener that calls `showDefaults()` only when the
-trimmed value is empty. In the existing `input` listener, after clearing the
-timer, replace the empty-query `hide()` path with: show defaults if available,
-otherwise hide. Return immediately afterward.
-
-Do not change `runSearch()`, debounce timing, response checks, stale guard,
-error logging, Enter guard, delegated click handling, or outside-click logic.
-
-#### 3. Define comparison recommendations once
-
-Near `COMPARE_MAX`, define one constant recommendation list with the three
-objects required by `buildSearchRow()`. Keep raw Yahoo symbols in `symbol` and
-human labels in `name`. Use the same existing row component; do not invent
-benchmark-only markup or handlers.
-
-#### 4. Simplify `setupComparePicker()`
-
-Remove `quickPickBar` from its parameter list. Delete `quickPickSymbols`, the
-chip skip, active/`aria-pressed` repaint loop, and delegated quick-pick click
-handler.
-
-Create the per-page default list with the primary symbol removed. Pass it to
-`setupTickerSuggestions()` as `defaultResults` with `defaultHeading:
-"Suggested"`. Keep `scopeEl: inputEl` unless browser testing proves that the
-dropdown closes when clicking its own rows; the shared handler already treats
-`resultsEl` as inside.
-
-In `renderChips()`, clear the container, render one chip for every symbol, use a
-small lookup from the recommendation list for friendly benchmark text, and fall
-back to the raw symbol. Keep raw symbols in data attributes and callbacks. Set
-`chipsEl.hidden = symbols.length === 0` after rendering (or before the loop with
-the same result).
-
-Do not alter `addSymbol()`, `removeSymbol()`, `clearSymbols()`, `notify()`, or
-the page-local state model beyond ensuring empty-state chip visibility repaints.
-
-#### 5. Remove obsolete caller wiring
-
-In `static/js/main.js` and `static/js/stock.js`, remove only:
-
-```javascript
-quickPickBar: document.querySelector(".compare-quick-picks"),
-```
-
-Keep input/results/chips elements, primary stock symbol, chart reload callbacks,
-and dashboard Performance switching intact.
-
-#### 6. Simplify both templates
-
-Apply the final markup contract above to `templates/index.html` and
-`templates/stock.html`. Remove permanent benchmark buttons and
-`.compare-selections`. Put search before hidden chips. Update teaching comments
-to explain that focusing the field shows suggested benchmarks and all selected
-comparisons become removable chips.
-
-#### 7. Simplify CSS
-
-In `static/style.css`:
-
-- change `.compare-picker` to two columns (`auto minmax(0, 1fr)`);
-- keep current quiet `.compare-label` treatment;
-- remove `.compare-selections`, `.compare-quick-picks`, `.compare-quick`,
-  hover, active, and quick-pick focus rules;
-- retain `.compare-chip` and `.compare-chip-remove` styles;
-- make `.compare-chips` a wrapping flex row placed in grid column 2;
-- retain `.compare-search` as the dropdown anchor;
-- add `.search-section-label` near the shared search dropdown styles or the
-  comparison section, using sentence case, secondary text, the existing small
-  control size, and semibold weight; no all-caps tracking or decorative fill;
-- at `max-width: 600px`, switch `.compare-picker` to one column and let search
-  and chips occupy the full width;
-- keep `.compare-search .search-results` constrained to available width.
-
-### Verification after implementation
-
-Run focused tests:
-
-```bash
-source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q
-python -m pytest tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
-python -m pytest tests/test_compare.py -q
-```
-
-Run frontend/chart regressions:
-
-```bash
-python -m pytest \
-  tests/test_ui_redesign.py \
-  tests/test_chart_speed.py \
-  tests/test_prev_close.py \
-  tests/test_price_diff.py \
-  tests/test_chart_axis.py \
-  tests/test_web_refresh_wiring.py -q
-```
-
-If Node is available, run:
-
-```bash
-node --check static/js/common.js
-node --check static/js/main.js
-node --check static/js/stock.js
-```
-
-Node was not installed during the previous run. Its absence is not a pytest
-failure; report it honestly.
-
-The lead agent must then run:
-
-```bash
-python -m pytest
-```
-
-The last full-suite baseline before this superseding plan was `647 passed`.
-
-### Browser GUI approval checklist
-
-After all tests pass, stop for user approval. Verify both dashboard and stock
-pages in light/dark themes and desktop/phone widths:
-
-- resting picker shows only `Compare` and one search input;
-- focusing empty input opens `Suggested` with the three benchmarks;
-- suggestions use friendly names and recognizable raw symbols;
-- typing replaces local suggestions with remote results;
-- clearing text restores local suggestions;
-- Escape and outside clicks close the dropdown;
-- refocus opens it again;
-- mouse selection and Enter selection both work;
-- each benchmark and custom ticker creates one removable chip;
-- benchmark chips use friendly names;
-- selecting three mixed comparisons works and a fourth shows the existing
-  limit toast;
-- current stock does not appear in local suggestions on its detail page;
-- dashboard first selection switches to Performance;
-- removing all stock comparisons restores raw-price tools;
-- bottom comparison readout and date-only tooltip remain unchanged;
-- chip rows wrap without widening the chart card;
-- no permanent benchmark buttons remain;
-- no nested card, extra shadow, clipping, or horizontal page overflow appears.
-
-Do not commit or push until this new browser design is approved and the user
-explicitly requests git action.
-
-### Investigation log
-
-- Reviewed the shipped comparison implementation in commit `b3bc6fd` (PR #60):
-  comparison overlays, quick picks, search, and bottom readout already exist.
-- First refinement implemented a visible `Compare` label, permanent benchmark
-  buttons, custom-only chips, and responsive grid. New contracts failed red,
-  then passed; focused suites and the full suite passed (`647 passed`).
-- User reviewed the explanation before GUI approval and identified the core
-  remaining issue: permanent S&P 500, Nasdaq, and TSX controls make the picker
-  crowded.
-- Considered a generic `+ Add comparison` popover earlier, but rejected it
-  because it hides the feature and adds an extra click.
-- Chosen compromise: keep one always-visible search field and reveal benchmark
-  recommendations inside its existing dropdown on focus. This preserves
-  discoverability without permanent control clutter.
-- Verified `setupTickerSuggestions()` already owns safe row construction,
-  debounce, stale-response protection, click delegation, Enter selection,
-  Escape, outside click, no-match, and failure states (`static/js/common.js`,
-  current lines 533-672). Extend it instead of creating another dropdown.
-- Verified the current dirty picker implementation is in
-  `static/js/common.js` around current lines 681-793, both chart templates, and
-  `static/style.css` around current lines 1055-1156.
-- No backend or database change is needed.
-
-### Implementation progress
-
-- Superseded visible-button refinement: implemented and tested, but rejected
-  before browser approval. Its dirty changes were adapted into the compact
-  design rather than reverted.
-- Compact search design: plan complete and approved for handoff.
-- Compact search tests: written (Tests A–H; shared-factory contracts live in
-  `tests/test_ticker_suggestions.py`). Confirmed red against the old visible
-  works (10 failed before implementation).
-- Compact search production code: implemented across `static/js/common.js`,
-  `static/js/main.js`, `static/js/stock.js`, `templates/index.html`,
-  `templates/stock.html`, and `static/style.css`.
-- Compact search focused/full verification: `41 passed` (compare UI +
-  ticker suggestions), `47 passed` (tooltip/refresh/compare), `82 passed`
-  (layout/chart regressions), full suite `655 passed`. Node not installed;
-  `node --check` could not run.
-- Compact search browser approval: not started.
-- Git commit/push: not authorized and not performed.
-
-### Current blocker
-
-None. Ready to continue with the new failing tests. The new thread should treat
-the existing dirty changes as a base to edit, not as approved work and not as
-changes to revert wholesale.
-
-### Next steps for next agent
-
-1. Read this appended authoritative section before acting; the earlier plan is
-   superseded.
-2. Run `git status --short`. Preserve untracked `comparison.html` and
-   `ui-nomenclature-audit.html`; they are unrelated user files.
-3. Open `tests/test_compare_ui.py`. Replace the visible quick-pick assertions
-   with Tests A-H above. Add shared-factory option contracts either there or in
-   `tests/test_ticker_suggestions.py`; do not duplicate equivalent assertions.
-4. Run
-   `python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q`
-   and confirm the intended failures before production edits.
-5. Implement the seven production steps in order, beginning with
-   `renderSearchResults()` and `setupTickerSuggestions()` in
-   `static/js/common.js`.
-6. Run focused tests, regression groups, and the full suite exactly as listed.
-7. Update the status in this authoritative section with test counts. Do not
-   rewrite history above merely to make it look current.
-8. Stop for browser GUI approval. Do not commit or push.
+Do not commit or push until implementation passes pytest, the user approves the
+browser behavior, and the user explicitly authorizes git action.

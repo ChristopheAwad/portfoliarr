@@ -162,13 +162,80 @@ def test_stale_allocation_response_cannot_replace_active_slide():
     assert "if (isActiveAllocView(by))" in src
 
 
-def test_same_dimension_requests_only_accept_latest_response():
-    """An older request for the active key cannot overwrite a newer one."""
+def test_same_dimension_fetch_is_single_flighted():
+    """A dimension never holds two in-flight requests. The 60s poll, a boot
+    restore, and a carousel flip can all fire within one slow round-trip —
+    every caller after the first must share the same promise, or a slow
+    network triples the number of Yahoo-backed allocation round-trips.
+    ROOT CAUSE: the old generation counter still let concurrent callers
+    hit the endpoint; the newest reply won, but the requests themselves
+    duplicated."""
     src = _read_js("static/js/main.js")
-    assert "const allocRequestGenerations = {};" in src
-    assert "allocRequestGenerations[by] = requestGeneration;" in src
-    assert "function isLatestAllocRequest(by, requestGeneration)" in src
-    assert src.count("isLatestAllocRequest(by, requestGeneration)") >= 3
+    assert "const allocInFlight = {};" in src, \
+        "main.js must keep one in-flight promise per dimension"
+    assert "if (allocInFlight[by]) return allocInFlight[by];" in src, \
+        "exported callers must join (and share) the in-flight fetch"
+    assert "allocInFlight[by] = flight;" in src, \
+        "the fetch must register its own promise under the dimension key"
+    assert ".finally" in src, \
+        "the in-flight slot must be released when the fetch settles"
+    assert "delete allocInFlight[by]" in src, \
+        "a settled fetch must empty its slot so the next poll refetches"
+    assert "isLatestAllocRequest" not in src, \
+        "the old generation counter is gone, replaced by the promise map"
+
+
+def test_refetch_keeps_last_painable_payload():
+    """A fetch that fails AFTER a previous success must keep the old chart
+    painted (soft 'refreshing' note dropped, donut untouched) instead of
+    blanking it. only a first-load failure shows the unavailable message.
+    ROOT CAUSE: the catch path called paintAllocation([], []), which
+    destroyed a perfectly valid donut on any transient network blip."""
+    src = _read_js("static/js/main.js")
+    assert "paintAllocation([], [])" not in src, \
+        "the failure path must NOT fabricate an empty payload"
+    assert "lastAllocPayload" in src, \
+        "main.js must remember the last painted payload to restore it"
+    assert "lastAllocPayload.by === by" in src, \
+        "a stale payload is reusable ONLY for its own dimension — the " \
+        "catch must gate on the dimension, not any last payload"
+    assert '"unavailable"' in src, \
+        "a first-load failure must show the unavailable state"
+    assert '"stale"' in src, \
+        "warmed revalidation must surface a soft refreshing state"
+    assert '"empty"' in src, \
+        "a genuine empty reply must show the empty state, not an error"
+    assert 'setAllocState("empty")' in src, \
+        "a same-dimension honest empty keeps its message on revalidation " \
+        "failure, instead of being blanked or mislabeled ready"
+
+
+def test_stale_dimension_paints_its_cached_donut_first():
+    """A dimension whose cache is stale (or mid-revalidate) must repaint its
+    OWN cached payload before the network answers. ROOT CAUSE fixed here: the
+    first version only set a 'refreshing' note and left the PREVIOUS slide's
+    donut on the canvas under the new label until the reply landed."""
+    src = _read_js("static/js/main.js")
+    assert "paintAllocation(entry.data.slices, entry.data.excluded, by)" in src, \
+        "fetchAllocDimension must repaint this dimension's cached payload " \
+        "immediately, before any network wait"
+    fetch = src.split("async function fetchAllocDimension(by)", 1)[1]
+    fetch = fetch.split("\n}", 1)[0]
+    # The cached-payload repaint must run before the in-flight join, so a
+    # re-flip onto an in-flight dimension still shows that dimension's donut.
+    paint_pos = fetch.find("paintAllocation(entry.data.slices")
+    inflight_pos = fetch.find("if (allocInFlight[by]) return")
+    assert paint_pos != -1 and inflight_pos != -1 and paint_pos < inflight_pos, \
+        "the cached payload must be painted before the single-flight join"
+
+
+def test_stale_revalidation_only_notes_a_nonempty_donut():
+    """A stale revalidation must show the 'refreshing' note only when the
+    cached donut actually has wedges — an honest empty keeps its empty
+    message instead of revealing a blank 220px box every 60s."""
+    src = _read_js("static/js/main.js")
+    assert "cached.data.slices.length > 0" in src, \
+        "the refreshing note must be gated on a non-empty cached payload"
 
 
 def test_allocation_tooltip_reads_the_current_chart_label():
@@ -256,3 +323,86 @@ def test_inactive_allocation_dots_use_visible_theme_token():
     assert "var(--border)" not in marker_rule
     assert "background: var(--text-secondary);" in marker_rule
     assert "background: var(--text-primary);" in hover_rule
+
+
+# ---------------------------------------------------------------------------
+# Donut states: explicit loading / ready / empty / unavailable / stale
+# ---------------------------------------------------------------------------
+
+def test_donut_card_has_status_line():
+    """The donut card must ship a status line covering every non-ready
+    state — loading, empty, unavailable, and 'refreshing' — instead of
+    relying on the box itself (which is hidden until first data)."""
+    html = _read_html(app.test_client())
+    assert 'id="alloc-status"' in html
+    assert 'class="empty-state"' in html
+    assert 'role="status" aria-live="polite"' in html
+
+
+def test_donut_box_starts_hidden_until_data_lands():
+    """The donut box must start hidden in the template so no empty canvas
+    sliver or wrong-sized donut flashes before the first payload arrives.
+    Presence of `hidden` (not style.display) is the contract — main.js
+    toggles the attribute, and the global [hidden] rule hides it."""
+    html = _read_html(app.test_client())
+    box = html.split('<div class="donut-box"', 1)[1].split("</div>", 1)[0]
+    assert "hidden" in box, \
+        "the donut box must ship with the hidden attribute on first paint"
+    assert 'id="allocationChart"' in box
+
+
+def test_donut_status_opens_loading():
+    """The status line must announce the loading state by default so the
+    first paint is never silent."""
+    html = _read_html(app.test_client())
+    assert "Loading allocation" in html
+
+
+def test_canvas_fills_donut_box_css():
+    """The canvas must fill its parent box: Chart.js measures its parent to
+    pick a canvas size, and a hidden-to-shown transition needs the full box
+    width/height or the donut renders a sliver."""
+    css = _read_css()
+    rule = css.split(".donut-box > canvas {", 1)[1].split("}", 1)[0]
+    assert "display: block;" in rule
+    assert "width: 100% !important;" in rule
+    assert "height: 100% !important;" in rule
+
+
+def test_main_js_defines_alloc_state_machine():
+    """main.js must own the five donut states with one setter. The ready
+    state reveals the box; every other state surfaces an explicit message
+    through the status line."""
+    src = _read_js("static/js/main.js")
+    assert "function setAllocState(" in src
+    for state in ['"loading"', '"ready"', '"empty"',
+                  '"unavailable"', '"stale"']:
+        assert state in src, f"setAllocState must handle {state}"
+    assert "allocStatusEl.textContent" in src
+    assert "donutBoxEl.hidden" in src
+
+
+def test_main_js_ready_state_resizes_revealed_donut():
+    """Revealing the box (hidden → visible) changes the canvas's real size,
+    so the ready state must re-measure the chart after layout settles —
+    requestAnimationFrame, then resize."""
+    src = _read_js("static/js/main.js")
+    rfd = src.split('setAllocState("ready")', 1)[0]
+    assert "requestAnimationFrame" in src, \
+        "reveal must defer the resize to after layout"
+    assert "resize" in src, \
+        "reveal must re-measure the chart after the box becomes visible"
+
+
+def test_summary_refresh_is_single_flighted():
+    """refreshPortfolioSummary must never run two overlapping cycles: the
+    boot call, the unmask call, and the 60s poll can all stack. The guard
+    drops the new call and lets the in-flight one serve this cycle."""
+    src = _read_js("static/js/main.js")
+    assert "let summaryInflight = null;" in src
+    assert "if (summaryInflight) return summaryInflight;" in src
+    assert "summaryInflight = null;" in src
+    body = src.split("async function refreshPortfolioSummary()", 1)[1]
+    body = body.split("\n}", 1)[0]
+    assert "summaryInflight = null" in body, \
+        "the guard must be released inside the function, not just at module level"
