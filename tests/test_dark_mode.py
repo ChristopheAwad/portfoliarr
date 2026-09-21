@@ -121,6 +121,16 @@ def test_css_dark_redefines_card_bg():
         ".dark block doesn't redefine --card-bg"
 
 
+def test_dark_date_input_uses_native_dark_controls():
+    """Dark date inputs must request visible native browser controls."""
+    css_path = PROJECT_ROOT / "static" / "style.css"
+    css = css_path.read_text()
+    assert re.search(
+        r'\.dark\s+input\[type="date"\]\s*\{[^}]*color-scheme:\s*dark',
+        css,
+    ), "dark date inputs don't request the browser's dark control scheme"
+
+
 # ── 5. Hardcoded color cleanup ───────────────────────────────────────
 
 def test_navbar_uses_token_not_hardcoded_white():
