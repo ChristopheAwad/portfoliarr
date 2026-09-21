@@ -2,9 +2,9 @@
 
 ## Status
 
-IMPLEMENTED 2026-09-21. Tests written first (19 new in
+IMPLEMENTED 2026-09-21. Tests written first (20 new in
 `tests/test_ledger_quick_sell.py`), production code in `static/js/ledger.js`
-plus a keyboard `:focus-within` reveal in `static/style.css`, and all 731
+plus a keyboard `:focus-within` reveal in `static/style.css`, and all 732
 tests pass. Awaiting the user's browser GUI approval before any commit or push.
 
 This plan replaces the shipped Feature #9 handoff. Feature #9 shipped in PR

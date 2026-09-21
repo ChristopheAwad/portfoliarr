@@ -488,6 +488,13 @@ function buildTxRow(tx) {
     // the delegated listener looks the transaction up by id in
     // lastTransactions, so these buttons carry no row data themselves.
     const actionsCell = document.createElement("td");
+    // Keyboard parity: the detail row's ticker is plain text (unlike the
+    // group row's ticker LINK), so nothing in this row is focusable while
+    // the buttons are visibility:hidden — and hidden buttons are not in
+    // the tab order. This cell is the tab stop that makes the CSS
+    // `.ledger-row:focus-within` reveal fire, after which Tab reaches the
+    // now-visible edit/delete buttons.
+    actionsCell.tabIndex = 0;
     const editBtn = document.createElement("button");
     editBtn.className = "tx-action-btn edit";
     editBtn.append(icon("pencil"));

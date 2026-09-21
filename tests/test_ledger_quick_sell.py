@@ -292,3 +292,15 @@ def test_sell_action_reachable_by_keyboard(css):
     assert re.search(r"\.tx-action-btn:focus-visible", css), (
         "the focused action must show a visible focus indicator"
     )
+
+
+def test_detail_row_has_a_focusable_tab_stop(js):
+    """The :focus-within reveal is only usable if the row can receive
+    focus. Group rows have the ticker link; detail rows have no focusable
+    content of their own, so their actions cell must be an explicit tab
+    stop — otherwise the keyboard fix is dead code for edit/delete."""
+    block = function_block(js, "buildTxRow")
+    assert "actionsCell.tabIndex = 0" in block, (
+        "buildTxRow must give its actions cell a tab stop so :focus-within "
+        "can reveal the edit/delete buttons"
+    )
