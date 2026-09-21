@@ -1052,51 +1052,26 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
-/* Comparison controls shared by the dashboard and stock charts. The row
-   wraps naturally on phones; the search wrapper anchors the existing
-   absolutely-positioned suggestion dropdown. */
+/* Comparison controls shared by the dashboard and stock charts. A quiet
+   inline tool inside the chart card: a label and one search field. The
+   field's dropdown offers benchmark suggestions on focus; every selection
+   becomes a removable chip on the row below, directly under the field. */
 .compare-picker {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: 10px;
     margin-top: 12px;
 }
 
-.compare-quick-picks,
-.compare-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.compare-quick {
-    padding: 5px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: transparent;
+.compare-label {
     color: var(--text-secondary);
     font-size: 12px;
-    cursor: pointer;
-}
-
-.compare-quick:hover { color: var(--text-primary); }
-
-.compare-quick.active {
-    color: var(--text-primary);
-    border-color: var(--accent);
-    background: var(--bg-inset);
-}
-
-.compare-quick:focus-visible,
-.compare-chip-remove:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
+    font-weight: 600;
 }
 
 .compare-search {
     position: relative;
-    flex: 1 1 220px;
     min-width: 0;
 }
 
@@ -1116,7 +1091,28 @@ a.logo { text-decoration: none; }
     box-shadow: var(--focus-ring);
 }
 
-.compare-search .search-results { min-width: 280px; }
+.compare-search .search-results { min-width: min(280px, 100%); }
+
+/* The chips row occupies the search column on a second grid row, so
+   selections hang beneath the field and wrap left-to-right as they stack. */
+.compare-chips {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* The quiet "Suggested" heading above the benchmark rows in the comparison
+   dropdown — sentence case like every UI label here, never uppercase or
+   tracked lettering. */
+.search-section-label {
+    padding: 8px 14px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
 
 .compare-chip {
     display: inline-flex;
@@ -1142,6 +1138,11 @@ a.logo { text-decoration: none; }
 }
 
 .compare-chip-remove:hover { color: var(--red-neg); }
+
+.compare-chip-remove:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
 
 /* Comparison readout — the chart's bottom legend while comparison mode is
    active. Each line becomes one row of colored marker → performance
@@ -2800,11 +2801,22 @@ input[type="date"]::-moz-placeholder {
     display: none;
 }
 
-/* Comparison readout on phones: rows wrap naturally — marker, % and name
+/* Comparison controls and readout on phones: the picker stacks to one full
+   column (label, then search, then chips), so nothing clips or overflows
+   the viewport. The readout's rows wrap naturally — marker, % and name
    always stay on ONE row each (no mid-row break), so the number remains
-   directly beside its color. Rows get a slightly tighter rhythm than
-   desktop but a bigger tap target on the whole container. */
+   directly beside its color with a slightly tighter rhythm than desktop. */
 @media (max-width: 600px) {
+    .compare-picker {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .compare-search,
+    .compare-chips {
+        grid-column: 1;
+    }
+
     .comparison-readout {
         column-gap: 14px;
         row-gap: 8px;

@@ -532,10 +532,21 @@ function buildSearchRow(result) {
 
 // Fill a dropdown: one row per hit, plus (optionally) a status line
 // ("No matches", "Search unavailable") that takes the dropdown's space so
-// it never silently vanishes. Dropdown-agnostic: the container is a
-// parameter, so the factory can serve both the navbar and the ledger.
-function renderSearchResults(resultsEl, results, message) {
+// it never silently vanishes, plus an OPTIONAL heading label (e.g. the
+// comparison picker's "Suggested" above its benchmark rows). The heading
+// is built with createElement + textContent like every other piece of this
+// dropdown — our code supplies the text, but one safe-DOM habit everywhere
+// is easier to trust than two. Dropdown-agnostic: the container is a
+// parameter, so the factory can serve the navbar, the ledger, and the
+// comparison picker.
+function renderSearchResults(resultsEl, results, message, heading) {
     resultsEl.textContent = "";
+    if (heading) {
+        const section = document.createElement("div");
+        section.className = "search-section-label";
+        section.textContent = heading;
+        resultsEl.append(section);
+    }
     if (message) {
         const note = document.createElement("div");
         note.className = "search-empty";
@@ -563,9 +574,19 @@ function renderSearchResults(resultsEl, results, message) {
 //                           the browser's default runs — which, for an
 //                           input inside a <form>, is submit. Each call
 //                           site picks what fits its flow.
+//   defaultResults        — optional rows to show whenever the field is
+//                           FOCUSED AND EMPTY (the comparison picker offers
+//                           benchmarks here). Defaults to none, so the
+//                           navbar and ledger call sites behave exactly as
+//                           before. Rows must match buildSearchRow's shape.
+//   defaultHeading        — optional section label above defaultResults
+//                           (e.g. "Suggested"). Ignored when no defaults
+//                           are supplied.
 function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
     const scopeEl = options.scopeEl || inputEl;
     const pickTypedTextOnEnter = options.pickTypedTextOnEnter === true;
+    const defaultResults = options.defaultResults || [];
+    const defaultHeading = options.defaultHeading || null;
 
     // Per-instance debounce timer — two dropdowns on one page cannot reset
     // each other's pending searches.
@@ -574,6 +595,14 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
     function hide() {
         resultsEl.hidden = true;
         resultsEl.textContent = "";
+    }
+
+    // Paint the local recommendation rows. Returns false when no defaults
+    // were supplied, so callers fall back to the old hide() behavior.
+    function showDefaults() {
+        if (defaultResults.length === 0) return false;
+        renderSearchResults(resultsEl, defaultResults, null, defaultHeading);
+        return true;
     }
 
     // One search cycle: HTTP GET -> check status -> parse JSON -> paint.
@@ -612,10 +641,19 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
         const query = inputEl.value.trim();
         clearTimeout(searchTimer); // reset the debounce window
         if (!query) {
-            hide();
+            // The field went empty while focused: show local defaults when
+            // the caller supplied them (the comparison picker), otherwise
+            // close like the navbar/ledger always did.
+            if (!showDefaults()) hide();
             return;
         }
         searchTimer = setTimeout(() => runSearch(query), DEBOUNCE_MS);
+    });
+
+    // Focusing an EMPTY field reveals local defaults before the user types
+    // anything; a field that already has text keeps showing its search.
+    inputEl.addEventListener("focus", () => {
+        if (inputEl.value.trim() === "") showDefaults();
     });
 
     // One keydown handler, two keys that mean "stop browsing suggestions":
@@ -672,14 +710,26 @@ function setupTickerSuggestions(inputEl, resultsEl, onPick, options = {}) {
 }
 
 // The comparison picker shared by the dashboard and stock page. It reuses
-// the suggestion factory above. Its selection is PAGE-LOCAL: it starts empty
-// on every navigation/reload and dies with the page, so a comparison can
-// never leak a ghost overlay onto a later page view. It enforces the
+// the suggestion factory above: focusing the search field reveals benchmark
+// recommendations, typing swaps them for /api/search results, and every
+// selection becomes a removable chip. Its selection is PAGE-LOCAL: it starts
+// empty on every navigation/reload and dies with the page, so a comparison
+// can never leak a ghost overlay onto a later page view. It enforces the
 // backend's three-line limit before a request is made.
 const COMPARE_MAX = 3;
 
+// The three benchmark recommendations offered inside the comparison search
+// dropdown. Raw Yahoo symbols pair with friendly `name` labels; `type` fills
+// the normal search-row meta text ("Index"). The stock detail page filters
+// out its own symbol before wiring these in.
+const COMPARE_RECOMMENDATIONS = [
+    { symbol: "^GSPC", name: "S&P 500", type: "Index" },
+    { symbol: "^IXIC", name: "Nasdaq", type: "Index" },
+    { symbol: "^GSPTSE", name: "TSX", type: "Index" },
+];
+
 function setupComparePicker({
-    inputEl, resultsEl, chipsEl, quickPickBar,
+    inputEl, resultsEl, chipsEl,
     primarySymbol = null, onChange,
 }) {
     if (!inputEl || !resultsEl || !chipsEl) return null;
@@ -697,26 +747,32 @@ function setupComparePicker({
             chip.className = "compare-chip";
             chip.dataset.symbol = symbol;
 
+            const rec = COMPARE_RECOMMENDATIONS.find(
+                (item) => item.symbol === symbol,
+            );
+            // One friendly display name feeds both the visible chip label
+            // and the remove button's accessible name, so the button never
+            // reads "Remove ^GSPC comparison" beside a chip that says
+            // "S&P 500".
+            const displayName = rec ? rec.name : symbol;
+
             const label = document.createElement("span");
-            label.textContent = symbol;
+            label.textContent = displayName;
 
             const remove = document.createElement("button");
             remove.type = "button";
             remove.className = "compare-chip-remove";
-            remove.setAttribute("aria-label", `Remove ${symbol} comparison`);
+            remove.setAttribute(
+                "aria-label",
+                `Remove ${displayName} comparison`,
+            );
             remove.append(icon("x"));
             remove.addEventListener("click", () => removeSymbol(symbol));
             chip.append(label, remove);
             chipsEl.append(chip);
         }
-
-        if (quickPickBar) {
-            quickPickBar.querySelectorAll("[data-symbol]").forEach((button) => {
-                const active = symbols.includes(button.dataset.symbol);
-                button.classList.toggle("active", active);
-                button.setAttribute("aria-pressed", String(active));
-            });
-        }
+        // An empty selection list hides the chip row entirely.
+        chipsEl.hidden = symbols.length === 0;
     }
 
     function notify() {
@@ -764,20 +820,21 @@ function setupComparePicker({
         clearSymbols();
     });
 
+    // Benchmarks are local suggestions inside the existing dropdown: the
+    // primary symbol is never recommendable on its own detail page (typed
+    // results still hit addSymbol's rejection as a backstop).
+    const defaults = COMPARE_RECOMMENDATIONS.filter(
+        (item) => item.symbol !== primarySymbol,
+    );
+
     setupTickerSuggestions(inputEl, resultsEl, (symbol) => {
         addSymbol(symbol);
         inputEl.value = "";
-    }, { scopeEl: inputEl });
-
-    if (quickPickBar) {
-        quickPickBar.addEventListener("click", (event) => {
-            const button = event.target.closest("[data-symbol]");
-            if (!button) return;
-            const symbol = button.dataset.symbol;
-            if (symbols.includes(symbol)) removeSymbol(symbol);
-            else addSymbol(symbol);
-        });
-    }
+    }, {
+        scopeEl: inputEl,
+        defaultResults: defaults,
+        defaultHeading: "Suggested",
+    });
 
     renderChips();
     return { getSymbols, addSymbol, removeSymbol, clearSymbols };

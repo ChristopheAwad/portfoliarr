@@ -683,7 +683,6 @@ const comparePicker = setupComparePicker({
     inputEl: document.getElementById("compare-input"),
     resultsEl: document.getElementById("compare-results"),
     chipsEl: document.getElementById("compare-chips"),
-    quickPickBar: document.querySelector(".compare-quick-picks"),
     onChange(symbols) {
         if (portfolioChartHandle) portfolioChartHandle.reload();
 
