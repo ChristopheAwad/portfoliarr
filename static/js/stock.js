@@ -38,6 +38,25 @@ let symbolKnown = true;
 // "5D" to match the default button.
 let activePeriod = "5D";
 
+// Paint the stock header's change pill. The period leads so the timeframe
+// reads first, then the dollar move and its percentage:
+//   "5D: +$4.27 (+2.34%)"   "5D: -$4.27 (-2.34%)"   "5D: +$4.27"
+// The amount uses the ABSOLUTE value behind an explicit sign, so a down
+// move is "-$4.27", never the confusing "$-4.27". A null pct (zero first
+// bar — no base to divide by) drops the parenthetical and keeps the dollar
+// move. The display is native, so a plain "$" is correct for both USD and
+// CAD; the big price above carries the currency code.
+function paintPeriodChange(el, period, value, pct) {
+    const sign = value >= 0 ? "+" : "-";
+    const amount = `${sign}$${formatNumber(Math.abs(value))}`;
+    el.textContent = pct === null
+        ? `${period}: ${amount}`
+        : `${period}: ${amount} (${sign}${pct.toFixed(2)}%)`;
+    // Green for a gain, red for a loss — one call each, same as paintChange.
+    el.classList.toggle("pos", value >= 0);
+    el.classList.toggle("neg", value < 0);
+}
+
 // Inline error for the action buttons (cleared on every fresh attempt —
 // the tx-form's error-line pattern).
 function showActionError(text) {
@@ -88,16 +107,16 @@ async function refreshStockQuote() {
         stockPriceEl.textContent =
             `${formatPrice(quote.price)} ${quote.currency}`;
 
-        // The day-change pill: "+2.30 (+1.02%) Today". The quote's change /
-        // change_pct are exactly the pill's inputs — shared paintChange,
-        // same pos/neg colouring as the dashboard's totals.
+        // The day-change pill: "Today: +$2.30 (+1.02%)". The quote's change
+        // / change_pct are exactly the pill's inputs — the same stock-only
+        // painter every other period uses, so the shape never changes.
         // Only paint on 1D: the chart's onPeriodData callback owns the
         // pill for every other period, showing the period return instead.
         // On 1D, the quote poll overwrites the callback's chart-derived
         // value with the more accurate dollar-based daily move.
         if (activePeriod === "1D") {
-            paintChange(stockDayChangeEl, quote.change, quote.change_pct,
-                        "Today");
+            paintPeriodChange(stockDayChangeEl, "Today",
+                              quote.change, quote.change_pct);
         }
 
         // Feed the previous close into the chart handle so the 1D view
@@ -355,12 +374,17 @@ const stockChartHandle = setupTimeframeChart({
     comparisonReadout: document.getElementById("stock-comparison-readout"),
     defaultPeriod: "5D", // must match the `active` button in stock.html
     // When the chart loads new period data, compute the period return
-    // and paint the change pill. The quote poll will overwrite the pill
-    // on 1D with the dollar-based "Today" figure shortly after.
+    // and paint the change pill. Both units show in the stock pill's
+    // "period: +$amount (+pct%)" shape, so every timeframe reads the
+    // same way. A zero first bar has no percentage base — degrade to
+    // the amount alone rather than dividing by zero. The quote poll
+    // will overwrite the pill on 1D with the more accurate
+    // dollar-based "Today" figure shortly after.
     onPeriodData({ firstValue, lastValue, period }) {
         activePeriod = period;
-        const pct = ((lastValue - firstValue) / firstValue) * 100;
-        paintChange(stockDayChangeEl, pct, null, period);
+        const change = lastValue - firstValue;
+        const pct = firstValue !== 0 ? (change / firstValue) * 100 : null;
+        paintPeriodChange(stockDayChangeEl, period, change, pct);
     },
 });
 
