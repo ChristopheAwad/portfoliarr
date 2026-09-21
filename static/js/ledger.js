@@ -164,6 +164,14 @@ let editingTxId = null;
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
 
+// True once a refresh cycle fails AFTER rows have painted. The cached
+// lastTransactions then still describe a quote the page has stopped
+// trusting, so every later render path (header sort, column drag) must keep
+// suppressing live cells and Quick Sell actions until a fresh fetch
+// succeeds. Without this, a sort after a failed poll would resurrect the
+// stale actions markLedgerUnavailable just removed.
+let ledgerStale = false;
+
 // The Price field's accurate-value state — the split between what the EYE
 // sees and what the LEDGER stores:
 //   autofillPrice — the FULL-precision price behind a cosmetic 2-decimal
@@ -413,7 +421,7 @@ function buildTxRow(tx) {
         `${formatNumber(tx.price_display ?? tx.price)} ${displayCurrency}`;
 
     // --- Live cells (present only when decorated) ---
-    const hasLive = tx.price_now !== undefined;
+    const hasLive = !ledgerStale && tx.price_now !== undefined;
 
     const valueCell = document.createElement("td");
     valueCell.className = "num ledger-live";
@@ -480,6 +488,13 @@ function buildTxRow(tx) {
     // the delegated listener looks the transaction up by id in
     // lastTransactions, so these buttons carry no row data themselves.
     const actionsCell = document.createElement("td");
+    // Keyboard parity: the detail row's ticker is plain text (unlike the
+    // group row's ticker LINK), so nothing in this row is focusable while
+    // the buttons are visibility:hidden — and hidden buttons are not in
+    // the tab order. This cell is the tab stop that makes the CSS
+    // `.ledger-row:focus-within` reveal fire, after which Tab reaches the
+    // now-visible edit/delete buttons.
+    actionsCell.tabIndex = 0;
     const editBtn = document.createElement("button");
     editBtn.className = "tx-action-btn edit";
     editBtn.append(icon("pencil"));
@@ -617,7 +632,7 @@ function buildGroupRow(ticker, txs) {
     priceCell.textContent = "—";
 
     // --- Live cells (all-or-nothing per group, like the detail rows) ---
-    const hasLive = txs[0].price_now !== undefined;
+    const hasLive = !ledgerStale && txs[0].price_now !== undefined;
 
     const valueCell = document.createElement("td");
     valueCell.className = "num ledger-live";
@@ -688,12 +703,35 @@ function buildGroupRow(ticker, txs) {
 
     // The actions column's 11th cell. A group is an aggregate, not a
     // record — editing/deleting INDIVIDUAL transactions belongs to the
-    // detail rows — but the group owns exactly ONE action of its own:
-    // deleting EVERY transaction of this ticker (the bulk verb). The
-    // confirmation that guards it (type-the-ticker, in the delegated
-    // listener below) is deliberately stronger than the single row's
-    // confirm dialog: this destroys many immutable facts at once, no undo.
+    // detail rows — but the group owns two actions of its own:
+    //   1. Quick Sell — prepare (never submit) a full-position SELL of this
+    //      ticker in the form above. Only offered when the group is
+    //      actually long (net qty above the flat tolerance) AND quoted this
+    //      cycle: there are no owned shares to sell in a closed or short
+    //      group, and an unquoted ticker has no honest price to prefill.
+    //      The price is the NATIVE quote (price_now), never the CAD-
+    //      converted display — the ledger stores native facts.
+    //   2. Delete-all — the bulk verb. Its type-the-ticker confirmation
+    //      (delegated listener below) is deliberately stronger than the
+    //      single row's confirm dialog: it destroys many immutable facts
+    //      at once, no undo.
     const actionsCell = document.createElement("td");
+    const priceNow = txs[0].price_now;
+    const canSell =
+        !ledgerStale && netQty > 1e-9
+        && Number.isFinite(priceNow) && priceNow > 0;
+    if (canSell) {
+        const sellBtn = document.createElement("button");
+        // type="button" is defensive only: the button lives in a table
+        // cell, not a form — but an explicit type can never accidentally
+        // submit anything.
+        sellBtn.type = "button";
+        sellBtn.className = "tx-action-btn ticker-sell-btn";
+        sellBtn.textContent = "Sell";
+        sellBtn.title = `Sell all ${ticker} shares`;
+        sellBtn.dataset.ticker = ticker; // which group this button is
+        actionsCell.append(sellBtn);
+    }
     const deleteTickerBtn = document.createElement("button");
     // Classes: .tx-action-btn.delete borrows the detail rows' delete
     // styling; .ticker-delete-btn is the JS hook that keeps the delegated
@@ -772,6 +810,52 @@ function exitEditMode() {
     txSubmitBtn.textContent = "Log";
     txEditingEl.hidden = true;
     txErrorEl.hidden = true;
+}
+
+// Prepare the form for a full-position SELL of one ticker. This is the
+// group row's Quick Sell action — it FILLS the existing form and stops.
+// The user reviews the prepared facts and presses Log, so the ledger never
+// records a sale the user did not see.
+//
+// Why the facts are re-derived HERE rather than read off the button: a
+// click can race the 60s poll, and the button carries only the ticker. The
+// cached transaction rows are the freshest successful fetch, so the exact
+// net quantity (buys add, sells subtract — the same fold as groupSortKeys)
+// and the exact native price_now come from there. If the group is no longer
+// long or no longer quoted, the helper does nothing — a stale or vanished
+// button can never prepare an impossible sale.
+//
+// exitEditMode() runs FIRST so the prepared sale is a NEW transaction
+// (POST), not a correction of whatever row was open before (PUT). It also
+// resets the form, re-enables the ticker input, restores "Log", and hides
+// old errors in one place.
+//
+// Precision: the field displays two decimals (the ledger's paint rule) but
+// autofillPrice keeps the exact quote — the same display-vs-stored split
+// the dropdown and deep-link prefills use. A user edit still wins at submit
+// (priceEdited flips on the input event; this programmatic fill leaves it
+// false).
+function prepareFullSale(ticker, txs) {
+    // groupSortKeys is the documented single source for the group's exact
+    // net quantity — reusing it here means the prepared sale can never
+    // drift from the number the row displays.
+    const { netQty } = groupSortKeys(txs);
+    const livePrice = txs[0] ? txs[0].price_now : undefined;
+    if (!(netQty > 1e-9) || !Number.isFinite(livePrice) || !(livePrice > 0)) {
+        return; // position gone or quote missing — nothing to prepare
+    }
+
+    exitEditMode();
+    txForm.elements.ticker.value = ticker;
+    txForm.elements.date.value = todayLocalISO();
+    txForm.elements.qty.value = netQty;
+    txForm.elements.type.value = "SELL";
+    autofillPrice = livePrice;
+    priceEdited = false;
+    txForm.elements.price.value = livePrice.toFixed(2);
+    // The group row can sit far below the form — bring the prepared form
+    // to the user instead of leaving the fill off-screen.
+    txForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 // Rebuild the tbody: one collapsed summary row per ticker, followed by that
@@ -1111,6 +1195,20 @@ ledgerBody.addEventListener("click", async (event) => {
         return;
     }
 
+    // --- Quick Sell (group rows): prepare a full-position SELL in the form
+    // above. Checked BEFORE the delete branches below for the same reason
+    // the bulk delete is checked before the single-row delete: the action
+    // is a prepare-only fill, and its click must never fall through to any
+    // destructive branch. The ticker's CURRENT cached rows are the source
+    // of the exact quantity and price (prepareFullSale rechecks both).
+    const sellBtn = event.target.closest(".ticker-sell-btn");
+    if (sellBtn) {
+        const ticker = sellBtn.dataset.ticker;
+        const txs = lastTransactions.filter((t) => t.ticker === ticker);
+        prepareFullSale(ticker, txs);
+        return;
+    }
+
     // --- Bulk delete (group rows): wipe EVERY transaction of one ticker.
     // Checked BEFORE the single-row delete below, because this button
     // ALSO carries the .delete class (shared styling) — the generic
@@ -1222,10 +1320,23 @@ ledgerBody.addEventListener("click", async (event) => {
 // Degrade live cells to "—" when a refresh cycle fails entirely but fact
 // rows from an earlier cycle are still on screen (mirrors the watchlist's
 // markWatchlistUnavailable).
+//
+// The rendered Quick Sell actions go with them: each one was built from a
+// live quote, and that quote is exactly what this failure invalidated.
+// Leaving them clickable would let the user prepare a sale at a price the
+// page just stopped trusting. Removing the buttons removes only the
+// unclicked action — a form the user already prepared holds editable input
+// awaiting review and is deliberately left untouched. Edit and both delete
+// actions remain (they need no live data), and the next successful render
+// recreates eligible Sell actions on its own.
 function markLedgerUnavailable() {
+    ledgerStale = true;
     ledgerBody.querySelectorAll(".ledger-live").forEach((cell) => {
         cell.textContent = "—";
         cell.classList.remove("pos", "neg");
+    });
+    ledgerBody.querySelectorAll(".ticker-sell-btn").forEach((button) => {
+        button.remove();
     });
 }
 
@@ -1241,6 +1352,7 @@ async function refreshLedger() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
         lastTransactions = transactions; // cache for action-click lookups
+        ledgerStale = false; // fresh quotes — live cells and Sell may return
         renderLedger(transactions);
     } catch (err) {
         console.error("ledger refresh failed:", err);
