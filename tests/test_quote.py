@@ -76,6 +76,10 @@ def test_quote_with_date_returns_historical_price(client, fake_market):
     quote dict, which has no bar for a past date."""
     fake_market.prices_on[("AAPL", "2026-08-31")] = 123.45
     body = client.get("/api/quote/AAPL?date=2026-08-31").get_json()
+    assert set(body) == {"symbol", "price", "date"}, (
+        "the dated reply is deliberately narrower than the live quote — a "
+        "historical close has no previous_close/change fields"
+    )
     assert body["symbol"] == "AAPL"
     assert body["price"] == 123.45
     assert body["date"] == "2026-08-31"

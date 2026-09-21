@@ -190,7 +190,7 @@ def test_date_change_listener_calls_prefill():
     date."""
     src = _read("static/js/ledger.js")
     assert re.search(
-        r'txDateInput\.addEventListener\("change",[\s\S]*?'
+        r'txDateInput\.addEventListener\("change",[\s\S]{0,300}?'
         r'prefillPriceForTicker\(\)',
         src,
     ), (
@@ -202,13 +202,15 @@ def test_date_change_listener_guards():
     """The date listener must never overwrite an edit target, a manually
     typed price, or an empty ticker."""
     src = _read("static/js/ledger.js")
-    assert "editingTxId !== null" in src, (
+    start = src.index('txDateInput.addEventListener("change"')
+    block = src[start:start + 400]
+    assert "editingTxId !== null" in block, (
         "the date listener must skip edit mode"
     )
-    assert "if (priceEdited) return" in src, (
+    assert "if (priceEdited) return" in block, (
         "the date listener must skip when the user typed a price"
     )
-    assert "txForm.elements.ticker.value.trim()" in src, (
+    assert "txForm.elements.ticker.value.trim()" in block, (
         "the date listener must skip when there is no ticker"
     )
 

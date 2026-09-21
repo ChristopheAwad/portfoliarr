@@ -125,8 +125,7 @@ def fake_market(monkeypatch):
                         lambda base, target, date_iso:
                             fx_on[(f"{base}{target}", date_iso)])
     monkeypatch.setattr(app_module, "get_price_on",
-                        lambda symbol, date_iso: prices_on[(symbol, date_iso)],
-                        raising=False)
+                        lambda symbol, date_iso: prices_on[(symbol, date_iso)])
     return SimpleNamespace(quotes=quotes, names=names, histories=histories,
                            stats=stats, fx_rates=fx_rates, fx_on=fx_on,
                            prices_on=prices_on)
