@@ -164,6 +164,14 @@ let editingTxId = null;
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
 
+// True once a refresh cycle fails AFTER rows have painted. The cached
+// lastTransactions then still describe a quote the page has stopped
+// trusting, so every later render path (header sort, column drag) must keep
+// suppressing live cells and Quick Sell actions until a fresh fetch
+// succeeds. Without this, a sort after a failed poll would resurrect the
+// stale actions markLedgerUnavailable just removed.
+let ledgerStale = false;
+
 // The Price field's accurate-value state — the split between what the EYE
 // sees and what the LEDGER stores:
 //   autofillPrice — the FULL-precision price behind a cosmetic 2-decimal
@@ -413,7 +421,7 @@ function buildTxRow(tx) {
         `${formatNumber(tx.price_display ?? tx.price)} ${displayCurrency}`;
 
     // --- Live cells (present only when decorated) ---
-    const hasLive = tx.price_now !== undefined;
+    const hasLive = !ledgerStale && tx.price_now !== undefined;
 
     const valueCell = document.createElement("td");
     valueCell.className = "num ledger-live";
@@ -617,7 +625,7 @@ function buildGroupRow(ticker, txs) {
     priceCell.textContent = "—";
 
     // --- Live cells (all-or-nothing per group, like the detail rows) ---
-    const hasLive = txs[0].price_now !== undefined;
+    const hasLive = !ledgerStale && txs[0].price_now !== undefined;
 
     const valueCell = document.createElement("td");
     valueCell.className = "num ledger-live";
@@ -703,7 +711,8 @@ function buildGroupRow(ticker, txs) {
     const actionsCell = document.createElement("td");
     const priceNow = txs[0].price_now;
     const canSell =
-        netQty > 1e-9 && Number.isFinite(priceNow) && priceNow > 0;
+        !ledgerStale && netQty > 1e-9
+        && Number.isFinite(priceNow) && priceNow > 0;
     if (canSell) {
         const sellBtn = document.createElement("button");
         // type="button" is defensive only: the button lives in a table
@@ -820,10 +829,10 @@ function exitEditMode() {
 // (priceEdited flips on the input event; this programmatic fill leaves it
 // false).
 function prepareFullSale(ticker, txs) {
-    let netQty = 0;
-    for (const tx of txs) {
-        netQty += tx.transaction_type === "BUY" ? tx.qty : -tx.qty;
-    }
+    // groupSortKeys is the documented single source for the group's exact
+    // net quantity — reusing it here means the prepared sale can never
+    // drift from the number the row displays.
+    const { netQty } = groupSortKeys(txs);
     const livePrice = txs[0] ? txs[0].price_now : undefined;
     if (!(netQty > 1e-9) || !Number.isFinite(livePrice) || !(livePrice > 0)) {
         return; // position gone or quote missing — nothing to prepare
@@ -1314,6 +1323,7 @@ ledgerBody.addEventListener("click", async (event) => {
 // actions remain (they need no live data), and the next successful render
 // recreates eligible Sell actions on its own.
 function markLedgerUnavailable() {
+    ledgerStale = true;
     ledgerBody.querySelectorAll(".ledger-live").forEach((cell) => {
         cell.textContent = "—";
         cell.classList.remove("pos", "neg");
@@ -1335,6 +1345,7 @@ async function refreshLedger() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
         lastTransactions = transactions; // cache for action-click lookups
+        ledgerStale = false; // fresh quotes — live cells and Sell may return
         renderLedger(transactions);
     } catch (err) {
         console.error("ledger refresh failed:", err);

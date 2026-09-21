@@ -1951,6 +1951,20 @@ input[type="date"]::-moz-placeholder {
 .ledger-row:hover .tx-action-btn,
 .ledger-group:hover .tx-action-btn { visibility: visible; }
 
+/* Keyboard parity with hover. visibility:hidden removes a button from the
+   tab order, so a keyboard user could never reach the actions at all;
+   :focus-within reveals them once focus lands inside the row (the row's
+   ticker link is the tab stop that gets there). The button's own
+   :focus-visible outline then shows WHICH action has focus. */
+.ledger-row:focus-within .tx-action-btn,
+.ledger-group:focus-within .tx-action-btn { visibility: visible; }
+
+.tx-action-btn:focus-visible {
+    visibility: visible;
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
 .tx-action-btn.edit:hover { color: var(--accent); }
 .tx-action-btn.delete:hover { color: var(--red-neg); }
 

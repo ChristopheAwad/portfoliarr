@@ -108,6 +108,17 @@ def test_group_sell_reads_native_price_now_not_display(js):
     )
 
 
+def test_group_sell_keyed_on_its_own_quote(js):
+    """One unquoted ticker must suppress only ITS action. Eligibility is
+    computed inside buildGroupRow from that group's own priceNow — never
+    from a shared/global quote state."""
+    block = function_block(js, "buildGroupRow")
+    assert "const priceNow = txs[0].price_now" in block, (
+        "eligibility must read THIS group's first-row quote"
+    )
+    assert "Number.isFinite(priceNow)" in block
+
+
 def test_group_sell_reuses_group_net_quantity(js):
     """The row's displayed quantity and its Sell eligibility must come from
     the SAME groupSortKeys net quantity — no second arithmetic path."""
@@ -215,13 +226,38 @@ def test_failed_refresh_removes_unclicked_sell_actions(js):
     button is no longer trustworthy. Remove the unclicked action so the
     user cannot prepare a sale from a stale price."""
     block = function_block(js, "markLedgerUnavailable")
-    assert ".ticker-sell-btn" in block, (
-        "markLedgerUnavailable must target the rendered Sell actions"
+    assert re.search(
+        r'querySelectorAll\("\.ticker-sell-btn"\)[\s\S]{0,120}?'
+        r"\.remove\(\)",
+        block,
+    ), "stale Sell actions must be removed, not merely queried"
+    # Only the Sell action is targeted — edit and both deletes must survive.
+    assert "edit" not in block, "edit actions must not be removed"
+    assert "ticker-delete-btn" not in block, (
+        "delete actions must not be removed"
     )
-    assert re.search(r"\.ticker-sell-btn[\s\S]{0,120}?\.remove\(\)", block) or \
-        re.search(r"querySelectorAll\(\"\.ticker-sell-btn\"\)", block), (
-        "stale Sell actions must be removed on a failed refresh"
+
+
+def test_failed_refresh_marks_quotes_stale_for_later_renders(js):
+    """A failed refresh must set the module stale flag, and the group
+    builders must honor it. Otherwise a header sort or column drag calls
+    renderLedger(lastTransactions) and resurrects the stale Sell actions
+    (and live values) that were just removed."""
+    stale_block = function_block(js, "markLedgerUnavailable")
+    assert "ledgerStale = true" in stale_block, (
+        "the failed refresh must mark cached quotes stale"
     )
+    assert "!ledgerStale" in function_block(js, "buildGroupRow"), (
+        "buildGroupRow must suppress stale eligibility"
+    )
+    assert "!ledgerStale" in function_block(js, "buildTxRow"), (
+        "buildTxRow must suppress stale live cells"
+    )
+    # A successful fetch clears the flag before rendering.
+    assert re.search(
+        r"lastTransactions = transactions;[\s\S]{0,120}?ledgerStale = false;",
+        js,
+    ), "a successful refresh must clear the stale flag"
 
 
 def test_failed_refresh_still_degrades_live_cells(js):
@@ -243,4 +279,16 @@ def test_sell_action_visible_without_hover(css):
     block = css[start:end]
     assert ".tx-action-btn" in block, (
         "touch devices must reveal the shared action buttons without hover"
+    )
+
+
+def test_sell_action_reachable_by_keyboard(css):
+    """visibility:hidden removes a button from the tab order, so the group
+    actions need a :focus-within reveal for keyboard users, plus a visible
+    focus indicator on the focused button itself."""
+    assert re.search(
+        r"\.ledger-(row|group):focus-within\s+\.tx-action-btn", css
+    ), "a keyboard user must be able to focus and reveal the row actions"
+    assert re.search(r"\.tx-action-btn:focus-visible", css), (
+        "the focused action must show a visible focus indicator"
     )
