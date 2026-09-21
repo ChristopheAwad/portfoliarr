@@ -170,29 +170,23 @@
                         <button class="time-btn">MAX</button>
                     </div>
 
-                    <!-- Up to three normalized comparison lines. main.js
-                         owns the PAGE-LOCAL symbol list; quick picks
-                         mirror the market-index symbols above. -->
-                    <div class="compare-picker">
-                        <div class="compare-quick-picks">
-                            <button class="compare-quick" type="button"
-                                    data-symbol="^GSPC"
-                                    aria-pressed="false">S&amp;P 500</button>
-                            <button class="compare-quick" type="button"
-                                    data-symbol="^IXIC"
-                                    aria-pressed="false">Nasdaq</button>
-                            <button class="compare-quick" type="button"
-                                    data-symbol="^GSPTSE"
-                                    aria-pressed="false">TSX</button>
-                        </div>
+                    <!-- Up to three page-local comparison lines. Focusing
+                         the field opens suggested benchmarks; typing searches
+                         tickers. Every selection becomes a removable chip. -->
+                    <div class="compare-picker" role="group"
+                         aria-labelledby="compare-label">
+                        <span id="compare-label"
+                              class="compare-label">Compare</span>
                         <div class="compare-search">
                             <input id="compare-input" type="text"
                                    autocomplete="off"
-                                   placeholder="Compare to a ticker...">
+                                   aria-label="Search ticker or benchmark to compare"
+                                   placeholder="Search ticker or benchmark...">
                             <div id="compare-results"
                                  class="search-results" hidden></div>
                         </div>
-                        <div id="compare-chips" class="compare-chips"></div>
+                        <div id="compare-chips" class="compare-chips"
+                             hidden></div>
                     </div>
                 </div>
 

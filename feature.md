@@ -1,489 +1,464 @@
-# Feature: Comparison Session State and Bottom Performance Readout
+# Feature: Refine the Comparison Picker UI
 
 ## Roadmap
 
 - Parent feature: Roadmap #17, Arbitrary Comparison Overlays.
-- Roadmap status: `shipped 2026-09-20 (PR #60)`.
-- This is a requested refinement to the active feature, not a new roadmap item.
+- Parent status: `shipped 2026-09-20 (PR #60)`.
+- This is a post-ship UI refinement to #17, not a new roadmap item.
+- Do not change the shipped roadmap status and do not add a new permanent ID.
 
 ## Status
 
-IMPLEMENTED. The comparison overlays and requested refinement are complete.
-Tests were written first and failed for the intended persistence, readout,
-tooltip, and degraded-data gaps. The final full suite passes (`641 passed`).
-This file preserves the implementation contract and verification checklist for
-future maintenance.
+IMPLEMENTED. Awaiting user browser GUI approval.
 
-## User Request
+The six intended comparison-picker contracts failed before implementation.
+After the template, JavaScript, and CSS changes, the focused comparison and
+frontend regression groups pass. The final full suite passes (`647 passed`).
+Node is not installed in this environment, so the optional `node --check`
+commands could not run. Do not commit or push before browser approval and
+explicit user permission.
 
-1. A comparison must be removed when the user navigates away. Comparisons must
-   not persist across pages, reloads, or browser Back/Forward Cache restoration.
-2. While comparison mode is active, the floating chart tooltip must contain
-   only the hovered date.
-3. Comparison performance and the legend must be below the chart.
-4. Each performance number must sit directly beside its matching line-color
-   marker.
+## Goal
 
-## Locked Interpretation
+Make the comparison picker read as one clear chart tool instead of an unlabeled
+row of unrelated buttons, search input, and duplicate chips.
 
-Use a custom bottom comparison readout instead of Chart.js's built-in legend.
-Each entry has this visual and DOM order:
+The finished desktop control must read in this order:
 
 ```text
-[colored marker] [+12.40%] [Portfolio]
-[colored marker] [ +8.15%] [S&P 500]
+Compare   S&P 500   Nasdaq   TSX   [custom comparison chips]   Search ticker...
 ```
 
-The marker comes first, the percentage comes second, and the symbol/name comes
-third. This places the number directly beside its line color, as requested.
-
-The bottom percentages are cumulative performance at the active chart point:
+On a narrow viewport, the label and selections stay together above a full-width
+search input:
 
 ```text
-(growth_index_value / 100 - 1) * 100
+Compare   S&P 500   Nasdaq   TSX   [AAPL x]
+[Search ticker...                              ]
 ```
 
-- On mouse or touch hover, use the hovered data index.
-- Before hover, and after mouse leave or touch dismissal, use the latest valid
-  chart point for each dataset.
-- A positive or zero percentage uses the existing positive color class.
-- A negative percentage uses the existing negative color class.
-- A missing value displays the app's unavailable glyph (`—`), never `0.00%`.
-- The floating tooltip title continues to use the existing human-readable date
-  formatting.
-- In comparison mode, floating-tooltip body and footer content are empty. The
-  tooltip therefore shows the date only.
-- Outside comparison mode, preserve all current tooltip behavior exactly:
-  stock raw price, portfolio value/cost/gain, and portfolio Performance without
-  overlays must not change.
+The picker remains visually inside the existing chart card. Do not add another
+card, panel, outline, heading block, modal, disclosure, or popover around it.
+The search suggestions continue to use the existing anchored dropdown.
 
-## State Contract
+## Design Decision
 
-Comparison symbols are page-local JavaScript state only.
+Use a persistent inline comparison tool, not a hidden `+ Add comparison`
+control.
 
-- Do not read `compareSymbols` from `localStorage`.
-- Do not write `compareSymbols` to `localStorage`.
-- Do not use `sessionStorage`, cookies, URL parameters, or backend persistence.
-- Every normal page load starts with no comparisons.
-- Navigating dashboard -> stock, stock -> dashboard, or stock A -> stock B starts
-  the destination page with no comparisons.
-- A browser Back/Forward Cache restoration can preserve the old DOM and JS heap.
-  Handle `pageshow` with `event.persisted === true`: clear the picker state,
-  repaint its chips/quick picks, and reload the current chart without a
-  `benchmark` query parameter.
-- Changing timeframe or Value/Performance mode is not page navigation. Keep
-  active comparisons during those in-page actions.
+Reasons:
 
-## Existing Contracts That Must Stay Intact
+- The three benchmark shortcuts are useful and should remain discoverable.
+- Hiding all controls behind a disclosure adds a click to a small, frequent
+  chart action.
+- The chart card is already the correct structural boundary. Another outlined
+  box would create nested-card clutter.
+- A visible `Compare` label explains the controls without adding help text.
+- Portfoliarr's printed-money identity is restrained. Existing typography,
+  borders, inset backgrounds, radii, focus rings, and theme tokens are enough.
 
-- Maximum 3 comparison symbols.
-- Ordered, uppercase, de-duplicated symbols.
-- Dashboard comparisons appear only in Performance/TWR mode. Adding the first
-  comparison auto-switches to Performance.
-- Stock charts use raw prices with no comparison and growth-of-$100 while a
-  comparison is active.
-- Clearing all stock comparisons restores raw-price tools, including previous
-  close and price-difference measurement.
-- Dashboard benchmark history never changes the portfolio label axis.
-- History endpoint replies stay byte-identical when no `benchmark` parameter is
-  sent.
-- Failed benchmarks degrade independently and do not fail the primary chart.
-- Keep the existing backend implementation and `tests/test_compare.py` green.
-- Do not add polling or a new endpoint.
+The picker must use the existing Instrument Sans UI face and current design
+tokens. Do not introduce new colors, shadows, radii, typefaces, icons, or
+motion. Green and red remain reserved for market direction.
 
-## Files To Change
+## Locked Interaction Contract
 
-- `tests/test_compare_ui.py`: replace persistence expectations and add contracts
-  for the custom bottom readout and comparison-only tooltip behavior.
-- `tests/test_chart_tooltip.py`: lock date-only comparison callbacks while
-  preserving normal tooltip callbacks.
-- `tests/test_chart_refresh.py`: only change if a new reload/reset contract needs
-  a source assertion; do not weaken existing request-generation assertions.
-- `static/js/common.js`: remove persistence, add BFCache reset, render the bottom
-  readout, and suppress comparison-mode tooltip body/footer.
-- `static/js/main.js`: pass the dashboard readout element to the chart factory.
-- `static/js/stock.js`: pass the stock readout element to the chart factory.
-- `templates/index.html`: add an empty readout container directly below the
-  dashboard `.chart-box`.
-- `templates/stock.html`: add the same readout container directly below the
-  stock `.chart-box`.
-- `static/style.css`: style responsive bottom entries, markers, values, names,
-  unavailable state, and hidden empty state.
-- `feature.md`: this handoff.
+1. Show the visible text label `Compare` on both the dashboard and stock page.
+2. Give the whole control `role="group"` and connect it to the visible label
+   with `aria-labelledby="compare-label"`.
+3. Keep S&P 500, Nasdaq, and TSX visible as quick-pick toggle buttons.
+4. Keep each quick pick's current `aria-pressed` behavior.
+5. A selected quick-pick symbol is represented only by its active quick-pick
+   button. Do not also render a removable chip for it.
+6. A selected custom ticker is represented by one removable chip between the
+   quick picks and search input.
+7. Keep the custom chip's existing remove button and accessible label.
+8. Rename the input placeholder from `Compare to a ticker...` to
+   `Search ticker...`.
+9. Add `aria-label="Search ticker to compare"` to the input. The placeholder is
+   visual guidance, not its accessible name.
+10. Keep the maximum at three total symbols across quick picks and custom
+    tickers.
+11. Keep uppercase normalization and ordered, de-duplicated state.
+12. Keep the stock page's primary-symbol exclusion.
+13. Keep comparison state page-local and clear it on BFCache restoration.
+14. Keep the dashboard's first-comparison switch to Performance mode.
+15. Keep the stock chart's raw-price/normalized-chart transitions unchanged.
+16. Keep search selection behavior: add the selected symbol, clear the input,
+    and reload the current chart.
+17. Keep comparison readout behavior and placement unchanged.
+18. Keep all backend requests, endpoint shapes, chart math, error degradation,
+    line colors, tooltip behavior, and maximum-three toast unchanged.
 
-Backend changes are limited to additive benchmark behavior in the existing
-history routes. Do not change `db.py`, `market_data.py`, or the no-benchmark
-response shapes.
+## DOM Structure
+
+Use the same structure on both pages. Exact IDs already differ only where the
+existing page requires them; comparison picker IDs stay as they are because
+only one picker exists per page.
+
+```html
+<div class="compare-picker" role="group" aria-labelledby="compare-label">
+    <span id="compare-label" class="compare-label">Compare</span>
+    <div class="compare-selections">
+        <div class="compare-quick-picks">
+            <!-- Existing three buttons, unchanged. -->
+        </div>
+        <div id="compare-chips" class="compare-chips"></div>
+    </div>
+    <div class="compare-search">
+        <input id="compare-input"
+               type="text"
+               autocomplete="off"
+               aria-label="Search ticker to compare"
+               placeholder="Search ticker...">
+        <div id="compare-results" class="search-results" hidden></div>
+    </div>
+</div>
+```
+
+Do not use a heading element for `Compare`; it labels a compact control, not a
+new content section. Do not connect the visible span with `for`, because it
+labels the full group rather than only the search input.
 
 ## Part 1: Write Failing Tests First
 
-### 1.1 Update `tests/test_compare_ui.py`
+All new tests belong in `tests/test_compare_ui.py`. Keep the existing comparison
+backend, chart, tooltip, refresh, and readout tests unchanged.
 
-Remove or replace the current test named `test_picker_persists_symbols`. The new
-tests must enforce page-local state.
+### 1.1 Add a reusable picker-markup assertion
 
-Add `test_picker_does_not_persist_symbols` with source assertions that:
+Add a small helper that receives one template string and checks only the
+comparison picker span. Extract from `class="compare-picker"` through that
+container's closing markup narrowly enough that the global navbar search cannot
+satisfy comparison-picker assertions.
 
-- `setupComparePicker` still exists.
-- The `setupComparePicker` source does not contain `localStorage.getItem`.
-- The `setupComparePicker` source does not contain `localStorage.setItem`.
-- The source does not contain the string `compareSymbols`.
-- The source does not contain `sessionStorage`.
+If reliable nested-element extraction would make the test parser complex, use
+ordered marker positions bounded by the existing comparison-picker comment and
+the parent chart-card closing marker. Do not add BeautifulSoup or another
+dependency for this source contract.
 
-Extract only the `setupComparePicker` function body for these negative checks.
-Do not search all of `common.js`, because unrelated chart preferences correctly
-use `localStorage`.
+### 1.2 Test the labelled group on both pages
 
-Add `test_picker_clears_bfcache_restoration` with source assertions that the
-picker or its caller:
+Add `test_picker_is_a_labelled_chart_control_on_both_pages`.
 
-- Registers a `pageshow` listener.
-- Checks `event.persisted`.
-- Clears the comparison symbol array.
-- Renders the empty chips/quick-pick state.
-- Notifies the chart so it reloads without benchmarks.
+For both `INDEX_HTML` and `STOCK_HTML`, require:
 
-Add `test_comparison_readout_markup_is_below_each_canvas`:
+- `class="compare-picker"`.
+- `role="group"` on that element.
+- `aria-labelledby="compare-label"` on that element.
+- one `id="compare-label" class="compare-label"` containing exactly
+  `Compare`.
+- one `class="compare-selections"`.
+- the DOM order: label, selections, search.
 
-- Require one `.comparison-readout` container on each page.
-- Require stable IDs: `portfolio-comparison-readout` and
-  `stock-comparison-readout`.
-- Verify by string position that each readout appears after its chart `<canvas>`
-  and before the chart controls/picker.
-- Do not use `aria-live`: hover changes can otherwise cause a burst of screen-
-  reader announcements. The readout remains ordinary visible text.
+This test must fail before implementation because the current picker has no
+visible label, group semantics, or selections wrapper.
 
-Add `test_chart_factory_receives_comparison_readout`:
+### 1.3 Test search copy and accessible naming
 
-- `setupTimeframeChart` accepts a `comparisonReadout` option.
-- `main.js` passes `document.getElementById("portfolio-comparison-readout")`.
-- `stock.js` passes `document.getElementById("stock-comparison-readout")`.
+Add `test_picker_search_has_specific_copy_and_accessible_name`.
 
-Add `test_comparison_readout_renders_marker_value_then_name`:
+For both templates, require the comparison input to contain:
 
-- Require creation/use of `.comparison-readout-item`.
-- Require child classes `.comparison-readout-marker`,
-  `.comparison-readout-value`, and `.comparison-readout-name`.
-- Lock their append order as marker, value, name. Use a narrow source assertion
-  around the item builder rather than an assertion against unrelated DOM code.
-- Require a helper named `renderComparisonReadout`.
+- `id="compare-input"`.
+- `placeholder="Search ticker..."`.
+- `aria-label="Search ticker to compare"`.
 
-Add `test_comparison_readout_uses_growth_return_math`:
+Also assert that `Compare to a ticker...` is absent from each comparison picker
+span. Do not search all rendered HTML because unrelated copy can change without
+breaking this control.
 
-- Require the implementation to calculate `(value / 100 - 1) * 100`.
-- Require two decimal places and an explicit `+` sign for non-negative values.
-- Require unavailable values to render `—`.
+This test must fail before implementation because the current input has the old
+placeholder and no explicit accessible name.
 
-Add `test_comparison_readout_tracks_hover_and_falls_back_to_latest`:
+### 1.4 Test quick-pick and custom-chip grouping
 
-- Require chart hover handling to pass the active data index to
-  `renderComparisonReadout`.
-- Require mouse-leave/no-active handling to render the latest valid point.
-- Require touch cleanup to restore the latest-point readout after the tooltip is
-  dismissed.
+Update `test_picker_markup_is_present_on_both_pages` rather than duplicating all
+of its assertions. Retain the existing IDs and classes, and additionally
+require:
 
-Keep all existing quick-pick, maximum, wiring, color palette, and normalized
-chart assertions.
+- `.compare-quick-picks` and `#compare-chips` are both descendants of
+  `.compare-selections`.
+- `.compare-selections` appears before `.compare-search`.
+- all three quick-pick symbols remain present on both pages.
 
-### 1.2 Update `tests/test_chart_tooltip.py`
+Do not change `test_quick_pick_symbols_match_supported_index_symbols`.
 
-Read the existing tests before editing. Preserve every assertion that protects
-normal Value, Performance-without-comparison, and stock raw-price tooltips.
+### 1.5 Test that quick picks do not get duplicate chips
 
-Add a comparison-mode source contract that requires:
+Add `test_picker_renders_chips_for_custom_symbols_only` using `_picker_body()`.
 
-- The tooltip `title` callback remains active.
-- The tooltip `label` callback returns no body line when comparison overlays are
-  visible.
-- The tooltip `footer` callback returns no footer when comparison overlays are
-  visible.
-- `footerColor` does not attempt comparison return coloring when the comparison
-  footer is absent.
-- The condition is tied to visible comparison mode, not only
-  `data.normalized === true`. Dashboard Performance overlays must get the same
-  date-only tooltip behavior as stock comparisons.
+Require the implementation to:
 
-Use one closure boolean such as `comparisonMode` or `showOverlays` as the source
-of truth. Do not duplicate different stock/dashboard conditions throughout the
-callbacks.
+- build a set of quick-pick symbols from `quickPickBar` button
+  `data-symbol` values;
+- check that set inside `renderChips()` before creating a `.compare-chip`;
+- skip chip creation for a symbol in that set;
+- continue to create `.compare-chip` and `.compare-chip-remove` elements for
+  symbols outside that set;
+- continue to update every quick-pick button's `active` class and
+  `aria-pressed` value from the full `symbols` array.
 
-### 1.3 Add CSS source contracts
+Use narrow source assertions around `renderChips()`. Do not assert incidental
+whitespace or an entire function snapshot.
 
-In `tests/test_compare_ui.py`, require these selectors:
+This test must fail before implementation because every selected symbol
+currently gets a chip, including quick picks.
 
-- `.comparison-readout`
-- `.comparison-readout-item`
-- `.comparison-readout-marker`
-- `.comparison-readout-value`
-- `.comparison-readout-name`
+### 1.6 Lock empty, invalid, duplicate, and boundary behavior
 
-Require a mobile media-query treatment that permits wrapping or horizontal
-scrolling without clipping. Do not lock exact pixel values.
+Add or extend narrow source-contract tests so the UI-only refactor cannot alter
+picker state rules:
 
-### 1.4 Run the red tests
+- Empty input returns before changing state.
+- A symbol equal to `primarySymbol` shows the existing error and is not added.
+- A symbol already in `symbols` returns without adding a duplicate.
+- Exactly three total comparisons remain allowed.
+- A fourth comparison shows `Up to 3 comparisons` and is not added.
+- Removal filters only the requested symbol and notifies the chart once.
+- Clearing state empties the same full symbol array, not only visible custom
+  chips.
+- BFCache restoration still calls `clearSymbols()`.
+
+Prefer assertions against `_picker_body()` and the existing `COMPARE_MAX`
+constant. Do not introduce a JavaScript test dependency for this small UI
+refinement.
+
+### 1.7 Lock desktop and mobile layout contracts
+
+Extend `test_comparison_picker_has_shared_styles` and add
+`test_comparison_picker_has_deliberate_mobile_layout`.
+
+Require shared style selectors for:
+
+- `.compare-picker`.
+- `.compare-label`.
+- `.compare-selections`.
+- `.compare-quick-picks`.
+- `.compare-chips`.
+- `.compare-search`.
+
+Require the base `.compare-picker` rule to use an aligned grid with three
+conceptual columns: label, selections, and flexible search. Do not lock exact
+pixel values, but require `display: grid` and a `grid-template-columns`
+declaration.
+
+Require `.compare-selections` to use flex layout with wrapping, so custom chips
+join the quick picks without creating a detached third region.
+
+Inside a `max-width: 600px` media query, require:
+
+- `.compare-picker` uses two columns for label plus selections.
+- `.compare-search` spans the full row with `grid-column: 1 / -1`.
+- no fixed width that can exceed the viewport.
+- no `overflow: hidden` on the picker, selections, or search wrapper.
+
+Do not lock exact gaps, padding, or font sizes. Those are visual tuning values,
+not behavioral contracts.
+
+### 1.8 Run the red tests
 
 Run:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py tests/test_chart_tooltip.py -q
+python -m pytest tests/test_compare_ui.py -q
 ```
 
-Expected failures before implementation:
+Expected pre-implementation failures:
 
-- Current picker still reads/writes `compareSymbols` in `localStorage`.
-- No BFCache reset exists.
-- No bottom readout containers exist.
-- Current comparison tooltip still includes dataset values and a Return footer.
-- No bottom readout renderer or styles exist.
+- no visible `Compare` label or labelled group;
+- no `.compare-selections` wrapper;
+- old search placeholder and missing input `aria-label`;
+- quick-pick selections still produce duplicate chips;
+- picker still uses a wrapping flex row rather than the locked grid layout;
+- no mobile full-row search rule.
 
-If a new test passes before implementation, confirm that it protects a real
-contract rather than only matching an unrelated string.
+If any new test passes before implementation, verify that it matches the
+comparison picker specifically and is not finding the navbar search or another
+unrelated rule.
 
-## Part 2: Make Comparison State Page-Local
+## Part 2: Update Both Templates
 
-### 2.1 Edit `setupComparePicker` in `static/js/common.js`
+Edit `templates/index.html` and `templates/stock.html` in parallel. The two
+pickers must retain matching structure.
 
-Keep the current function interface for input/results/chips/quick picks,
-`primarySymbol`, and `onChange`, except remove the `storageKey` option and its
-default.
+For each picker:
 
-Make these exact state changes:
+1. Add `role="group"` and `aria-labelledby="compare-label"` to
+   `.compare-picker`.
+2. Add `<span id="compare-label" class="compare-label">Compare</span>` as its
+   first child. Each template is a separate page, so this ID remains unique in
+   the rendered document.
+3. Add `<div class="compare-selections">` as its second child.
+4. Move the existing `.compare-quick-picks` block into that wrapper without
+   changing button text, symbols, types, or `aria-pressed` values.
+5. Move the existing `#compare-chips` element directly after quick picks inside
+   the same wrapper.
+6. Keep `.compare-search` as the final child of `.compare-picker`.
+7. Change the input placeholder to `Search ticker...`.
+8. Add `aria-label="Search ticker to compare"` to the input.
+9. Keep `autocomplete="off"`, existing IDs, and the hidden results element.
+10. Update nearby teaching comments to describe quick picks, custom chips, and
+    page-local state accurately. Do not add a long design rationale to HTML.
 
-1. Initialize `let symbols = [];` unconditionally.
-2. Delete the `try/catch` that parses `localStorage`.
-3. Delete the `persist()` function.
-4. In `notify()`, call only `renderChips()` and `onChange(getSymbols())`.
-5. Keep `getSymbols`, `addSymbol`, and `removeSymbol` behavior unchanged.
-6. Add a `clearSymbols({ notifyChange = true } = {})` helper:
-   - Return early only when the list is already empty and no repaint is needed.
-   - Set `symbols = []`.
-   - Call `renderChips()`.
-   - If `notifyChange` and `onChange` exist, call `onChange(getSymbols())`.
-7. Return `clearSymbols` with the existing picker methods.
+Do not change the chart canvas, readout, mode selector, timeframe selector, or
+their relative order.
 
-Do not remove the primary-symbol exclusion, de-duplication, uppercase
-normalization, maximum-three toast, chip removal, or quick-pick active state.
+## Part 3: Stop Duplicate Quick-Pick Chips
 
-### 2.2 Handle browser Back/Forward Cache
+Edit only `setupComparePicker()` in `static/js/common.js`.
 
-Inside `setupComparePicker`, register:
+### 3.1 Capture quick-pick symbols once
 
-```javascript
-window.addEventListener("pageshow", (event) => {
-    if (!event.persisted) return;
-    clearSymbols();
-});
+Immediately after `let symbols = [];`, create one set from the quick-pick
+buttons supplied through `quickPickBar`.
+
+The set must:
+
+- be empty when `quickPickBar` is absent;
+- read each button's `data-symbol` value;
+- avoid querying the full document;
+- be created once during picker setup, because the three button symbols are
+  static markup.
+
+Use one local name such as `quickPickSymbols`. Do not add this state globally.
+
+### 3.2 Render custom chips only
+
+Inside the existing `for (const symbol of symbols)` loop in `renderChips()`,
+continue to iterate the full ordered symbol list but skip DOM chip creation when
+`quickPickSymbols.has(symbol)` is true.
+
+Do not remove quick-pick symbols from `symbols`. The full array remains the
+single source for:
+
+- the maximum-three boundary;
+- request ordering;
+- `getSymbols()`;
+- active button state;
+- `aria-pressed` state;
+- chart reloads and benchmark query parameters;
+- removal and BFCache clearing.
+
+After custom chip rendering, keep the current quick-pick repaint loop exactly
+in purpose: selected quick picks receive `.active` and `aria-pressed="true"`;
+unselected buttons receive the inverse state.
+
+### 3.3 Preserve all add/remove paths
+
+Do not change `addSymbol()`, `removeSymbol()`, `clearSymbols()`, `notify()`,
+search suggestion setup, or the delegated quick-pick click handler except for
+any strictly necessary local rename caused by the new set.
+
+In particular, do not create separate quick/custom state arrays. Two arrays
+would make ordering, limits, removal, and requests easier to desynchronize.
+
+## Part 4: Restyle the Picker as an Inline Tool
+
+Edit the existing comparison-control section in `static/style.css`. Keep the
+rules next to the chart controls and comparison readout.
+
+### 4.1 Desktop layout
+
+Change `.compare-picker` from a free-form flex row to a three-column grid:
+
+- column 1: intrinsic-width `Compare` label;
+- column 2: intrinsic/flexible selections group;
+- column 3: search input with a practical minimum and remaining width;
+- vertically center all three regions;
+- retain a modest top margin from the timeframe controls;
+- use the existing spacing rhythm rather than a new decorative container.
+
+Use a template equivalent to:
+
+```css
+grid-template-columns: auto auto minmax(220px, 1fr);
 ```
 
-`clearSymbols()` must call the page's existing `onChange`, which invokes the
-chart handle's `reload()`. The resulting URL must omit `benchmark=` because
-`getSymbols()` is empty.
+The implementation may tune the second track to prevent crowding, but it must
+not force the chart card wider than its grid column.
 
-Do not use `pagehide` to fetch during navigation. The destination page already
-starts empty, and `pageshow` handles restoration of a cached source page.
+### 4.2 Label treatment
 
-### 2.3 Correct stale comments
+Style `.compare-label` as a quiet UI label:
 
-Update comments in both templates and JavaScript that currently claim the
-comparison list is shared or persisted. State that the picker is page-local.
-Do not alter persistence for `chartMode` or other unrelated preferences.
+- Instrument Sans through the inherited UI font;
+- sentence case, never uppercase or tracked lettering;
+- semibold;
+- existing chart-control text size;
+- secondary text color;
+- no border, background, icon, or accent color.
 
-## Part 3: Add Bottom Readout Markup and Styles
+### 4.3 Selections group
 
-### 3.1 Template markup
+Add `.compare-selections` as an inline flex container that:
 
-In `templates/index.html`, immediately after the closing `</div>` for the
-`.chart-box` containing `#portfolioChart`, add:
+- aligns items centrally;
+- allows wrapping;
+- uses the existing six-pixel control gap;
+- has `min-width: 0` so it can contract inside the chart card.
 
-```html
-<div id="portfolio-comparison-readout"
-     class="comparison-readout"
-     hidden></div>
-```
+Keep `.compare-quick-picks` and `.compare-chips` as flex containers. Remove only
+declarations made redundant by the wrapper; do not change the established
+quick-pick and custom-chip visual recipes.
 
-In `templates/stock.html`, immediately after the `.chart-box` containing
-`#stockChart`, add:
+The active benchmark remains a bordered state button using the existing accent
+and inset background. A custom symbol remains a removable accent-bordered chip.
+They differ because one is a persistent toggle and the other is a user-added
+selection.
 
-```html
-<div id="stock-comparison-readout"
-     class="comparison-readout"
-     hidden></div>
-```
+### 4.4 Search treatment
 
-The container belongs below the chart and above timeframe controls. Do not put
-it inside the canvas wrapper; the canvas height must remain unchanged.
+Keep `.compare-search` positioned relative so the existing absolute suggestion
+dropdown remains anchored to the input.
 
-### 3.2 CSS in `static/style.css`
+In the grid:
 
-Add styles near the existing chart and comparison-picker rules.
+- use `min-width: 0` to prevent card overflow;
+- let the input fill its grid track;
+- retain the current inset background, border, radius, focus ring, text size,
+  and result-dropdown minimum width;
+- do not add a search icon or submit button.
 
-- `.comparison-readout`: flex row, centered vertically, compact gap, modest top
-  margin, and wrapping enabled. It is informational, not another card.
-- `.comparison-readout[hidden]`: `display: none`.
-- `.comparison-readout-item`: inline flex, center aligned, no decorative border
-  or pill background.
-- `.comparison-readout-marker`: small circular marker using inline
-  `background-color`; `flex: 0 0 auto`.
-- `.comparison-readout-value`: tabular numerals, semibold, immediately after the
-  marker.
-- `.comparison-readout-name`: secondary text after the value.
-- Positive/negative value classes must reuse the app's established positive and
-  negative colors. Do not introduce a new semantic palette.
-- On narrow screens, permit natural wrapping with readable row/column gaps. Do
-  not reduce text below the existing chart-control font size and do not clip or
-  truncate percentages.
+### 4.5 Mobile layout
 
-## Part 4: Render Dynamic Performance Below the Chart
+In the existing final `@media (max-width: 600px)` block, add picker rules next
+to the comparison-readout rules.
 
-### 4.1 Extend `setupTimeframeChart`
+At this breakpoint:
 
-Add `comparisonReadout` to the options object accepted by
-`setupTimeframeChart`.
+- set `.compare-picker` to `grid-template-columns: auto minmax(0, 1fr)`;
+- keep `.compare-label` in the first column;
+- keep `.compare-selections` in the second column and allow it to wrap;
+- set `.compare-search` to `grid-column: 1 / -1` so it occupies the full next
+  row;
+- reduce only gaps if necessary; do not reduce text below the existing
+  chart-control size;
+- keep all controls inside the viewport without clipping;
+- do not add horizontal scroll, scroll snap, or legacy momentum-scrolling
+  properties to this control.
 
-Add closure state:
+The expected common empty-state phone layout is two rows: label plus three
+quick picks, then search. Additional custom chips may wrap the selections row
+naturally before the search row.
 
-```javascript
-let comparisonMode = false;
-let comparisonReadoutIndex = null;
-```
+## Part 5: Focused Verification
 
-`comparisonMode` is true only when overlays are actually visible:
-
-- Dashboard: at least one benchmark and mode is `performance`.
-- Stock: at least one benchmark and `data.normalized === true`.
-
-Do not equate `mode === "performance"` alone with comparison mode. Portfolio
-Performance without overlays retains its current tooltip.
-
-### 4.2 Build readout entries
-
-Add a local function `renderComparisonReadout(index = null)` inside the chart
-factory.
-
-Exact behavior:
-
-1. If no `comparisonReadout` element was supplied, return.
-2. If `comparisonMode` is false, clear the container and set `hidden = true`.
-3. If comparison mode is true, set `hidden = false` and clear old children.
-4. Iterate all currently visible chart datasets in chart order: primary first,
-   then comparison symbols.
-5. Resolve the requested index:
-   - If a valid hover index was supplied, try that index for every dataset.
-   - If no index was supplied, find each dataset's final finite value.
-   - If a dataset has no finite value at the hover index, display `—`; do not
-     silently use a value from another date.
-6. Calculate return as `(value / 100 - 1) * 100`.
-7. Format finite return with an explicit plus sign for values >= 0 and exactly
-   two decimals, followed by `%`.
-8. Build each item in marker -> value -> name DOM order.
-9. Marker color must match the actual dataset line:
-   - Primary uses its current resolved border color.
-   - Overlay `i` uses `getCompareColors()[i]`.
-10. Use the dataset label for the name. Preserve the primary labels already set
-    by `paint()`.
-
-Use `document.createElement` and `textContent`; do not concatenate untrusted
-symbols into `innerHTML`.
-
-### 4.3 Keep the readout synchronized
-
-At the end of `paint()`, after datasets and `comparisonMode` are updated but
-before the resize/update request, call `renderComparisonReadout()` so the
-latest-point values appear immediately.
-
-When the user switches dashboard Value/Performance mode, the existing `paint()`
-call must hide or show the readout correctly without another fetch.
-
-When all comparisons are removed, `paint()` must:
-
-- Remove overlay datasets through the existing reconciliation helper.
-- Set `comparisonMode = false`.
-- Clear and hide the bottom readout.
-- Restore the current non-comparison tooltip and raw-price tools.
-
-### 4.4 Track hover without re-fetching or rebuilding the chart
-
-Use Chart.js's existing interaction path. Add an `onHover` option or a small
-local plugin/event hook that receives active elements.
-
-- If comparison mode is false, do nothing.
-- If there is an active element, read its `index`, save it in
-  `comparisonReadoutIndex`, and call `renderComparisonReadout(index)`.
-- If there is no active element (mouse leaves the plot), set the index to null
-  and call `renderComparisonReadout()` for latest values.
-- Avoid `chart.update()` inside hover. Updating the external DOM is sufficient
-  and prevents hover recursion/layout churn.
-- Existing crosshair and tooltip positioning must continue to work.
-
-In existing touch-end/touch-cancel cleanup, restore the latest bottom values by
-calling `renderComparisonReadout()` after clearing the tooltip. Keep current
-ghost-event prevention intact.
-
-### 4.5 Make comparison tooltips date-only
-
-The existing `title(items)` callback remains unchanged.
-
-At the top of `label(item)`:
-
-```javascript
-if (comparisonMode) return [];
-```
-
-At the top of `footer(items)`:
-
-```javascript
-if (comparisonMode) return [];
-```
-
-At the top of `footerColor(items)` return the neutral current color when
-`comparisonMode` is true; there is no visible footer to color.
-
-Remove the old comparison-specific Return footer branches that use
-`chartNormalized`. Keep the non-comparison portfolio Performance Return footer
-and all Value/cost/gain behavior.
-
-### 4.6 Disable Chart.js's built-in comparison legend
-
-Keep `chart.options.plugins.legend.display = false` for all chart modes. The new
-bottom DOM readout is now the legend and performance display. Delete or replace
-the current line that sets built-in legend display to `showOverlays`.
-
-This avoids two legends and gives exact marker/value/name ordering.
-
-## Part 5: Wire Both Pages
-
-In `static/js/main.js`, add to the existing `setupTimeframeChart` options:
-
-```javascript
-comparisonReadout: document.getElementById("portfolio-comparison-readout"),
-```
-
-In `static/js/stock.js`, add:
-
-```javascript
-comparisonReadout: document.getElementById("stock-comparison-readout"),
-```
-
-Do not create a second picker or second chart. Keep each page's current
-`getBenchmarks` function and `onChange -> chartHandle.reload()` flow.
-
-## Part 6: Verification
-
-### 6.1 Focused tests
-
-Run:
+After implementation, run:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_compare_ui.py tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
+python -m pytest tests/test_compare_ui.py -q
+python -m pytest tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
 python -m pytest tests/test_compare.py -q
 ```
 
-Then run chart/frontend regressions:
+Then run frontend layout and chart regressions:
 
 ```bash
 python -m pytest \
+  tests/test_ui_redesign.py \
   tests/test_chart_speed.py \
   tests/test_prev_close.py \
   tests/test_price_diff.py \
@@ -499,7 +474,10 @@ node --check static/js/main.js
 node --check static/js/stock.js
 ```
 
-### 6.2 Full suite
+`main.js` and `stock.js` are not expected to change, but syntax-check them
+because both call the shared picker and chart factory.
+
+## Part 6: Full-Suite Gate
 
 The lead agent runs:
 
@@ -508,58 +486,605 @@ source .venv/bin/activate
 python -m pytest
 ```
 
-Do not report the feature complete unless the full suite passes.
+Do not report implementation complete unless the full suite passes. Do not
+weaken existing tests to accommodate a visual change.
 
-### 6.3 Browser GUI gate
+## Part 7: Browser GUI Approval Gate
 
-After pytest is green, stop and ask the user to verify all items below.
+After pytest is green, stop and ask the user to verify the UI before any commit
+or push.
 
-Dashboard:
+### Dashboard, desktop
 
-- Initial load has no comparison chips or bottom readout.
-- Add S&P 500: chart switches to Performance, date-only floating tooltip
-  appears on hover, and bottom entries show marker + percentage + name.
-- Hover early and late dates: every bottom percentage updates to that date.
-- Move away from the chart: bottom percentages return to latest values.
-- Switch to Value: overlays and bottom readout disappear.
-- Switch back to Performance: active page-local comparisons reappear.
-- Navigate to another page and return: comparisons are gone.
-- Use browser Back: comparisons are gone even if the page came from BFCache.
+- `Compare` clearly labels the benchmark buttons and ticker search.
+- S&P 500, Nasdaq, and TSX remain visible without opening another control.
+- Selecting S&P 500 activates its button but does not add an S&P 500 chip.
+- Selecting Nasdaq and TSX behaves the same way.
+- Searching for and selecting AAPL adds one removable AAPL chip.
+- The custom chip appears between the quick picks and search input.
+- Three total selections are allowed across both selection types.
+- A fourth selection shows the existing limit toast.
+- Removing a quick pick by pressing its active button updates the chart.
+- Removing a custom ticker through its chip updates the chart.
+- The first comparison still switches the dashboard to Performance.
+- The bottom comparison readout remains correctly aligned with line colors.
 
-Stock page:
+### Stock page, desktop
 
-- Initial load is raw price with no bottom readout.
-- Add a comparison: primary and comparison normalize; tooltip contains only the
-  date; bottom readout includes both lines.
-- Marker colors match their lines in light and dark themes.
-- Remove all chips: bottom readout disappears and raw price tooltip,
-  previous-close line, and price-difference measurement return.
-- Navigate to a second stock: no comparison carries over.
-- Reload: no comparison carries over.
+- The picker has the same structure and visual rhythm as the dashboard.
+- Searching for the current stock shows the existing exclusion error.
+- A quick pick does not produce a duplicate chip.
+- A custom ticker produces one removable chip.
+- Removing all comparisons restores raw-price tools and tooltip behavior.
 
-Responsive/accessibility:
+### Mobile, light and dark themes
 
-- On a narrow phone viewport, entries wrap without clipping.
-- Percentage remains directly beside its marker.
-- Keyboard focus and picker operation remain usable.
-- Readout updates do not steal focus.
+- The first row shows `Compare` and visible benchmark shortcuts.
+- The search input occupies the full next row.
+- A custom chip wraps without widening or clipping the chart card.
+- Search results remain anchored below the comparison input and fit the
+  viewport.
+- Focus rings are visible for quick picks, search, results, and remove buttons.
+- Text and active states have sufficient contrast in both themes.
+- The picker adds no nested-card appearance, unnecessary shadow, or decorative
+  color.
+
+### State and navigation regression
+
+- Reload starts with no comparisons.
+- Navigating to another page starts with no comparisons.
+- Browser Back does not restore stale comparisons from BFCache.
+- Changing timeframe retains active comparisons on the current page.
+- Dashboard Value/Performance switching retains page-local selections while
+  showing overlays only in Performance.
+
+## Files Expected To Change
+
+- `tests/test_compare_ui.py`: new markup, behavior, boundary, accessibility,
+  and responsive CSS contracts.
+- `templates/index.html`: labelled picker structure and search copy.
+- `templates/stock.html`: matching labelled picker structure and search copy.
+- `static/js/common.js`: suppress duplicate chips for selected quick picks.
+- `static/style.css`: desktop grid and mobile two-row picker layout.
+- `feature.md`: this approved implementation contract and eventual handoff.
+
+No expected changes:
+
+- `app.py`.
+- `db.py`.
+- `market_data.py`.
+- `static/js/main.js`.
+- `static/js/stock.js`.
+- API response shapes or request parameters.
+- comparison readout markup or rendering.
+- `roadmap.md`.
 
 ## Scope Limits
 
-- No persistence option or preference toggle.
-- No new endpoint, database schema, or market-data cache.
-- No database changes.
-- No configurable legend ordering.
-- No absolute price/value in the bottom readout during comparison mode.
-- No new chart library or dependency.
+- No new endpoint or backend behavior.
+- No comparison persistence.
+- No modal, popover, drawer, disclosure, or bottom sheet.
+- No new outer card or decorative comparison box.
+- No collapse/expand preference.
+- No drag reordering.
+- No configurable quick picks.
+- No symbol names inside custom chips; retain ticker symbols.
+- No line-color markers inside the picker; the bottom readout remains the
+  authoritative line legend.
+- No changes to benchmark normalization or performance calculations.
+- No new dependency.
 - No commit or push until browser approval and explicit user permission.
 
-## Handoff Notes
+## Worktree Note
 
-- The current worktree also contains untracked `comparison.html` and
-  `ui-nomenclature-audit.html`. They are unrelated user files. Do not edit,
-  delete, stage, or commit them.
-- Existing comparison implementation files are already modified but uncommitted.
-  Work with those changes; do not revert them.
-- Keep the smallest correct diff. This refinement is primarily in
-  `common.js`, two templates, CSS, two page wiring files, and frontend tests.
+The untracked files `comparison.html` and `ui-nomenclature-audit.html` are user
+files unrelated to this refinement. Do not edit, delete, stage, or commit them.
+
+---
+
+## Feature context (documented by document-bug)
+
+### Authoritative status override
+
+The plan and `IMPLEMENTED. Awaiting user browser GUI approval.` status above are
+historical. **Do not continue to its browser gate and do not commit its current
+UI.** The user reviewed that result and rejected the always-visible S&P 500,
+Nasdaq, and TSX buttons because the control still looks crowded.
+
+The new design below supersedes every earlier instruction that says to keep
+benchmark quick-pick buttons permanently visible, to suppress chips for those
+buttons, or to use a three-column label/selections/search grid.
+
+Current status: **IMPLEMENTED AND TESTED. Awaiting user browser GUI
+approval.** All new tests below were written and confirmed red first, then
+the production code was adapted. Focused comparison/ticker-suggestion suites,
+chart regressions, and the full pytest suite pass (`655 passed`). Node is not
+installed, so the optional `node --check` commands could not run. Do not
+commit or push before browser approval and explicit user permission.
+
+### Feature summary
+
+Replace the crowded comparison picker with one compact search control. At rest,
+both the dashboard and stock page show only:
+
+```text
+Compare   [Search ticker or benchmark...]
+```
+
+Focusing the empty field opens its normal suggestion dropdown with three local
+recommendations:
+
+```text
+Suggested
+S&P 500    ^GSPC
+Nasdaq     ^IXIC
+TSX        ^GSPTSE
+```
+
+Typing replaces those recommendations with the existing `/api/search` results.
+Selecting either a suggested benchmark or a search result creates one removable
+chip below the input. The chart behavior and bottom performance readout do not
+change.
+
+### Locked design and behavior
+
+1. Keep the visible `Compare` label and its accessible group association.
+2. Remove S&P 500, Nasdaq, and TSX from the permanent picker surface.
+3. Do not replace them with another button, disclosure, modal, drawer, or
+   separate card.
+4. Use the existing `.search-results` dropdown as the only selection surface.
+5. When the comparison input gains focus while empty, show a sentence-case
+   `Suggested` heading followed by S&P 500, Nasdaq, and TSX rows.
+6. When the user deletes all typed text while the field remains focused, show
+   the three suggested rows again instead of closing the dropdown.
+7. When the user types non-empty text, use the existing debounce,
+   `/api/search?q=...` request, stale-response guard, no-match state, and failure
+   state without behavioral changes.
+8. Escape and outside clicks close the dropdown. Refocusing the still-empty
+   input opens suggestions again.
+9. Clicking a suggested row and pressing Enter on the first visible suggested
+   row use the same `addSymbol()` path as a remote search result.
+10. Every selected comparison gets exactly one removable chip, including
+    `^GSPC`, `^IXIC`, and `^GSPTSE`.
+11. Benchmark chips use friendly labels (`S&P 500`, `Nasdaq`, `TSX`). Custom
+    symbols use their uppercase ticker. Internal state and API requests always
+    retain raw symbols.
+12. Hide `#compare-chips` when there are no selections. Reveal it when at least
+    one chip exists.
+13. On a stock detail page, omit the primary symbol from local suggested
+    benchmarks. For example, `/stock/%5EGSPC` must not suggest S&P 500. The
+    existing primary-symbol rejection remains as a defense for typed results.
+14. Keep one ordered `symbols` array as the source of truth. Do not split
+    benchmark and custom state.
+15. Keep the maximum at three total symbols, uppercase normalization,
+    de-duplication, primary-symbol rejection, remove behavior, and BFCache reset.
+16. Keep comparisons page-local. Do not add localStorage, sessionStorage, URL,
+    cookie, or backend persistence.
+17. Keep dashboard first-selection auto-switch to Performance mode.
+18. Keep stock raw-price/normalized transitions and restoration unchanged.
+19. Keep comparison request parameters, backend routes, response shapes,
+    growth-of-$100 math, degraded benchmark behavior, line colors, date-only
+    comparison tooltip, and bottom readout unchanged.
+20. Use current printed-money tokens. Add no new palette, shadow, radius,
+    typeface, animation, or decorative container.
+
+### Final markup contract
+
+Both `templates/index.html` and `templates/stock.html` must use the same picker
+shape:
+
+```html
+<div class="compare-picker" role="group" aria-labelledby="compare-label">
+    <span id="compare-label" class="compare-label">Compare</span>
+    <div class="compare-search">
+        <input id="compare-input"
+               type="text"
+               autocomplete="off"
+               aria-label="Search ticker or benchmark to compare"
+               placeholder="Search ticker or benchmark...">
+        <div id="compare-results" class="search-results" hidden></div>
+    </div>
+    <div id="compare-chips" class="compare-chips" hidden></div>
+</div>
+```
+
+Remove `.compare-selections`, `.compare-quick-picks`, and every `.compare-quick`
+button from the picker markup. Keep the chart canvas, readout, mode selector,
+and timeframe selector in their current relative positions.
+
+### Detailed test-first plan
+
+All production files currently contain the rejected visible-button design. Edit
+`tests/test_compare_ui.py` first and run it red before changing production code.
+Keep `_picker_markup()`, `_picker_body()`, `_comparison_readout_body()`, and the
+useful existing state/readout tests.
+
+#### Test A: compact picker markup on both pages
+
+Replace the current quick-pick grouping assertions with a test that checks each
+picker span contains, in order:
+
+- `compare-label`;
+- `compare-search` with `#compare-input` and `#compare-results`;
+- `#compare-chips` with the `hidden` attribute.
+
+Require `role="group"`, `aria-labelledby="compare-label"`, the visible text
+`Compare`, placeholder `Search ticker or benchmark...`, and input
+`aria-label="Search ticker or benchmark to compare"`.
+
+Inside the extracted picker markup, assert these rejected elements are absent:
+
+- `compare-selections`;
+- `compare-quick-picks`;
+- `compare-quick`;
+- `data-symbol="^GSPC"`;
+- `data-symbol="^IXIC"`;
+- `data-symbol="^GSPTSE"`.
+
+Do not search all of `index.html` for those symbols because the separate market
+index chips legitimately use them.
+
+#### Test B: local benchmark recommendation definitions
+
+Replace `test_quick_pick_symbols_match_supported_index_symbols` with a test that
+requires `common.js` to define one shared immutable/local recommendation list
+containing exact symbol/name pairs:
+
+- `^GSPC` / `S&P 500`;
+- `^IXIC` / `Nasdaq`;
+- `^GSPTSE` / `TSX`.
+
+Still assert each raw symbol exists in `app_module.INDEX_SYMBOLS`. The frontend
+names and backend-supported index set must not drift.
+
+#### Test C: optional default-result support in the shared factory
+
+Add source contracts around `setupTickerSuggestions()` that require:
+
+- optional default results and an optional default heading are read from
+  `options`;
+- a local helper renders defaults only when the list is non-empty;
+- the input `focus` handler renders defaults only when `inputEl.value.trim()` is
+  empty;
+- the existing `input` handler renders defaults, rather than calling `hide()`,
+  when text becomes empty and defaults exist;
+- a typed non-empty query still schedules `runSearch(query)`;
+- Escape and outside-click paths still call `hide()`;
+- the delegated `.search-row` click and Enter paths still call `onPick(symbol)`.
+
+Do not require default-result behavior from navbar or ledger callers. The new
+factory options must default to no recommendations, leaving those call sites
+byte-for-byte behaviorally unchanged.
+
+#### Test D: suggested heading renderer
+
+Add a narrow source test around `renderSearchResults()` that requires an
+optional heading argument and safe DOM construction:
+
+- create an element with class `.search-section-label` only when a heading was
+  supplied;
+- assign the heading through `textContent`, never `innerHTML`;
+- append the heading before result rows;
+- keep `message` rendering for `No matches` and `Search unavailable`;
+- keep all result rows built through `buildSearchRow()`.
+
+#### Test E: picker wires filtered defaults
+
+Replace `test_picker_renders_chips_for_custom_symbols_only` with contracts that
+require `setupComparePicker()` to:
+
+- filter the default recommendation list against `primarySymbol`;
+- pass the filtered list and `Suggested` heading to
+  `setupTickerSuggestions()`;
+- route suggested and remote picks through the same callback and
+  `addSymbol(symbol)` call;
+- clear `inputEl.value` after a successful pick attempt, as it does now.
+
+The default recommendation objects must have the same fields expected by
+`buildSearchRow()` (`symbol`, `name`, and suitable `type`/`exchange` values), so
+the dropdown reuses normal result rows without special click logic.
+
+#### Test F: every selection renders one removable chip
+
+Require `renderChips()` to iterate every symbol without a
+`quickPickSymbols.has(symbol)` skip. Require:
+
+- one `.compare-chip` per symbol;
+- one `.compare-chip-remove` button per chip;
+- benchmark-friendly label lookup with ticker fallback;
+- raw symbol retained in `chip.dataset.symbol`;
+- remove button calls `removeSymbol(symbol)`;
+- chips container `hidden` state is set from whether `symbols.length === 0`.
+
+Assert `quickPickBar`, `quickPickSymbols`, quick-pick active classes, and
+quick-pick `aria-pressed` handling are absent from `_picker_body()`.
+
+#### Test G: invalid, empty, boundary, and failure paths
+
+Keep or add source contracts for all of these paths:
+
+- empty symbol does nothing;
+- primary symbol shows `That symbol is already the chart` and is not added;
+- duplicate symbol does nothing;
+- exactly three symbols are allowed;
+- fourth symbol shows `Up to 3 comparisons` and is not added;
+- removal changes only the requested symbol and notifies once;
+- clearing empties all symbols, hides the chip row, and reloads without
+  benchmarks through the existing callback;
+- BFCache `pageshow` with `event.persisted` still calls `clearSymbols()`;
+- typed search with zero results still shows `No matches`;
+- network/HTTP/JSON search failure still shows `Search unavailable`;
+- a stale typed response cannot overwrite the current empty-input suggested
+  list because the existing query/value equality guard remains.
+
+For the last case, preserve the current check
+`inputEl.value.trim() !== query`; do not build a second request-generation
+system.
+
+#### Test H: compact desktop and mobile CSS
+
+Replace the current three-column and quick-control CSS assertions. Require:
+
+- `.compare-picker`, `.compare-label`, `.compare-search`, `.compare-chips`,
+  `.compare-chip`, `.compare-chip-remove`, and `.search-section-label` rules;
+- no `.compare-selections`, `.compare-quick-picks`, or `.compare-quick` rules;
+- desktop `.compare-picker` uses a two-column grid: intrinsic label plus
+  flexible search;
+- `.compare-chips` occupies the search column on a second row, wraps, and is
+  hidden through the global `[hidden]` contract when empty;
+- `.compare-search` remains `position: relative` and `min-width: 0`;
+- comparison results cannot exceed the available input width;
+- at `max-width: 600px`, the picker becomes one column so label, search, and
+  chips stack without viewport overflow;
+- no horizontal scrolling, `100vw`, fixed over-wide width, scroll snap, or
+  legacy momentum scrolling is added.
+
+#### Required red run
+
+Run before production edits:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q
+```
+
+Expected failures include permanent quick controls still present, old search
+copy, no default results or heading support, benchmark chip suppression still
+present, and old three-column CSS still present. If all new tests pass before
+implementation, they are not testing the intended change.
+
+### Production implementation plan
+
+#### 1. Extend shared result rendering in `static/js/common.js`
+
+Change `renderSearchResults(resultsEl, results, message)` to accept a fourth,
+optional heading argument. Clear the container as now. If heading is truthy,
+create a `div.search-section-label`, set `textContent`, and append it before the
+message/results. Preserve message and row rendering exactly otherwise.
+
+Do not use `innerHTML` for headings, symbols, names, or search results.
+
+#### 2. Extend `setupTickerSuggestions()` with optional defaults
+
+Read options with defaults equivalent to:
+
+```javascript
+const defaultResults = options.defaultResults || [];
+const defaultHeading = options.defaultHeading || null;
+```
+
+Add one local `showDefaults()` helper. It returns false without defaults;
+otherwise it calls `renderSearchResults(resultsEl, defaultResults, null,
+defaultHeading)` and returns true.
+
+Register an input `focus` listener that calls `showDefaults()` only when the
+trimmed value is empty. In the existing `input` listener, after clearing the
+timer, replace the empty-query `hide()` path with: show defaults if available,
+otherwise hide. Return immediately afterward.
+
+Do not change `runSearch()`, debounce timing, response checks, stale guard,
+error logging, Enter guard, delegated click handling, or outside-click logic.
+
+#### 3. Define comparison recommendations once
+
+Near `COMPARE_MAX`, define one constant recommendation list with the three
+objects required by `buildSearchRow()`. Keep raw Yahoo symbols in `symbol` and
+human labels in `name`. Use the same existing row component; do not invent
+benchmark-only markup or handlers.
+
+#### 4. Simplify `setupComparePicker()`
+
+Remove `quickPickBar` from its parameter list. Delete `quickPickSymbols`, the
+chip skip, active/`aria-pressed` repaint loop, and delegated quick-pick click
+handler.
+
+Create the per-page default list with the primary symbol removed. Pass it to
+`setupTickerSuggestions()` as `defaultResults` with `defaultHeading:
+"Suggested"`. Keep `scopeEl: inputEl` unless browser testing proves that the
+dropdown closes when clicking its own rows; the shared handler already treats
+`resultsEl` as inside.
+
+In `renderChips()`, clear the container, render one chip for every symbol, use a
+small lookup from the recommendation list for friendly benchmark text, and fall
+back to the raw symbol. Keep raw symbols in data attributes and callbacks. Set
+`chipsEl.hidden = symbols.length === 0` after rendering (or before the loop with
+the same result).
+
+Do not alter `addSymbol()`, `removeSymbol()`, `clearSymbols()`, `notify()`, or
+the page-local state model beyond ensuring empty-state chip visibility repaints.
+
+#### 5. Remove obsolete caller wiring
+
+In `static/js/main.js` and `static/js/stock.js`, remove only:
+
+```javascript
+quickPickBar: document.querySelector(".compare-quick-picks"),
+```
+
+Keep input/results/chips elements, primary stock symbol, chart reload callbacks,
+and dashboard Performance switching intact.
+
+#### 6. Simplify both templates
+
+Apply the final markup contract above to `templates/index.html` and
+`templates/stock.html`. Remove permanent benchmark buttons and
+`.compare-selections`. Put search before hidden chips. Update teaching comments
+to explain that focusing the field shows suggested benchmarks and all selected
+comparisons become removable chips.
+
+#### 7. Simplify CSS
+
+In `static/style.css`:
+
+- change `.compare-picker` to two columns (`auto minmax(0, 1fr)`);
+- keep current quiet `.compare-label` treatment;
+- remove `.compare-selections`, `.compare-quick-picks`, `.compare-quick`,
+  hover, active, and quick-pick focus rules;
+- retain `.compare-chip` and `.compare-chip-remove` styles;
+- make `.compare-chips` a wrapping flex row placed in grid column 2;
+- retain `.compare-search` as the dropdown anchor;
+- add `.search-section-label` near the shared search dropdown styles or the
+  comparison section, using sentence case, secondary text, the existing small
+  control size, and semibold weight; no all-caps tracking or decorative fill;
+- at `max-width: 600px`, switch `.compare-picker` to one column and let search
+  and chips occupy the full width;
+- keep `.compare-search .search-results` constrained to available width.
+
+### Verification after implementation
+
+Run focused tests:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q
+python -m pytest tests/test_chart_tooltip.py tests/test_chart_refresh.py -q
+python -m pytest tests/test_compare.py -q
+```
+
+Run frontend/chart regressions:
+
+```bash
+python -m pytest \
+  tests/test_ui_redesign.py \
+  tests/test_chart_speed.py \
+  tests/test_prev_close.py \
+  tests/test_price_diff.py \
+  tests/test_chart_axis.py \
+  tests/test_web_refresh_wiring.py -q
+```
+
+If Node is available, run:
+
+```bash
+node --check static/js/common.js
+node --check static/js/main.js
+node --check static/js/stock.js
+```
+
+Node was not installed during the previous run. Its absence is not a pytest
+failure; report it honestly.
+
+The lead agent must then run:
+
+```bash
+python -m pytest
+```
+
+The last full-suite baseline before this superseding plan was `647 passed`.
+
+### Browser GUI approval checklist
+
+After all tests pass, stop for user approval. Verify both dashboard and stock
+pages in light/dark themes and desktop/phone widths:
+
+- resting picker shows only `Compare` and one search input;
+- focusing empty input opens `Suggested` with the three benchmarks;
+- suggestions use friendly names and recognizable raw symbols;
+- typing replaces local suggestions with remote results;
+- clearing text restores local suggestions;
+- Escape and outside clicks close the dropdown;
+- refocus opens it again;
+- mouse selection and Enter selection both work;
+- each benchmark and custom ticker creates one removable chip;
+- benchmark chips use friendly names;
+- selecting three mixed comparisons works and a fourth shows the existing
+  limit toast;
+- current stock does not appear in local suggestions on its detail page;
+- dashboard first selection switches to Performance;
+- removing all stock comparisons restores raw-price tools;
+- bottom comparison readout and date-only tooltip remain unchanged;
+- chip rows wrap without widening the chart card;
+- no permanent benchmark buttons remain;
+- no nested card, extra shadow, clipping, or horizontal page overflow appears.
+
+Do not commit or push until this new browser design is approved and the user
+explicitly requests git action.
+
+### Investigation log
+
+- Reviewed the shipped comparison implementation in commit `b3bc6fd` (PR #60):
+  comparison overlays, quick picks, search, and bottom readout already exist.
+- First refinement implemented a visible `Compare` label, permanent benchmark
+  buttons, custom-only chips, and responsive grid. New contracts failed red,
+  then passed; focused suites and the full suite passed (`647 passed`).
+- User reviewed the explanation before GUI approval and identified the core
+  remaining issue: permanent S&P 500, Nasdaq, and TSX controls make the picker
+  crowded.
+- Considered a generic `+ Add comparison` popover earlier, but rejected it
+  because it hides the feature and adds an extra click.
+- Chosen compromise: keep one always-visible search field and reveal benchmark
+  recommendations inside its existing dropdown on focus. This preserves
+  discoverability without permanent control clutter.
+- Verified `setupTickerSuggestions()` already owns safe row construction,
+  debounce, stale-response protection, click delegation, Enter selection,
+  Escape, outside click, no-match, and failure states (`static/js/common.js`,
+  current lines 533-672). Extend it instead of creating another dropdown.
+- Verified the current dirty picker implementation is in
+  `static/js/common.js` around current lines 681-793, both chart templates, and
+  `static/style.css` around current lines 1055-1156.
+- No backend or database change is needed.
+
+### Implementation progress
+
+- Superseded visible-button refinement: implemented and tested, but rejected
+  before browser approval. Its dirty changes were adapted into the compact
+  design rather than reverted.
+- Compact search design: plan complete and approved for handoff.
+- Compact search tests: written (Tests A–H; shared-factory contracts live in
+  `tests/test_ticker_suggestions.py`). Confirmed red against the old visible
+  works (10 failed before implementation).
+- Compact search production code: implemented across `static/js/common.js`,
+  `static/js/main.js`, `static/js/stock.js`, `templates/index.html`,
+  `templates/stock.html`, and `static/style.css`.
+- Compact search focused/full verification: `41 passed` (compare UI +
+  ticker suggestions), `47 passed` (tooltip/refresh/compare), `82 passed`
+  (layout/chart regressions), full suite `655 passed`. Node not installed;
+  `node --check` could not run.
+- Compact search browser approval: not started.
+- Git commit/push: not authorized and not performed.
+
+### Current blocker
+
+None. Ready to continue with the new failing tests. The new thread should treat
+the existing dirty changes as a base to edit, not as approved work and not as
+changes to revert wholesale.
+
+### Next steps for next agent
+
+1. Read this appended authoritative section before acting; the earlier plan is
+   superseded.
+2. Run `git status --short`. Preserve untracked `comparison.html` and
+   `ui-nomenclature-audit.html`; they are unrelated user files.
+3. Open `tests/test_compare_ui.py`. Replace the visible quick-pick assertions
+   with Tests A-H above. Add shared-factory option contracts either there or in
+   `tests/test_ticker_suggestions.py`; do not duplicate equivalent assertions.
+4. Run
+   `python -m pytest tests/test_compare_ui.py tests/test_ticker_suggestions.py -q`
+   and confirm the intended failures before production edits.
+5. Implement the seven production steps in order, beginning with
+   `renderSearchResults()` and `setupTickerSuggestions()` in
+   `static/js/common.js`.
+6. Run focused tests, regression groups, and the full suite exactly as listed.
+7. Update the status in this authoritative section with test counts. Do not
+   rewrite history above merely to make it look current.
+8. Stop for browser GUI approval. Do not commit or push.

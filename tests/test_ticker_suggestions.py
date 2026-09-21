@@ -106,6 +106,115 @@ def test_common_locks_enter_interception_guard():
 
 
 # ---------------------------------------------------------------------------
+# optional benchmark defaults — the comparison picker's helper surface (C/D/G)
+# ---------------------------------------------------------------------------
+
+def test_factory_reads_optional_default_results_options():
+    """The factory must read optional defaultResults/defaultHeading options.
+
+    The comparison picker shows S&P 500/Nasdaq/TSX in the dropdown whenever
+    the empty field gains focus. The navbar and ledger call sites pass no
+    defaults, so the options must default to none and leave those call sites
+    behaviorally unchanged.
+    """
+    src = _read("static/js/common.js")
+    assert "options.defaultResults" in src, (
+        "setupTickerSuggestions must read optional defaultResults from options"
+    )
+    assert "options.defaultHeading" in src, (
+        "setupTickerSuggestions must read optional defaultHeading from options"
+    )
+    assert "options.defaultResults || []" in src, (
+        "defaultResults must default to an empty list when not supplied"
+    )
+
+
+def test_render_search_results_accepts_optional_heading():
+    """renderSearchResults builds a quiet .search-section-label heading.
+
+    The heading is optional, assigned through textContent (never innerHTML),
+    rendered before the result rows, and the message/row paths stay intact.
+    """
+    src = _read("static/js/common.js")
+    start = src.index("function renderSearchResults")
+    end = src.index("function setupTickerSuggestions", start)
+    body = src[start:end]
+    assert "function renderSearchResults(resultsEl, results, message, heading)" in (
+        body
+    ), "renderSearchResults must accept an optional heading argument"
+    assert '"search-section-label"' in body
+    assert "if (heading)" in body
+    assert "section.textContent = heading" in body
+    assert "innerHTML" not in body, (
+        "the heading must be set through textContent, never innerHTML"
+    )
+    assert "buildSearchRow(result)" in body
+    assert "search-empty" in body
+
+
+def test_factory_shows_defaults_only_for_empty_focused_input():
+    """A local showDefaults() renders whenever the list is non-empty.
+
+    The focus handler only calls it for an EMPTY field; a focus with text
+    already in it must keep showing whatever the search produced.
+    """
+    src = _read("static/js/common.js")
+    assert "function showDefaults()" in src
+    assert "if (defaultResults.length === 0) return false;" in src
+    assert 'inputEl.addEventListener("focus"' in src
+    assert 'if (inputEl.value.trim() === "") showDefaults();' in src
+
+
+def test_factory_empty_input_renders_defaults_instead_of_hiding():
+    """Deleting all text while focused must open the defaults, not close.
+
+    The input handler's empty-query branch renders defaults when available
+    and only falls back to hiding when none exist.
+    """
+    src = _read("static/js/common.js")
+    assert "if (!showDefaults()) hide();" in src
+
+
+def test_factory_typed_query_still_schedules_search():
+    """A typed non-empty query must still run the debounced /api/search."""
+    src = _read("static/js/common.js")
+    assert "searchTimer = setTimeout(() => runSearch(query), DEBOUNCE_MS);" in src
+
+
+def test_factory_escape_and_outside_click_still_hide():
+    """Escape and outside clicks must keep closing the dropdown."""
+    src = _read("static/js/common.js")
+    assert 'if (event.key === "Escape") {' in src
+    assert 'scopeEl.contains(event.target)' in src
+    assert "resultsEl.contains(event.target)" in src
+
+
+def test_factory_click_and_enter_still_route_to_onpick():
+    """Delegated .search-row clicks and Enter picks stay on onPick."""
+    src = _read("static/js/common.js")
+    assert 'event.target.closest(".search-row")' in src
+    assert "onPick(row.dataset.symbol)" in src
+    assert "onPick(symbol)" in src
+
+
+def test_factory_keeps_no_match_and_failure_messages():
+    """Zero-result and failed searches keep their honest status lines."""
+    src = _read("static/js/common.js")
+    assert '"No matches"' in src
+    assert '"Search unavailable"' in src
+
+
+def test_factory_keeps_stale_typed_response_guard():
+    """A stale typed response must not overwrite the empty-input defaults.
+
+    The existing query/value equality guard is what protects the suggested
+    benchmark list after the user deletes text while a search is in flight.
+    """
+    src = _read("static/js/common.js")
+    assert "if (inputEl.value.trim() !== query) return;" in src
+
+
+# ---------------------------------------------------------------------------
 # ledger.js — the ledger's Ticker field is the second call site
 # ---------------------------------------------------------------------------
 
