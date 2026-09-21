@@ -96,6 +96,18 @@ def test_period_return_has_label_and_value_hooks(client):
     assert 'id="period-return-value"' in html, "period return value hook missing"
 
 
+def test_initial_label_matches_the_chart_default():
+    default = re.search(
+        r'const DEFAULT_CHART_PERIOD = "([^"]+)";', MAIN_JS
+    )
+    assert default, "main.js must declare DEFAULT_CHART_PERIOD"
+    label = re.search(
+        r'id="period-return-label">([^<]+)</span>', INDEX_HTML
+    )
+    assert label, "index.html must ship the initial period return label"
+    assert label.group(1) == f"{default.group(1)} return"
+
+
 def test_period_return_sits_above_the_chart():
     """The readout describes the chart, so it must render before the canvas."""
     container = INDEX_HTML.index('id="period-return"')
@@ -248,13 +260,26 @@ def test_painter_formats_finite_positive():
     body = _painter_body()
     assert 'returnPct >= 0 ? "+"' in body
     assert "toFixed(2)" in body
-    assert 'classList.add(returnPct >= 0 ? "pos" : "neg")' in body
+    assert 'classList.toggle("pos", nextClass === "pos")' in body
+
+
+def test_painter_formats_finite_negative():
+    body = _painter_body()
+    assert 'const nextClass = returnPct >= 0 ? "pos" : "neg"' in body
+    assert 'classList.toggle("neg", nextClass === "neg")' in body
 
 
 def test_painter_handles_unavailable():
     body = _painter_body()
     assert "Number.isFinite(returnPct)" in body
     assert '"Return unavailable"' in body
+    assert 'classList.remove("pos", "neg")' in body
+
+
+def test_painter_avoids_reannouncing_unchanged_values():
+    body = _painter_body()
+    assert "periodReturnLabelEl.textContent !== nextLabel" in body
+    assert "periodReturnValueEl.textContent !== nextValue" in body
 
 
 def test_painter_does_not_compute_value_delta():

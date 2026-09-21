@@ -701,18 +701,28 @@ const periodReturnLabelEl = document.getElementById("period-return-label");
 const periodReturnValueEl = document.getElementById("period-return-value");
 
 function paintPeriodReturn({ period, returnPct }) {
+    const nextLabel = `${period} return`;
     if (periodReturnLabelEl) {
-        periodReturnLabelEl.textContent = `${period} return`;
+        if (periodReturnLabelEl.textContent !== nextLabel) {
+            periodReturnLabelEl.textContent = nextLabel;
+        }
     }
     if (!periodReturnValueEl) return;
-    periodReturnValueEl.classList.remove("pos", "neg");
     if (!Number.isFinite(returnPct)) {
-        periodReturnValueEl.textContent = "Return unavailable";
+        if (periodReturnValueEl.textContent !== "Return unavailable") {
+            periodReturnValueEl.textContent = "Return unavailable";
+        }
+        periodReturnValueEl.classList.remove("pos", "neg");
         return;
     }
     const sign = returnPct >= 0 ? "+" : "";
-    periodReturnValueEl.textContent = `${sign}${returnPct.toFixed(2)}%`;
-    periodReturnValueEl.classList.add(returnPct >= 0 ? "pos" : "neg");
+    const nextValue = `${sign}${returnPct.toFixed(2)}%`;
+    const nextClass = returnPct >= 0 ? "pos" : "neg";
+    if (periodReturnValueEl.textContent !== nextValue) {
+        periodReturnValueEl.textContent = nextValue;
+    }
+    periodReturnValueEl.classList.toggle("pos", nextClass === "pos");
+    periodReturnValueEl.classList.toggle("neg", nextClass === "neg");
 }
 
 // Build once at load with empty data; every refresh swaps the arrays and
