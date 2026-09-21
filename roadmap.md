@@ -77,6 +77,20 @@ makes the displayed quote stale.
 
 ---
 
+### 19. Date-Aware Ledger Price Auto-Fill
+Make the ledger form's Price auto-fill depend on the selected Date. Pick a
+ticker → the field fills with the latest recorded close on or before the date.
+Change the date → the price refreshes. Today (or an empty date) keeps the
+existing live quote. A manually typed price and edit mode are never overwritten,
+and a missing historical bar leaves the field empty rather than guessing.
+
+**Effort:** 1 day
+**Files:** `market_data.py`, `app.py`, `static/js/ledger.js`, `conftest.py`, `tests/test_market_data.py`, `tests/test_quote.py`, `tests/test_price_autofill.py`
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 6. Dividend Tracking
@@ -204,7 +218,8 @@ Tier 1 (all independent):
   4. Sector Breakdown ─────────────────┤
   5. Cash Balance ─────────────────────┤
   16. Android Biometric/PIN Lock ────────┤
-  18. Ledger Quick Sell ─────────────────┘
+  18. Ledger Quick Sell ─────────────────┤
+  19. Date-Aware Price Auto-Fill ────────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -235,6 +250,7 @@ For maximum compounding value:
 3. **CSV Export** → makes data portable
 16. **Android Biometric/PIN Lock** → protects financial information on the phone
 18. **Ledger Quick Sell** → prepares an exact full-position sale for review from the ledger row
+19. **Date-Aware Ledger Price Auto-Fill** → prices a logged transaction at its actual date
 4. **Sector Breakdown** → deeper allocation insight
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app

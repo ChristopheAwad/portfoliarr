@@ -69,6 +69,17 @@ setupTickerSuggestions(txForm.elements.ticker, txTickerResultsEl,
         prefillPriceForTicker();
     });
 
+// Today or an empty date means the live quote (today has no settled close
+// yet); any other date means the recorded close on or before it, so a past
+// transaction is priced by the market's actual print — weekends and
+// holidays fall back to the prior trading day.
+function priceQuoteUrl(symbol) {
+    const date = txDateInput.value;
+    return (date && date !== todayLocalISO())
+        ? `/api/quote/${encodeURIComponent(symbol)}?date=${encodeURIComponent(date)}`
+        : `/api/quote/${encodeURIComponent(symbol)}`;
+}
+
 // Prefill the Price field with the picked ticker's LATEST price, from the
 // lightweight /api/quote/<symbol> endpoint (the get_quote dict WITHOUT the
 // heavy name fetch — see app.py). Called from BOTH ways a ticker lands in
@@ -89,22 +100,24 @@ setupTickerSuggestions(txForm.elements.ticker, txTickerResultsEl,
 // needs no error toast, console.error is the audit trail.
 //
 // The stale-guard: while this fetch is in flight the user may have picked
-// a second ticker. Rare, but a SLOWER EARLIER reply must not overwrite a
-// newer pick — same rule as the search dropdown's stale-guard, applied to
-// the fill.
+// a second ticker OR changed the date. Rare, but a SLOWER EARLIER reply
+// must not overwrite a newer pick or a newer date — same rule as the
+// search dropdown's stale-guard, applied to the fill.
 function prefillPriceForTicker() {
     const symbol = txForm.elements.ticker.value.trim().toUpperCase();
     if (!symbol) return; // nothing picked — nothing to fetch
+    const requestedDate = txDateInput.value; // the date this reply prices
 
     txForm.elements.price.value = ""; // never leave a prior pick's price
-    fetch(`/api/quote/${encodeURIComponent(symbol)}`)
+    fetch(priceQuoteUrl(symbol))
         .then((response) => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return response.json();
         })
         .then((quote) => {
-            if (txForm.elements.ticker.value.trim().toUpperCase() !== symbol) {
-                return; // stale reply — a newer pick superseded this one
+            if (txForm.elements.ticker.value.trim().toUpperCase() !== symbol ||
+                txDateInput.value !== requestedDate) {
+                return; // stale reply — a newer pick or date superseded this one
             }
             // Keep the FULL quote price for the ledger (autofillPrice), and
             // show only 2 decimals in the field — the app's "store accurate,
@@ -1465,6 +1478,19 @@ txCancelBtn.addEventListener("click", exitEditMode);
 // Prefill the date input ONCE at load: "today" is the overwhelmingly common
 // answer for a fresh transaction.
 txDateInput.value = todayLocalISO();
+
+// Changing the date re-prices an auto-filled ticker, because Date and Price
+// are two facts about one event and must agree. Three guards:
+//   - edit mode: the row's stored price is the recorded fact, never a
+//     fresh lookup of a possibly different day;
+//   - priceEdited: a price the user typed wins over any auto-fill;
+//   - empty ticker: there is nothing to price yet.
+txDateInput.addEventListener("change", () => {
+    if (editingTxId !== null) return;
+    if (priceEdited) return;
+    if (!txForm.elements.ticker.value.trim()) return;
+    prefillPriceForTicker();
+});
 
 // Deep-link prefill: the stock detail page's "Log Transaction" button lands
 // here as /?ticker=AAPL#tx-form. The #tx-form anchor scrolls the browser to

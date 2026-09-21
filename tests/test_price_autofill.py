@@ -131,13 +131,85 @@ def test_ledger_resets_autofill_on_form_reset():
 
 def test_ledger_fetches_the_quote_endpoint():
     """The prefill must call the lightweight /api/quote/<symbol> endpoint
-    (never /api/stock/<symbol> — that one pays for the heavy name fetch)."""
+    (never /api/stock/<symbol> — that one pays for the heavy name fetch).
+    The URL is built by priceQuoteUrl so the date can ride along."""
     src = _read("static/js/ledger.js")
-    assert "fetch(`/api/quote/" in src, (
-        "prefillPriceForTicker must fetch /api/quote/<symbol>"
+    assert "fetch(priceQuoteUrl(symbol))" in src, (
+        "prefillPriceForTicker must fetch the URL priceQuoteUrl builds"
+    )
+    assert "/api/quote/${encodeURIComponent(symbol)}" in src, (
+        "priceQuoteUrl must build /api/quote/<symbol>"
     )
     assert "encodeURIComponent(symbol)" in src, (
         "the symbol must be URL-encoded into the path (BRK.B, ^GSPC)"
+    )
+
+
+def test_price_prefill_builds_dated_url_for_past_date():
+    """For a past date the prefill must ask the dated endpoint
+    (/api/quote/<symbol>?date=YYYY-MM-DD) — the latest recorded close on or
+    before that date, not today's live quote."""
+    src = _read("static/js/ledger.js")
+    assert "function priceQuoteUrl(" in src, (
+        "ledger.js must define a priceQuoteUrl helper"
+    )
+    assert "?date=${encodeURIComponent(date)}" in src, (
+        "priceQuoteUrl must append the selected date as ?date="
+    )
+
+
+def test_price_prefill_uses_today_helper_for_live_path():
+    """Today (or an empty date) must keep the live quote: the helper
+    compares against todayLocalISO() and otherwise omits ?date=."""
+    src = _read("static/js/ledger.js")
+    assert "const date = txDateInput.value" in src, (
+        "priceQuoteUrl must read the form's date input"
+    )
+    assert re.search(
+        r"date && date !== todayLocalISO\(\)", src,
+    ), (
+        "priceQuoteUrl must send the live quote when the date is today "
+        "or empty"
+    )
+
+
+def test_prefill_stale_guard_checks_date():
+    """A slow reply from an older date must not land under a newer date:
+    the prefill captures the requested date and bails when it has moved."""
+    src = _read("static/js/ledger.js")
+    assert "const requestedDate = txDateInput.value" in src, (
+        "prefillPriceForTicker must capture the date it is pricing"
+    )
+    assert "txDateInput.value !== requestedDate" in src, (
+        "the reply handler must compare the current date to requestedDate"
+    )
+
+
+def test_date_change_listener_calls_prefill():
+    """Changing the date must re-run the prefill so the price follows the
+    date."""
+    src = _read("static/js/ledger.js")
+    assert re.search(
+        r'txDateInput\.addEventListener\("change",[\s\S]*?'
+        r'prefillPriceForTicker\(\)',
+        src,
+    ), (
+        "the date input's change listener must call prefillPriceForTicker"
+    )
+
+
+def test_date_change_listener_guards():
+    """The date listener must never overwrite an edit target, a manually
+    typed price, or an empty ticker."""
+    src = _read("static/js/ledger.js")
+    assert "editingTxId !== null" in src, (
+        "the date listener must skip edit mode"
+    )
+    assert "if (priceEdited) return" in src, (
+        "the date listener must skip when the user typed a price"
+    )
+    assert "txForm.elements.ticker.value.trim()" in src, (
+        "the date listener must skip when there is no ticker"
     )
 
 

@@ -1,251 +1,263 @@
-# Feature #18: Ledger Quick Sell
+# Feature #19: Date-Aware Ledger Price Auto-Fill
 
 ## Status
 
-IMPLEMENTED 2026-09-21. Tests written first (20 new in
-`tests/test_ledger_quick_sell.py`), production code in `static/js/ledger.js`
-plus a keyboard `:focus-within` reveal in `static/style.css`, and all 732
-tests pass. Awaiting the user's browser GUI approval before any commit or push.
-
-This plan replaces the shipped Feature #9 handoff. Feature #9 shipped in PR
-#63 and remains recorded in `roadmap.md`.
+IMPLEMENTED 2026-09-21. Tests written first, production code in
+`market_data.py`, `app.py`, and `static/js/ledger.js`, and the full
+`python -m pytest` suite passes (762 passed). Awaiting the user's browser GUI
+approval before any commit or push.
 
 ## Problem
 
-Selling a complete holding currently requires the user to copy five facts into
-the transaction form: ticker, net quantity still held, current native price,
-current local date, and the `SELL` operation. The collapsed ticker row already
-has these facts. Retyping them is slow and can cause quantity, price, or
-operation mistakes.
+When the user picks a ticker in the ledger transaction form, the Price field
+fills with the **live** quote (`prefillPriceForTicker` in `static/js/ledger.js`,
+which calls `GET /api/quote/<symbol>`). The Date field is ignored. If the user
+logs a past transaction (for example, a buy from last month), the field still
+shows today's price. The user must look up the historical close by hand.
 
-The quick action must only prepare a transaction. It must not submit the sale
-without review because price and quantity become permanent ledger facts.
+The Date field and the Price field are two facts about the same event. They must
+agree.
 
 ## Goal
 
-Add a `Sell` action to each eligible ticker summary row on `/ledger`. Clicking
-it prepares the existing transaction form to sell the complete positive
-position at the latest available native-market price on the user's local date.
-The user can change every prepared value before pressing `Log`.
+Make the Price auto-fill depend on the selected Date:
+
+1. Picking a ticker fills Price with the latest recorded close **on or before**
+   the selected date.
+2. Changing the date refreshes Price for the new date.
+3. A date equal to today (or an empty date) uses the existing live quote.
+4. A manually typed price is never overwritten by a date change.
+5. Edit mode never re-fetches; the stored price stays the immutable fact.
 
 ## Locked Product Decisions
 
-1. Put the action on ticker group rows, not transaction detail rows.
-2. Reuse the existing transaction form. Do not add a modal or second form.
-3. Fill quantity with `sum(BUY qty) - sum(SELL qty)` for the ticker.
-4. Fill price from `price_now`. This is the exact native quote even when the
-   ledger currently displays CAD-converted values.
-5. Display the price to two decimals but retain exact `price_now` through the
-   existing `autofillPrice` state. A user edit continues to override it.
-6. Fill date with the existing local-time `todayLocalISO()` helper.
-7. Set the operation to `SELL`.
-8. Never submit automatically. The user must review and press `Log`.
-9. Show the action only when net quantity is greater than the existing `1e-9`
-   flat-position tolerance and `price_now` is finite and positive.
-10. Hide it for closed, near-zero, short, SELL-only, and unquoted groups. Do
-    not show a disabled control.
-11. If a complete refresh fails while old rows remain, remove rendered Sell
-    actions when live cells are marked unavailable. Do not offer a quote that
-    the page has just identified as stale.
-12. A per-symbol quote failure hides the action only for that ticker.
-13. Share the existing actions cell with bulk delete. Do not change columns.
-14. Keep the action available on touch through the existing action visibility
-    rule and on pointer devices through row hover and keyboard focus.
-15. Preserve fractional quantity exactly; do not round it before form fill.
-16. Keep the existing POST route as the authority for validation, currency,
-    historical FX, persistence, and errors.
+1. Historical price means the last daily `Close` on or before the selected
+   date. Weekends and holidays fall back to the prior trading day's close.
+   This matches the existing `get_fx_rate_on` rule in `market_data.py`.
+2. Date equal to the browser's local today, or an empty date, uses the live
+   `/api/quote/<symbol>` quote (today has no settled close).
+3. A future date is treated as "not today": it returns the latest available
+   close. (The transaction validator already allows future dates.)
+4. A date change re-fetches only when all three are true: not in edit mode, the
+   price is an untouched auto-fill (`priceEdited === false`), and a ticker is
+   present. A user-typed price always wins.
+5. Edit mode (`editingTxId !== null`) never re-fetches on a date change. The
+   stored price is the recorded fact.
+6. A failed historical lookup leaves the Price field empty. This is the current
+   honest failure behavior. The user types the price, and the backend
+   re-validates at submit.
+7. Do not cache the historical price. `get_fx_rate_on` is also uncached, and
+   date changes are user-driven and rare.
+8. No database, response-shape, Android, dependency, or deployment change.
 
 ## Existing Contracts To Preserve
 
-1. The ledger keeps exactly 11 columns. Template headers,
-   `setLedgerMessage.colSpan`, `buildGroupRow`, and `buildTxRow` stay aligned.
-2. The actions column stays pinned last and cannot be dragged.
-3. Group clicks still expand rows, except clicks from links or
-   `.tx-action-btn` controls.
-4. Group delete-all and detail edit/delete actions remain unchanged.
-5. `groupSortKeys()` remains the frontend source for exact net quantity.
-6. Closed-position visibility remains controlled by `showClosedPositions`.
-7. Shorts remain visible active positions but receive no Sell action.
-8. The ledger currency toggle must not convert the prepared native price.
-9. Backend floats remain raw; display formatting stays in JavaScript.
-10. Programmatic prices retain exact precision through `autofillPrice`, with
-    `priceEdited = false`; a user edit sets it true and wins at submit.
-11. Quick Sell exits edit mode first, enabling the ticker and ensuring POST is
-    used instead of PUT.
-12. Successful POST behavior remains: expand ticker, reset form, refresh data.
-13. Privacy mode may mask displayed quantity but cannot alter the exact value
-    used for form preparation.
-14. Polling continues through `setupAutoRefresh`; add no interval.
-15. No database, route, response-shape, market-data, Android, dependency, or
-    deployment change is needed.
+1. `GET /api/quote/<symbol>` with no `date` query keeps its exact current reply
+   shape (`symbol, price, previous_close, currency, change, change_pct`) and
+   never calls `get_name`.
+2. The Price field shows 2 decimals, but `autofillPrice` keeps the full
+   precision and the submit uses it when untouched
+   (`priceEdited ? Number(fields.price) : (autofillPrice ?? Number(fields.price))`).
+3. `prefillPriceForTicker` still clears the field first, and still backs the
+   fill with `autofillPrice` plus `priceEdited = false`.
+4. The stale-guard still stops an older reply from overwriting a newer pick.
+   It must now also compare the requested date.
+5. `exitEditMode`, `enterEditMode`, `prepareFullSale`, and the submit handler
+   keep their current behavior. Programmatic `.value` sets on the date input
+   fire no `change` event, so they cannot loop back into the new listener.
+6. The ledger keeps 11 columns. No template change.
+7. `todayLocalISO()` stays the single source for the browser's local today.
+8. Backend floats stay raw; formatting stays in JavaScript.
+9. Polling continues through `setupAutoRefresh`; add no interval.
 
 ## Files
 
 Production:
 
-- `static/js/ledger.js`
-- `static/style.css` only if a minimal Sell-specific focus, hover, or spacing
-  rule is necessary
+- `market_data.py` — new `get_price_on(symbol, date_iso)`
+- `app.py` — import it; extend `GET /api/quote/<symbol>` with optional `?date=`
+- `static/js/ledger.js` — date-aware URL helper and the date listener
 
 Tests:
 
-- add `tests/test_ledger_quick_sell.py`
-- update an existing ledger CSS test only if it is the precise home for a
-  touch-visibility assertion
+- `tests/test_market_data.py` — unit tests for `get_price_on`
+- `tests/test_quote.py` — route tests for `?date=`
+- `tests/test_price_autofill.py` — frontend meta-tests
+- `conftest.py` — add `get_price_on` to `fake_market`
 
 Planning:
 
 - `feature.md`
 - `roadmap.md`
 
-No template, Python, database, Android, dependency, or deployment edit is
-planned.
+No template, database, Android, dependency, or deployment edit.
 
 ## Test-First Plan
 
-Create `tests/test_ledger_quick_sell.py` before production edits. Pytest does
-not run browser JavaScript, so use focused source/meta-tests in the repository's
-existing style. Do not lock unrelated comments or broad file layout.
+Write the tests below BEFORE the production edits. Run them and confirm they
+fail for the intended missing behavior. Pytest does not run browser JavaScript,
+so frontend tests use the repository's string-lock source/meta-test style.
 
-### A. Eligibility And Construction
+### A. `market_data.get_price_on` — `tests/test_market_data.py`
 
-1. Assert `buildGroupRow()` reuses `groupSortKeys(txs).netQty` for displayed
-   quantity and Sell eligibility.
-2. Assert one Sell button is created in the existing group actions cell.
-3. Assert it has `.tx-action-btn`, a stable `.ticker-sell-btn` hook, and a
-   button type that cannot submit any surrounding form accidentally.
-4. Assert it stores the canonical ticker in `data-ticker`; quantity and price
-   must not be serialized from rounded DOM text.
-5. Assert it is ordered before destructive delete-all.
-6. Assert eligibility requires `netQty > 1e-9`.
-7. Assert eligibility requires finite, positive `txs[0].price_now`.
-8. Assert exactly one action is produced for a multi-transaction group.
-9. Assert no action for zero, `1e-9`, smaller positive residue, negative,
-   SELL-only, missing-price, null-price, NaN, infinite-price, or non-positive
-   price cases.
-10. Assert eligibility is independent of group value, `price_display`, display
-    currency, privacy state, and expansion state.
+Add these next to the existing `get_fx_rate_on` tests (around line 650). Use the
+existing `fake_yf` fixture. `fake_yf.state["history"]` takes a DataFrame. The
+`FakeTicker.history` records a date-window fetch as
+`("range", symbol, start, end)`.
 
-### B. Form Preparation
+1. `test_price_on_returns_the_close_on_the_date`: a DataFrame with closes for
+   `2026-08-27`, `2026-08-28`, `2026-08-31` returns the `2026-08-31` close when
+   asked for `2026-08-31`. Assert the call
+   `("range", "AAPL", "2026-08-21", "2026-09-01")` is in `fake_yf.calls`, proving
+   the window is `date − 10 days` to `date + 1 day` (exclusive end).
+2. `test_price_on_weekend_falls_back_to_prior_close`: bars on `2026-08-28` and
+   `2026-08-31`; ask for `2026-08-29` (Saturday) and get Friday's close.
+   (Use the actual weekday of those dates or pick clearly-known dates; the
+   point is "no bar exactly on the date".)
+3. `test_price_on_ignores_bars_after_the_date`: bars on `2026-08-31` and
+   `2026-09-02`; ask for `2026-08-31` and get only the `2026-08-31` close, never
+   the later bar.
+4. `test_price_on_raises_when_no_bar_covers_the_date`: only a bar strictly
+   after the date → `pytest.raises(ValueError)`.
+5. `test_price_on_rejects_invalid_prices`: parametrize `float("nan")`,
+   `float("inf")`, `float("-inf")`, `0.0`, `-1.0` → each raises `ValueError`.
+6. `test_price_on_empty_dataframe_raises`: an empty DataFrame → `ValueError`.
 
-Add a focused helper such as `prepareFullSale(ticker, txs)` and assert:
+### B. `GET /api/quote/<symbol>?date=` — `tests/test_quote.py`
 
-1. It defensively rechecks exact net quantity and exact live price at click.
-2. It returns without changing the form if either is no longer eligible.
-3. It calls `exitEditMode()` before filling to clear an old edit target,
-   re-enable ticker, restore `Log`, hide edit state, and clear old errors.
-4. It fills ticker from the group identity.
-5. It fills unrounded net quantity from transaction facts, not cell text.
-6. It fills date with `todayLocalISO()` rather than UTC ISO conversion.
-7. It selects `SELL`.
-8. It assigns exact live price to `autofillPrice`.
-9. It sets `priceEdited = false`.
-10. It displays `price.toFixed(2)` without changing exact backing precision.
-11. It scrolls the existing form into view with smooth/nearest behavior.
-12. It does not call `requestSubmit`, dispatch submit, call `fetch`, show a
-    confirmation, or directly invoke POST.
+Extend the file. `fake_market` must gain a `prices_on` dict keyed
+`(symbol, "YYYY-MM-DD")`. An absent key simulates "no bar covers the date". Add:
 
-### C. Delegated Click Wiring
+1. `test_quote_with_date_returns_historical_price`: put
+   `fake_market.prices_on[("AAPL", "2026-08-31")] = 123.45`; call
+   `GET /api/quote/AAPL?date=2026-08-31`; assert 200 and
+   `body["price"] == 123.45` and `body["symbol"] == "AAPL"`.
+2. `test_quote_with_date_does_not_touch_live_quote`: leave
+   `fake_market.quotes` empty; the dated call must still return 200, proving
+   `get_quote` was not used on the dated path.
+3. `test_quote_with_bad_date_returns_400`: `?date=not-a-date` and
+   `?date=2026-02-30` both return 400.
+4. `test_quote_with_uncovered_date_returns_404`: a valid date with no
+   `prices_on` entry returns 404.
+5. Keep every existing test unchanged and green: the no-date path still returns
+   the live dict with no `name` key.
 
-1. Assert the existing delegated actions listener recognizes
-   `.ticker-sell-btn` before delete branches.
-2. Assert it reads the ticker and filters the current `lastTransactions` rows
-   for that ticker.
-3. Assert it sends cached rows to the preparation helper and returns.
-4. Assert the group expansion listener continues to ignore it through the
-   shared `.tx-action-btn` guard.
-5. Assert no formatted table cells are scraped.
+### C. Frontend meta-tests — `tests/test_price_autofill.py`
 
-### D. Failed Refresh Safety
+Keep all existing tests. Add:
 
-1. Assert `markLedgerUnavailable()` removes rendered `.ticker-sell-btn`
-   controls on a complete refresh failure.
-2. Assert live cells still become `—` and lose sign classes.
-3. Assert edit, detail delete, and bulk delete controls remain.
-4. Assert later successful rendering recreates eligible actions naturally.
-5. Assert per-symbol missing `price_now` suppresses only that ticker's action.
-6. Do not clear a form already prepared before a later poll fails; copied
-   values are now editable user input awaiting review.
+1. `test_price_prefill_builds_dated_url_for_past_date`: assert the source
+   contains a helper (suggested name `priceQuoteUrl`) that returns
+   `` `/api/quote/${encodeURIComponent(symbol)}?date=${encodeURIComponent(...)}` ``.
+   Lock the `?date=` substring and the `encodeURIComponent` call.
+2. `test_price_prefill_uses_today_helper_for_live_path`: assert the helper
+   compares the date input against `todayLocalISO()` and falls back to the plain
+   `/api/quote/<symbol>` URL for today or an empty date.
+3. `test_prefill_reads_date_input`: assert `prefillPriceForTicker` (or the
+   helper) reads `txDateInput.value`.
+4. `test_prefill_stale_guard_checks_date`: assert the reply handler compares
+   the current date input to the requested date before filling.
+5. `test_date_change_listener_calls_prefill`: assert a
+   `txDateInput.addEventListener("change", ...)` block calls
+   `prefillPriceForTicker()`.
+6. `test_date_change_listener_guards`: assert the listener returns early for
+   `editingTxId !== null`, for `priceEdited`, and for an empty ticker. Lock the
+   three guard expressions, not their comments.
 
-### E. Precision And Submission Regression
+### D. `conftest.py` — `fake_market`
 
-1. Keep all `tests/test_price_autofill.py` precision contracts green.
-2. Assert untouched Quick Sell uses exact `autofillPrice` at submit.
-3. Assert a manually edited prepared price uses the typed number.
-4. Assert fractional quantity flows through existing `Number(fields.qty)`.
-5. Assert prepared type flows through existing FormData as `SELL`.
-6. Assert no second submit implementation is introduced.
+Add `prices_on = {}` to the fixture and add:
 
-### F. Layout And Accessibility
+```python
+monkeypatch.setattr(app_module, "get_price_on",
+                    lambda symbol, date_iso: prices_on[(symbol, date_iso)])
+```
 
-1. Assert visible text or accessible labeling clearly identifies Sell and the
-   ticker where appropriate.
-2. Assert it shares the actions cell rather than adding a column.
-3. Assert shared action controls remain visible under `@media (hover: none)`.
-4. If CSS is needed, assert existing tokens, visible keyboard focus, and no
-   destructive red treatment for the non-destructive preparation action.
-5. Assert no fixed viewport width, overflow workaround, or breakpoint is added.
-6. Keep all 11-column tests unchanged and green.
-
-### G. Regression Scope
-
-Run existing coverage for grouping/net quantity, column count, price autofill,
-ledger page and mobile CSS, transaction POST, privacy, closed-position display,
-sorting, column ordering, refresh, and recovery. Add backend tests only if an
-uncovered backend contract is discovered; no backend change is expected.
+Return `prices_on` on the `SimpleNamespace` too. Patch at `app_module`, because
+`app.py` imports the name (`from market_data import ...`) — patch where it is
+used.
 
 ## Implementation Plan
 
-Implementation begins only after the tests above fail for the intended missing
-behavior.
+Start only after the tests above fail for the right reason.
 
-### 1. Add The Group Action
+### 1. Add `get_price_on` to `market_data.py`
 
-1. In `buildGroupRow(ticker, txs)`, reuse its existing `netQty` value.
-2. Read native `price_now` from the group's first transaction.
-3. Calculate eligibility from tolerance and finite positive price.
-4. For eligible groups, create one text button labeled `Sell` with shared and
-   dedicated classes, `data-ticker`, and a concise accessible title.
-5. Append it before `deleteTickerBtn` in `actionsCell`.
-6. Leave ineligible actions absent.
-7. Do not change the `cells` map, column ordering, or row data.
+Place it directly after `get_fx_rate_on` (around line 626). Copy that function's
+shape:
 
-### 2. Prepare The Existing Form
+1. Parse with `date.fromisoformat(date_iso)`.
+2. Fetch `yf.Ticker(symbol).history(start=(d - timedelta(days=10)).isoformat(),
+   end=(d + timedelta(days=1)).isoformat(), interval="1d")`.
+3. Walk `df.iterrows()` in ascending order. For each row whose timestamp date is
+   on or before `d`, keep the last `_positive_finite_number(row["Close"])` that
+   is not `None`. Break when a row's date is after `d`.
+4. If no valid close was kept, `raise ValueError(f"no price for {symbol} on or
+   before {date_iso}")`.
+5. Return the kept float. Do not cache. Add a short teaching comment that
+   explains "why on-or-before" (weekends/holidays) and "why uncached"
+   (user-driven, one lookup per date change; same as `get_fx_rate_on`).
 
-1. Add one helper near `enterEditMode()` and `exitEditMode()`.
-2. Recheck eligibility from passed cached transaction rows.
-3. Call `exitEditMode()` first.
-4. Fill ticker, exact quantity, local date, and `SELL`.
-5. Back the two-decimal price display with exact `autofillPrice` and clear
-   `priceEdited`.
-6. Scroll the form into view.
-7. Do not submit, fetch, confirm, or refresh.
+### 2. Extend the quote route in `app.py`
 
-### 3. Wire The Action
+1. Add `get_price_on` to the `from market_data import (...)` list at line 31.
+2. In `quote(symbol)` (line 2751), after the `symbol = symbol.strip().upper()`
+   line, read `date_arg = request.args.get("date")`.
+3. When `date_arg is not None`:
+   - Normalize with `date.fromisoformat(date_arg).isoformat()`. On `ValueError`
+     return `jsonify({"error": "date must be YYYY-MM-DD (a real calendar
+     date)"}), 400`.
+   - Call `get_price_on(symbol, date_iso)`. On any `Exception`, log at INFO
+     (same rule as the live 404) and return
+     `jsonify({"error": f"no price for {symbol} on {date_iso}"}), 404`.
+   - Return `jsonify({"symbol": symbol, "price": price, "date": date_iso})`.
+4. When `date_arg is None`, keep the current live code path byte-for-byte.
+5. Update the route docstring to describe the optional `date` query.
 
-1. In the delegated action listener, detect `.ticker-sell-btn` before delete.
-2. Filter `lastTransactions` by its ticker.
-3. Call the preparation helper and return immediately.
-4. Preserve edit and both delete branches exactly.
+### 3. Make the prefill date-aware in `static/js/ledger.js`
 
-### 4. Remove Stale Actions
+1. Add a small helper above `prefillPriceForTicker`:
 
-1. Extend `markLedgerUnavailable()` to remove only Quick Sell buttons.
-2. Keep current live-cell degradation intact.
-3. Let the next successful `renderLedger()` recreate valid controls.
+   ```js
+   function priceQuoteUrl(symbol) {
+       const date = txDateInput.value;
+       return (date && date !== todayLocalISO())
+           ? `/api/quote/${encodeURIComponent(symbol)}?date=${encodeURIComponent(date)}`
+           : `/api/quote/${encodeURIComponent(symbol)}`;
+   }
+   ```
 
-### 5. Use Minimal Styling
+   Explain in one comment: today (or empty) means the live quote; any other
+   date means the recorded close on or before it.
 
-Prefer existing `.tx-action-btn` styles. Add CSS only if browser inspection
-shows a spacing or focus defect. If needed, reuse tokens, retain hover/touch
-visibility, keep focus visible, avoid destructive red, and do not alter table
-or mobile-card geometry.
+2. In `prefillPriceForTicker`:
+   - After computing `symbol`, capture `const requestedDate = txDateInput.value;`.
+   - Keep clearing the field first.
+   - Replace the fetch URL with `priceQuoteUrl(symbol)`.
+   - In the reply handler, add the date to the stale-guard:
+     `if (txForm.elements.ticker.value.trim().toUpperCase() !== symbol ||
+      txDateInput.value !== requestedDate) return;`
+   - Keep the exact `autofillPrice = quote.price` and
+     `txForm.elements.price.value = quote.price.toFixed(2)` lines.
+3. Add a date listener after the existing `txDateInput.value = todayLocalISO()`
+   load line (around line 1467):
 
-### 6. Comments
+   ```js
+   txDateInput.addEventListener("change", () => {
+       if (editingTxId !== null) return;                  // edit mode: fact wins
+       if (priceEdited) return;                           // manual price wins
+       if (!txForm.elements.ticker.value.trim()) return;  // nothing to price
+       prefillPriceForTicker();
+   });
+   ```
 
-Document only non-obvious rules: `price_now` remains native in CAD display,
-exact precision backs the rounded field, eligibility requires positive owned
-quantity plus a quote, and failed refreshes invalidate unclicked actions.
+   Comment the three guards and the edit-mode rule.
+
+### 4. Update comments
+
+Keep the repository's teaching-comment style. Document only the non-obvious
+rules: on-or-before close, today = live, manual price protection, and edit mode
+exempt.
 
 ## Verification
 
@@ -253,13 +265,11 @@ Run focused tests:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_ledger_quick_sell.py
-python -m pytest tests/test_price_autofill.py tests/test_ledger_groups.py tests/test_ledger_col_count.py
-python -m pytest tests/test_ledger_page.py tests/test_ledger_css.py tests/test_privacy_toggles.py
-python -m pytest tests/test_routes.py
+python -m pytest tests/test_market_data.py tests/test_quote.py
+python -m pytest tests/test_price_autofill.py
 ```
 
-Then the lead agent runs:
+Then the lead agent runs the full suite:
 
 ```bash
 source .venv/bin/activate
@@ -272,27 +282,26 @@ No implementation is complete until the full suite passes.
 
 After pytest passes, stop for user inspection before any commit or push.
 
-1. Desktop light and dark modes: Sell and delete fit without crowding.
-2. Pointer and keyboard: Sell reveals/focuses and does not expand the group.
-3. Mobile/touch: Sell is visible without hover and causes no overflow.
-4. Positive and partially sold holdings: full remaining quantity is filled.
-5. Fractional holding: precise complete quantity is filled.
-6. Ticker, current native price, local date, and SELL are all filled.
-7. Price shows two decimals; untouched submission stores exact quote precision.
-8. User changes to price or quantity are honored.
-9. Clicking Sell during edit mode prepares a new POST, not a PUT correction.
-10. Closed, near-zero, short, SELL-only, and unquoted groups show no Sell.
-11. CAD/native toggle does not change the prepared native price.
-12. Privacy mode still prepares actual quantity despite masking its display.
-13. Successful sale refreshes normally and respects closed-position settings.
-14. Complete refresh failure removes unclicked Sell actions; recovery restores
-    eligible actions.
-15. Existing bulk delete, detail actions, sorting, dragging, expansion, and
-    polling remain functional.
+1. Pick a ticker with Date = today → Price shows the live quote.
+2. Change Date to a past trading day → Price refreshes to that day's close.
+3. Change Date to a weekend or holiday → Price shows the prior trading day's
+   close.
+4. Type a price, then change the Date → the typed price is kept.
+5. Change the Date with no ticker → nothing happens.
+6. Enter edit mode on an old transaction, then change the Date → the stored
+   price is kept.
+7. Pick a ticker whose date has no history (for example, a date before the
+   ticker existed) → the Price field is left empty with no error toast.
+8. The form still submits the exact auto-filled precision when untouched, and
+   the typed value when edited.
+9. Quick Sell still fills ticker, full quantity, today's live price, local
+   date, and SELL.
+10. Existing ledger grouping, sorting, expansion, import, and polling still
+    work.
 
 ## Completion Gates
 
-1. Detailed plan and roadmap item #18 `in progress`: complete after this edit.
+1. This plan and roadmap item #19 `in progress`: complete after this edit.
 2. User approves this plan before implementation.
 3. Write failing tests first.
 4. Implement production code.
@@ -300,13 +309,13 @@ After pytest passes, stop for user inspection before any commit or push.
 6. Pass full `python -m pytest`.
 7. Obtain browser GUI approval.
 8. Only then ask whether to commit and push.
-9. Mark #18 shipped only in the approved commit, with PR number and date or a
+9. Mark #19 shipped only in the approved commit, with PR number and date or a
    direct-main date.
 
 ## Definition Of Done
 
-Every positively held and currently quoted ticker has one safe Quick Sell
-action that prepares, but never submits, an exact full-position SELL in the
-existing form. Closed, short, unavailable, and stale positions cannot offer the
-action. Precision, ledger layout, mobile, accessibility, and existing actions
-remain correct; all tests pass; and the user approves browser behavior.
+Picking a ticker or changing the date fills Price with the latest recorded close
+on or before the selected date, except today, which uses the live quote. A
+manually typed price and edit mode are never overwritten. The live endpoint's
+reply shape is unchanged. All tests pass, and the user approves the browser
+behavior.

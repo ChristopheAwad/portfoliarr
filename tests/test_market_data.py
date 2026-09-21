@@ -701,6 +701,75 @@ def test_fx_rate_on_rejects_invalid_rates(fake_yf, rate):
         market_data.get_fx_rate_on("USD", "CAD", "2026-08-31")
 
 
+# ── get_price_on: the ledger prefill's dated price ────────────────────
+
+def test_price_on_returns_the_close_on_the_date(fake_yf):
+    """The recorded price the ledger prefill wants: the security's daily
+    close on the selected date (last bar on-or-before it)."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [101.0, 102.0, 103.0]},
+        index=pd.to_datetime(["2026-08-27", "2026-08-28", "2026-08-31"]),
+    )
+    assert market_data.get_price_on("AAPL", "2026-08-31") == 103.0
+    # The date-window fetch reached yfinance (start = date − 10d grace
+    # window, end = date + 1d so the date itself is included).
+    assert ("range", "AAPL", "2026-08-21", "2026-09-01") in fake_yf.calls
+
+
+def test_price_on_weekend_falls_back_to_prior_close(fake_yf):
+    """A Saturday date has no bar — the last close ON OR BEFORE it (Friday)
+    is the recorded price the user should see."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [102.0, 103.0]},
+        index=pd.to_datetime(["2026-08-28", "2026-08-31"]),
+    )
+    assert market_data.get_price_on("AAPL", "2026-08-29") == 102.0
+
+
+def test_price_on_ignores_bars_after_the_date(fake_yf):
+    """A later bar must never be used: the answer is on-or-before the date,
+    never the next trading day's close."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [103.0, 999.0]},
+        index=pd.to_datetime(["2026-08-31", "2026-09-02"]),
+    )
+    assert market_data.get_price_on("AAPL", "2026-08-31") == 103.0
+
+
+def test_price_on_raises_when_no_bar_covers_the_date(fake_yf):
+    """No close on-or-before the date (Yahoo gap, brand-new listing) is a
+    named ValueError — the route's cue to serve 404 and leave the field
+    empty rather than guess a price."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [103.0]},
+        index=pd.to_datetime(["2026-09-08"]),   # strictly AFTER the date
+    )
+    with pytest.raises(ValueError):
+        market_data.get_price_on("AAPL", "2026-08-31")
+
+
+def test_price_on_empty_dataframe_raises(fake_yf):
+    """An empty history is the same honest failure as a missing bar."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": []}, index=pd.to_datetime([]),
+    )
+    with pytest.raises(ValueError):
+        market_data.get_price_on("AAPL", "2026-08-31")
+
+
+@pytest.mark.parametrize(
+    "price", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0]
+)
+def test_price_on_rejects_invalid_prices(fake_yf, price):
+    """NaN/inf/non-positive closes are nonsense, not prices — reject them so
+    they can never ride the JSON payload."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [price]}, index=pd.to_datetime(["2026-08-31"]),
+    )
+    with pytest.raises(ValueError):
+        market_data.get_price_on("AAPL", "2026-08-31")
+
+
 # ── search_tickers: the navbar's suggestions ──────────────────────────
 
 def test_search_normalizes_yahoo_hits_in_ranked_order(fake_yf):
