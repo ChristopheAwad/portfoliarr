@@ -554,7 +554,7 @@ let summaryInflight = null;
 
 async function refreshPortfolioSummary() {
     // Join the in-flight cycle instead of starting a duplicate request.
-    if (summaryInflight) return;
+    if (summaryInflight) return summaryInflight;
     summaryInflight = (async () => {
         try {
             const response = await fetch("/api/portfolio/summary");
@@ -770,12 +770,10 @@ document.addEventListener("themechange", () => {
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
 
-// The canvas from the HTML, plus the card/box around it (found by walking
-// UP from the canvas with closest() — the donut is where the canvas is,
-// no matter how the card markup shifts).
+// The canvas from the HTML, plus the box around it (found by walking UP
+// from the canvas with closest() — the donut is where the canvas is, no
+// matter how the card markup shifts).
 const allocationCanvas = document.getElementById("allocationChart");
-const donutCardEl = allocationCanvas
-    ? allocationCanvas.closest(".donut-card") : null;
 const donutBoxEl = allocationCanvas
     ? allocationCanvas.closest(".donut-box") : null;
 
@@ -807,7 +805,6 @@ let animateNextAllocationPaint = false;
 // failed revalidation restores this payload instead of blanking the chart.
 // A payload is reusable ONLY for its own dimension — restoring a "sector"
 // donut under a "country" slide would lie about the data it shows.
-let displayedAllocKey = null;
 let lastAllocPayload = null;
 
 // Respect the OS "reduce motion" accessibility setting: users who opted
@@ -990,32 +987,45 @@ function switchAllocView(newIndex) {
 // all fire for the same dimension within one slow round-trip — the first
 // caller owns the fetch; the rest join it (their paint arrives when its
 // reply lands). STALE-WHILE-REVALIDATE: a request that finds a stale cache
-// entry keeps the previous donut on screen with a soft "refreshing" note
-// instead of blanking to a skeleton — only a first-load paints "loading".
+// entry repaints that entry first (the CORRECT donut for this dimension
+// stays visible while the network refreshes it) and shows a soft
+// "refreshing" note instead of blanking to a skeleton; only a first-load
+// paints "loading".
 async function fetchAllocDimension(by) {
-    // Join the in-flight request for this dimension, never start a second.
-    if (allocInFlight[by]) return;
+    // Navigation guard: never paint (or queue work) for a slide the user
+    // already left — a late reply for an old view must not appear under
+    // the current label.
+    if (!isActiveAllocView(by)) return;
+
+    // Paint this dimension's last-known payload NOW when we have one
+    // (fresh, stale, or mid-revalidate): the flip must show ITS OWN donut
+    // instantly. Without this, a flip to a dimension whose cache is stale
+    // (or re-fetching) leaves the previous slide's donut on the canvas
+    // under the new label until the network answers. Honest-empties carry
+    // their own message via paintAllocation's states.
+    if (allocCache[by]) {
+        const entry = allocCache[by];
+        paintAllocation(entry.data.slices, entry.data.excluded, by);
+    }
+
+    // Single-flight: join the request already in flight for this dimension
+    // instead of starting a second one.
+    if (allocInFlight[by]) return allocInFlight[by];
+
+    // Fresh cache — just painted above, nothing to fetch this cycle.
+    if (!allocCacheStale(by)) return;
 
     const flight = (async () => {
-        // Navigation guard: if the user flipped away while this caller
-        // queued, a stale reply must never paint under the new slide.
-        if (!isActiveAllocView(by)) return;
-
-        if (!allocCacheStale(by)) {
-            // Cache hit: paint instantly (arrow flips are the point of
-            // caching — no waiting on the network for a fresh reply).
-            const entry = allocCache[by];
-            paintAllocation(entry.data.slices, entry.data.excluded, by);
-            return;
-        }
-
         // Stale or first visit: the cache TTL mirrors the 60s poll, so
-        // every poll triggers a revalidate. Distinguish "have-you-seen-a-
-        // donut-before" so a revalidate keeps the old chart visible while
-        // a first load says clearly that data is on the way.
-        if (allocCache[by]) {
+        // every poll is a revalidate. A donut with real wedges shows a
+        // soft "refreshing" note; an honest empty keeps its empty message
+        // (the revalidate paints nothing new yet); a first load says
+        // clearly that data is on the way.
+        const cached = allocCache[by];
+        if (cached && cached.data.slices &&
+            cached.data.slices.length > 0) {
             setAllocState("stale");
-        } else {
+        } else if (!cached) {
             setAllocState("loading");
         }
 
@@ -1033,15 +1043,25 @@ async function fetchAllocDimension(by) {
     })().catch((err) => {
         if (!isActiveAllocView(by)) return;
         console.error(`allocation fetch (${by}) failed:`, err);
-        if (lastAllocPayload) {
-            // A revalidation failed — the prior donut is still painted
-            // (or another dimension's donut is showing): drop the
-            // "refreshing" note, keep the chart. Failures are transient;
-            // blanking a valid donut over a blip is not a kindness, and
-            // the next poll retries anyway.
+        // The prior payload is reusable ONLY when it belongs to THIS
+        // dimension — restoring a "sector" donut under a "country" slide
+        // would lie about the data it shows.
+        const prior = lastAllocPayload && lastAllocPayload.by === by
+            ? lastAllocPayload
+            : null;
+        if (prior && prior.slices && prior.slices.length > 0) {
+            // A revalidation failed — this dimension's donut is still
+            // painted: drop the "refreshing" note and keep the chart.
+            // Failures are transient; blanking a valid donut over a blip
+            // is not a kindness, and the next poll retries anyway.
             setAllocState("ready");
+        } else if (prior) {
+            // This dimension's last honest result was an empty portfolio —
+            // keep its message instead of pretending it broke.
+            setAllocState("empty");
         } else {
-            // Nothing has ever painted: say so plainly.
+            // Nothing for THIS dimension was ever painted. Hide whatever
+            // other dimension's data is on the canvas and say so plainly.
             setAllocState("unavailable");
         }
     }).finally(() => {
@@ -1114,8 +1134,7 @@ function paintAllocation(slices, excluded, by = null) {
     // built from: a failed revalidation for the SAME dimension can safely
     // keep it (lastAllocPayload.by === by), but no other dimension may be
     // restored into its place.
-    displayedAllocKey = by ?? null;
-    lastAllocPayload = { by: displayedAllocKey, slices, excluded };
+    lastAllocPayload = { by: by ?? null, slices, excluded };
     currentHoldings = slices;
     runAllocationCrossfade();
 

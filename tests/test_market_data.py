@@ -184,33 +184,6 @@ def test_quote_cache_returns_defensive_copies(fake_yf):
 # fetch concurrently, and a failed fetch wakes every waiter and stays
 # retryable.
 
-def _run_concurrently(fn, n=4, timeout=10):
-    """Run `fn` across `n` threads; return (answers, errors) with a bound so
-    a broken implementation cannot hang the suite forever."""
-    answers = []
-    errors = []
-    lock = threading.Lock()
-
-    def safe():
-        try:
-            value = fn()
-        except Exception as exc:  # noqa: BLE001 — every failure is collected
-            with lock:
-                errors.append(exc)
-        else:
-            with lock:
-                answers.append(value)
-
-    threads = [threading.Thread(target=safe) for _ in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout)
-    assert not any(t.is_alive() for t in threads), \
-        "concurrent callers hung — the in-flight coordination deadlocked"
-    return answers, errors
-
-
 def test_concurrent_quote_cache_misses_share_one_yahoo_request(monkeypatch):
     calls = []
     entered = []                     # one entry per thread inside .fast_info
@@ -328,6 +301,13 @@ def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
     }
     errors = []
     error_lock = threading.Lock()
+    # All threads cross the same start gate right before calling get_quote,
+    # so the four callers begin their lock-section race together (the main
+    # thread then waits for the owner's slot below — no long sleeps that a
+    # loaded machine could strap over).
+    arrivals = 0
+    arrival_lock = threading.Lock()
+    start = threading.Barrier(4, timeout=10)
 
     class FakeTicker:
         def __init__(self, symbol):
@@ -353,7 +333,11 @@ def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
     monkeypatch.setattr(market_data, "yf", FakeYf)
 
     def fetch():
+        nonlocal arrivals
+        with arrival_lock:
+            arrivals += 1
         try:
+            start.wait()
             market_data.get_quote("AAPL")
         except Exception as exc:  # noqa: BLE001 — every failure is collected
             with error_lock:
@@ -362,9 +346,21 @@ def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
     threads = [threading.Thread(target=fetch) for _ in range(4)]
     for t in threads:
         t.start()
+    # Wait until ALL four callers are about to run get_quote, then for the
+    # owner's in-flight slot to be registered (it is, before the network
+    # call). Opening the gate any later would let a straggler become a
+    # SECOND owner after the first failure cleared its slot — the exact
+    # duplicate-fetch race this whole PR removes.
     deadline = time.monotonic() + 5
-    while not entered and time.monotonic() < deadline:
+    while arrivals < 4 and time.monotonic() < deadline:
         time.sleep(0.005)
+    assert arrivals == 4, "all four callers must reach the start gate"
+    deadline = time.monotonic() + 5
+    while market_data._inflight_quotes.get("AAPL") is None \
+            and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert market_data._inflight_quotes.get("AAPL") is not None, \
+        "the owner must register its in-flight slot before the network call"
     time.sleep(0.3)
     gate.set()
     for t in threads:

@@ -81,33 +81,6 @@ def seed(ticker, price, qty, tx_type="BUY", currency="CAD", fx_rate=1.0,
 
 # ── Market data: get_profile ────────────────────────────────────────────
 
-def _run_concurrently(fn, n=4, timeout=10):
-    """Run `fn` across `n` threads; return (answers, errors) with a bound so
-    a broken implementation cannot hang the suite forever."""
-    answers = []
-    errors = []
-    lock = threading.Lock()
-
-    def safe():
-        try:
-            value = fn()
-        except Exception as exc:  # noqa: BLE001 — every failure is collected
-            with lock:
-                errors.append(exc)
-        else:
-            with lock:
-                answers.append(value)
-
-    threads = [threading.Thread(target=safe) for _ in range(n)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout)
-    assert not any(t.is_alive() for t in threads), \
-        "concurrent callers hung — the in-flight coordination deadlocked"
-    return answers, errors
-
-
 def test_concurrent_profile_cache_misses_share_one_yahoo_request(monkeypatch):
     calls = []
     entered = []                     # one entry per thread inside .info
@@ -212,6 +185,13 @@ def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
     fail = True
     errors = []
     error_lock = threading.Lock()
+    # Same co-release + slot-registration wait as the quote failure test:
+    # all four callers chase the lock together and the main thread only
+    # opens the gate once the owner's slot exists, so no call after the
+    # owner fails can become a duplicate second fetch.
+    arrivals = 0
+    arrival_lock = threading.Lock()
+    start = threading.Barrier(4, timeout=10)
 
     class FakeTicker:
         def __init__(self, symbol):
@@ -234,7 +214,11 @@ def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
     monkeypatch.setattr(market_data, "yf", FakeYf)
 
     def fetch():
+        nonlocal arrivals
+        with arrival_lock:
+            arrivals += 1
         try:
+            start.wait()
             market_data.get_profile("AAPL")
         except Exception as exc:  # noqa: BLE001 — every failure is collected
             with error_lock:
@@ -244,8 +228,15 @@ def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
     for t in threads:
         t.start()
     deadline = time.monotonic() + 5
-    while not entered and time.monotonic() < deadline:
+    while arrivals < 4 and time.monotonic() < deadline:
         time.sleep(0.005)
+    assert arrivals == 4, "all four callers must reach the start gate"
+    deadline = time.monotonic() + 5
+    while market_data._inflight_profiles.get("AAPL") is None \
+            and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert market_data._inflight_profiles.get("AAPL") is not None, \
+        "the owner must register its in-flight slot before the network call"
     time.sleep(0.3)
     gate.set()
     for t in threads:

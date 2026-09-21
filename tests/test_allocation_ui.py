@@ -173,8 +173,8 @@ def test_same_dimension_fetch_is_single_flighted():
     src = _read_js("static/js/main.js")
     assert "const allocInFlight = {};" in src, \
         "main.js must keep one in-flight promise per dimension"
-    assert "if (allocInFlight[by]) return;" in src, \
-        "exported callers must join an in-flight fetch instead of starting one"
+    assert "if (allocInFlight[by]) return allocInFlight[by];" in src, \
+        "exported callers must join (and share) the in-flight fetch"
     assert "allocInFlight[by] = flight;" in src, \
         "the fetch must register its own promise under the dimension key"
     assert ".finally" in src, \
@@ -196,14 +196,46 @@ def test_refetch_keeps_last_painable_payload():
         "the failure path must NOT fabricate an empty payload"
     assert "lastAllocPayload" in src, \
         "main.js must remember the last painted payload to restore it"
-    assert "lastAllocPayload.by" in src, \
-        "a stale payload is reusable ONLY for its own dimension"
+    assert "lastAllocPayload.by === by" in src, \
+        "a stale payload is reusable ONLY for its own dimension — the " \
+        "catch must gate on the dimension, not any last payload"
     assert '"unavailable"' in src, \
         "a first-load failure must show the unavailable state"
     assert '"stale"' in src, \
         "warmed revalidation must surface a soft refreshing state"
     assert '"empty"' in src, \
         "a genuine empty reply must show the empty state, not an error"
+    assert 'setAllocState("empty")' in src, \
+        "a same-dimension honest empty keeps its message on revalidation " \
+        "failure, instead of being blanked or mislabeled ready"
+
+
+def test_stale_dimension_paints_its_cached_donut_first():
+    """A dimension whose cache is stale (or mid-revalidate) must repaint its
+    OWN cached payload before the network answers. ROOT CAUSE fixed here: the
+    first version only set a 'refreshing' note and left the PREVIOUS slide's
+    donut on the canvas under the new label until the reply landed."""
+    src = _read_js("static/js/main.js")
+    assert "paintAllocation(entry.data.slices, entry.data.excluded, by)" in src, \
+        "fetchAllocDimension must repaint this dimension's cached payload " \
+        "immediately, before any network wait"
+    fetch = src.split("async function fetchAllocDimension(by)", 1)[1]
+    fetch = fetch.split("\n}", 1)[0]
+    # The cached-payload repaint must run before the in-flight join, so a
+    # re-flip onto an in-flight dimension still shows that dimension's donut.
+    paint_pos = fetch.find("paintAllocation(entry.data.slices")
+    inflight_pos = fetch.find("if (allocInFlight[by]) return")
+    assert paint_pos != -1 and inflight_pos != -1 and paint_pos < inflight_pos, \
+        "the cached payload must be painted before the single-flight join"
+
+
+def test_stale_revalidation_only_notes_a_nonempty_donut():
+    """A stale revalidation must show the 'refreshing' note only when the
+    cached donut actually has wedges — an honest empty keeps its empty
+    message instead of revealing a blank 220px box every 60s."""
+    src = _read_js("static/js/main.js")
+    assert "cached.data.slices.length > 0" in src, \
+        "the refreshing note must be gated on a non-empty cached payload"
 
 
 def test_allocation_tooltip_reads_the_current_chart_label():
@@ -368,7 +400,7 @@ def test_summary_refresh_is_single_flighted():
     drops the new call and lets the in-flight one serve this cycle."""
     src = _read_js("static/js/main.js")
     assert "let summaryInflight = null;" in src
-    assert "if (summaryInflight) return;" in src
+    assert "if (summaryInflight) return summaryInflight;" in src
     assert "summaryInflight = null;" in src
     body = src.split("async function refreshPortfolioSummary()", 1)[1]
     body = body.split("\n}", 1)[0]
