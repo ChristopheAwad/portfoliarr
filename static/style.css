@@ -1618,7 +1618,7 @@ input[type="date"]::-moz-placeholder {
     color: var(--text-secondary);
 }
 
-/* Let Chrome draw its native calendar icon for the dark input surface. */
+/* Let the browser draw its native calendar icon for the dark input surface. */
 .dark input[type="date"] {
     color-scheme: dark;
 }
