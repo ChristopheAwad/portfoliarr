@@ -1,743 +1,379 @@
-# Bug Fix: Fast and Reliable Allocation Donut Refresh
+# Feature #9: Dashboard Period Return Readout
 
 ## Status
 
-SHIPPED 2026-09-20 (PR #62). All 673 tests pass (full `python -m pytest`);
-dashboard GUI verified by the user before the PR was opened.
+IMPLEMENTED 2026-09-21. All 708 tests pass and the user approved the dashboard
+GUI, including the final grouped label/value alignment. Roadmap item #9 ships
+with this PR.
 
-This is a performance and reliability bug fix for the existing allocation
-donut carousel. It is not a new roadmap feature. Do not add a roadmap item or
-change any shipped roadmap status.
-
-The previous `feature.md` described comparison-picker work that shipped in
-commit `e66c805` through PR #61. This plan replaces that stale handoff.
+This plan replaces the stale allocation-donut handoff that shipped in PR #62.
 
 ## Problem
 
-The dashboard allocation donut can stay blank for too long, load malformed, or
-appear to lose data after a browser refresh. The problem is most visible after
-the Flask process restarts, when the selected allocation view uses company
-profiles, or when Yahoo temporarily fails.
+The dashboard header always shows two portfolio changes:
 
-The Chart.js drawing operation is not the primary delay. The donut cannot draw
-until its market-data request finishes, and the current request path has these
-problems:
+- `Today`, calculated from live quote changes relative to previous close; and
+- `Total`, calculated from current value relative to net cost basis.
 
-1. Concurrent routes can miss the same process-memory cache and make duplicate
-   Yahoo requests for one symbol.
-2. Sector, Country, Type, and Cap allocation views fetch company profiles one
-   ticker at a time. A cold request therefore waits for the sum of all slow
-   `Ticker.info` calls.
-3. Repeated frontend refresh triggers can start more than one request for the
-   same allocation dimension or portfolio summary.
-4. The first load has no explicit donut loading state. The user sees an empty
-   canvas while requests are pending.
-5. A failed non-ticker refresh calls `paintAllocation([], [])`, which destroys
-   a valid donut and incorrectly presents a temporary failure as an empty
-   portfolio.
-6. A failed portfolio-summary request leaves the By Ticker donut blank or stale
-   without explaining its state.
-7. The donut canvas does not have the explicit sizing rule used by the line
-   chart. A hidden-to-visible transition can leave Chart.js with stale canvas
-   dimensions in a browser or Android WebView.
+The chart can display 1D, 5D, 1M, 3M, 6M, YTD, 1Y, 5Y, or MAX, but the page
+does not show the portfolio return for the selected chart period. Changing the
+timeframe therefore changes the line without providing a concise result for
+that period.
 
-Warm reloads are usually faster because the Python quote/profile caches and the
-browser's Chart.js resource cache are already warm. That difference makes the
-cold-refresh behavior look intermittent.
+Replacing `Today` is not correct. It would remove a useful live fact, and the
+chart's 1D span starts at its first available intraday bar rather than at the
+previous close used by the live daily calculation. Adding a third hero pill is
+also not desirable because it crowds the headline on mobile and mixes a
+chart-specific metric with the live summary facts.
+
+Calculating `last portfolio value - first portfolio value` is not an honest
+investment return. A buy can make the value line rise without investment
+performance, and a sell can make it fall. The history endpoint already returns
+`twrr_pct`, a time-weighted return that removes those cash flows.
 
 ## Goal
 
-Make every allocation view load as quickly as the available Yahoo response
-allows and always show an honest state.
+Add one quiet, period-aware return readout directly above the dashboard chart.
+It must:
 
-After this fix:
+- keep the header's `Today`, `Total`, and cost-basis facts unchanged;
+- show the selected chart period, for example `5D return`;
+- show the history endpoint's cash-flow-neutral `twrr_pct`;
+- explain the metric with `Deposits and withdrawals excluded`;
+- update only when matching chart data successfully becomes visible;
+- remain correct through cached loads, rapid period changes, failed requests,
+  chart mode changes, comparison changes, and mobile-tab recovery; and
+- degrade to `Return unavailable` when the selected response cannot define a
+  return.
 
-- concurrent callers share one in-flight quote or profile fetch per symbol;
-- different symbols still fetch concurrently;
-- cold profile-based allocation requests fetch eligible profiles in parallel;
-- the browser starts at most one active request per allocation dimension and
-  one portfolio-summary request;
-- stale cached allocation data remains visible while it is refreshed;
-- temporary failures never masquerade as an empty portfolio;
-- first-load loading, successful empty, initial failure, and stale-after-failure
-  states are visibly different;
-- the displayed donut always belongs to the selected carousel dimension; and
-- the donut resizes correctly after it becomes visible.
+## Approved Design
 
-## Locked Scope
+The readout is part of the chart card, not the portfolio hero:
 
-This is the focused fix approved by the user.
+```text
+5D return                         +2.14%
+Deposits and withdrawals excluded
 
-In scope:
+┌─────────────────────────────────────────┐
+│               chart                     │
+└─────────────────────────────────────────┘
+ Value  Performance
+ 1D  5D  1M  3M  6M  YTD  1Y  5Y  MAX
+```
 
-- per-symbol in-flight request deduplication for `get_quote()` and
-  `get_profile()`;
-- bounded parallel profile loading in `/api/portfolio/allocation`;
-- per-dimension frontend allocation request deduplication;
-- frontend portfolio-summary request deduplication;
-- stale-while-revalidate behavior for cached allocation dimensions;
-- explicit donut loading, empty, unavailable, and stale-warning states; and
-- explicit responsive canvas sizing plus resize-after-reveal behavior.
+Design rules:
 
-Out of scope:
+1. Keep the established typefaces, spacing system, and light/dark palettes.
+2. Use an unboxed, left-aligned text treatment. Do not add a card, pill, icon,
+   border, gradient, or decorative label.
+3. Use tabular numerals for the percentage.
+4. Use the existing `--green-pos` and `--red-neg` tokens for finite results.
+5. Keep the explanatory sentence in `--text-secondary` and visually quieter
+   than the result.
+6. Let the row wrap or stack deliberately on narrow screens. It must not cause
+   horizontal page overflow.
+7. Use plain sentence case. Do not expose `TWR` as unexplained jargon in the
+   visible interface.
 
-- changing the Chart.js or annotation-plugin CDN delivery;
-- changing `setupAutoRefresh()` for every page;
-- redesigning all dashboard startup request scheduling;
-- changing the 60-second browser refresh interval;
-- changing quote, history, or allocation cache persistence;
-- moving process-memory caches into SQLite;
-- changing allocation calculations, supported currencies, or API response
-  shapes;
-- changing the six allocation dimensions, their order, localStorage format,
-  arrows, swipe behavior, pagination, labels, or animations;
-- adding a dependency; and
-- changing database code or schema.
+## Locked Product Decisions
+
+1. The portfolio header keeps its current `Today` and `Total` pills.
+2. The ledger keeps `Day Gain` and `Day %`; this feature does not alter ledger
+   columns, group math, sorting, or the 11-column contract.
+3. The displayed result is always `twrr_pct` from
+   `GET /api/portfolio/history`, not a first-to-last value delta.
+4. The result remains TWR in both Value and Performance chart modes. Changing
+   chart mode must not change the period result or its wording.
+5. The readout describes the portfolio only. Comparison overlays do not alter
+   it, average into it, or replace it.
+6. `1D` is labeled `1D return`, not `Today`, because its chart span is not the
+   live quote's previous-close span.
+7. `MAX` means the available portfolio chart history, which starts at the
+   earliest logged transaction under the existing backend contract.
+8. Finite values show an explicit sign and two decimal places:
+   `+2.14%`, `-2.14%`, and `+0.00%`.
+9. Zero uses the positive color, matching existing gain/change presentation.
+10. Null, missing, non-finite, empty, or otherwise non-computable results show
+    `Return unavailable`, with no positive or negative class.
+11. Privacy mode leaves this percentage visible, matching the current behavior
+    of the header's percentage portions. The readout contains no dollar value.
+12. No endpoint, database, market-data, cache-TTL, or response-shape change is
+    needed. The backend already computes and tests `twrr_pct`.
 
 ## Existing Contracts To Preserve
 
-1. Successful market data only is cached. A Yahoo failure must remain
-   retryable.
-2. The quote cache keeps its 120-second TTL.
-3. The profile cache remains process-lifetime and separate from the name
-   cache.
-4. Cache callers receive defensive dictionaries that they cannot mutate for
-   another caller.
-5. Different symbols must not wait behind one global network lock.
-6. Flask routes own exception logging and HTTP degradation. `market_data.py`
-   continues to raise.
-7. Allocation values remain long-only, priced-only, and CAD-based.
-8. USD values use the live USDCAD rate. Missing conversion excludes the ticker;
-   it never assumes 1:1.
-9. Unsupported currencies remain excluded.
-10. Missing profile fields remain honest exclusions rather than an `Unknown`
-    category.
-11. Slice weights divide by classified slice values only.
-12. Slices remain sorted by descending value.
-13. `/api/portfolio/allocation` retains
-    `{by, currency, slices, excluded}`.
-14. `/api/portfolio/summary` retains its current payload, including holdings.
-15. Currency allocation must not call `get_profile()`.
-16. A short or flat position must not call `get_profile()` or receive a wedge.
-17. Only the selected allocation dimension can paint the shared canvas.
-18. By Ticker continues to use the summary response instead of the allocation
-    endpoint.
-19. Poll updates remain animation-free. Carousel navigation retains its
-    reduced-motion-safe crossfade.
-20. The page continues to use `setupAutoRefresh()` from `common.js`.
+1. `PERIOD_MAP` remains the only timeframe source.
+2. `/api/portfolio/history` retains
+   `{labels, values, costs, index_values, twrr_pct}` plus optional benchmarks.
+3. `index_values` may be null or shorter than labels. `twrr_pct` is null exactly
+   when the backend cannot compute it.
+4. Value mode continues to plot `values`; Performance mode continues to plot
+   `index_values`.
+5. Dashboard comparisons remain visible only in Performance mode.
+6. Stock-detail chart behavior remains unchanged. Its existing
+   `onPeriodData` callback continues to calculate one stock's first-to-last
+   price return.
+7. A silent chart prefetch warms the cache without painting any visible state.
+8. Only the latest visible request can paint after A -> B or A -> B -> A races.
+9. The active timeframe button describes data that successfully reached the
+   canvas. A failed later request leaves the old chart and old button intact.
+10. Frontend cache keys continue to include the period and ordered comparison
+    list.
+11. Reconnect and foreground recovery continue to retry `requestedPeriod`.
+12. Chart mode swaps continue to repaint from `lastReply` without fetching.
+13. Backend raw floats remain unformatted; all percentage formatting stays in
+    frontend code.
+14. Privacy state remains the localStorage string under `hidePortfolio`, with
+    `data-hidden` as the painter source of truth.
+15. The comparison readout under the chart remains unchanged.
 
-## Part 1: Write Failing Market-Data Concurrency Tests
+## Files
 
-Write tests before changing `market_data.py`.
+Planned production changes:
 
-### 1.1 Quote callers share one in-flight cache miss
+- `templates/index.html`
+- `static/js/common.js`
+- `static/js/main.js`
+- `static/style.css`
 
-Add a test to `tests/test_market_data.py` named similarly to
-`test_concurrent_quote_cache_misses_share_one_yahoo_request`.
+Planned tests:
 
-The test must:
+- add `tests/test_period_return_ui.py`
+- update another focused test only if an existing helper contract makes that
+  more precise than duplicating it
 
-- call `market_data.get_quote("AAPL")` concurrently from at least four worker
-  threads;
-- hold the fake Yahoo operation open with `threading.Event` or a barrier until
-  all callers have had time to enter `get_quote()`;
-- release the fake operation once the concurrent callers are waiting;
-- assert that `yf.Ticker("AAPL")` or its `fast_info` network stand-in was
-  invoked exactly once;
-- assert that every caller receives the expected quote values; and
-- assert that callers receive distinct dictionary objects.
+Planning/status files:
 
-The test must fail before implementation because each thread can currently see
-the empty cache and start its own Yahoo operation.
+- `feature.md`
+- `roadmap.md`
 
-Do not use `sleep()` as the only synchronization mechanism. Use deterministic
-thread synchronization and give every wait a finite timeout so a broken test
-cannot hang pytest.
+No changes are planned for `app.py`, `market_data.py`, `db.py`, ledger files,
+stock-detail files, Android files, dependencies, or deployment files.
 
-### 1.2 Profile callers share one in-flight cache miss
+## Test-First Plan
 
-Add a test to `tests/test_allocation.py` named similarly to
-`test_concurrent_profile_cache_misses_share_one_yahoo_request`.
+Create `tests/test_period_return_ui.py` before production edits. Follow the
+repository's existing source/meta-test style because pytest does not execute a
+browser JavaScript runtime. Read rendered HTML through the Flask `client` when
+the test concerns server output; read source files only for JS/CSS contracts.
 
-Use the same deterministic synchronization pattern as the quote test. Require:
+### A. Template Structure And Copy
 
-- at least four concurrent `get_profile("AAPL")` calls;
-- exactly one fake `Ticker.info` fetch;
-- equivalent profile values for every caller; and
-- distinct returned dictionaries.
+1. Request `/` and assert a period-return container exists.
+2. Assert the container includes stable JS hooks for:
+   - the changing period label; and
+   - the changing return value.
+3. Assert the readout appears before `.chart-box` / `#portfolioChart` in the
+   dashboard chart card.
+4. Assert the visible explanatory copy is exactly
+   `Deposits and withdrawals excluded`.
+5. Assert the container has `aria-live="polite"` so an asynchronously loaded
+   period is announced without interrupting the user.
+6. Assert the readout is dashboard-only and does not appear on `/stock/AAPL` or
+   `/ledger`.
+7. Assert no extra dashboard hero pill is added and the existing
+   `portfolio-day-change` and `portfolio-total-return` hooks remain present.
 
-### 1.3 Different quote symbols are not globally serialized
+### B. Shared Chart Callback Wiring
 
-Add `test_different_quote_symbols_can_fetch_concurrently` to
-`tests/test_market_data.py`.
+Add a new optional callback to `setupTimeframeChart`; use a distinct name such
+as `onPeriodSummary`. Do not overload or change the stock page's existing
+`onPeriodData` semantics.
 
-The fake Yahoo implementation for `AAPL` and `MSFT` must wait at a two-party
-barrier. Call both symbols from separate worker threads. Both calls must cross
-the barrier and return successfully.
+Tests must lock these behaviors:
 
-This test prevents an incorrect implementation that holds one global mutex
-during all Yahoo network work. A global mutex would deduplicate requests but
-would make a multi-ticker dashboard slower by fetching every symbol in series.
+1. The factory destructures the optional callback.
+2. A successful visible `paint(data, period)` calls it with:
+   - the exact period that is being painted; and
+   - `data.twrr_pct` only when it is finite, otherwise `null`.
+3. The callback is reached from `paint`, after stale-request guards and before
+   or with the successful visible state update. It must never run directly from
+   a timeframe click.
+4. Silent prefetches return before `paint`, so they cannot update the readout.
+5. Stale visible responses return before `paint`, so they cannot update it.
+6. A successful response with empty labels or null `twrr_pct` still calls the
+   summary callback with `null`; unavailable is a valid painted state, not a
+   reason to preserve a stale number.
+7. A mode-only repaint from `lastReply` can call the callback again with the
+   same period/result; it must not derive a different value from the active
+   mode.
+8. A comparison reload can call the callback from its matching response, but it
+   still passes only the portfolio's `data.twrr_pct`.
+9. The existing `onPeriodData` callback and its finite primary endpoint payload
+   remain intact for the stock page.
 
-### 1.4 Different profile symbols are not globally serialized
+### C. Failure And Recovery State
 
-Add the equivalent profile test to `tests/test_allocation.py`. Two distinct
-symbols must both enter their fake `Ticker.info` operations before either is
-released.
+The initial request and later-request cases must differ:
 
-### 1.5 Quote failures wake waiters and remain retryable
+1. Track whether any reply has painted by using the existing `lastReply` state;
+   do not create a second competing source of chart readiness.
+2. If the initial visible request fails while `lastReply` is null, call the new
+   summary callback with the requested period and `null`. This replaces an
+   endless loading appearance with `Return unavailable`.
+3. If a later visible request fails after a prior reply painted, do not call the
+   summary callback. Preserve the existing readout because the old chart and
+   active button are also preserved.
+4. A later reconnect, foreground recovery, or successful retry paints and
+   replaces the unavailable state through the normal callback.
+5. Silent prefetch failure must never affect the visible readout, including on
+   first load.
+6. Add source-order assertions that make the initial-failure callback subject
+   to the same visible request generation guard. An old failed request must not
+   overwrite a newer successful result with unavailable.
 
-Add a concurrent failure test to `tests/test_market_data.py`.
+### D. Dashboard Painter
 
-Require:
+Tests must lock a small dashboard-only painter in `static/js/main.js`:
 
-- concurrent calls for one symbol share the first in-flight operation;
-- the first fake Yahoo operation raises a named exception;
-- every caller finishes and receives that failure rather than hanging;
-- the failed result is absent from `_cache`;
-- the symbol has no stale in-flight entry after completion; and
-- a later call starts one new Yahoo operation and can succeed.
+1. The dashboard passes the new callback to `setupTimeframeChart`.
+2. The period label is rendered as `${period} return` without special-casing
+   `1D` to `Today`.
+3. A finite positive value renders `+N.NN%` and adds `pos` while removing
+   `neg`.
+4. A finite negative value renders `-N.NN%` and adds `neg` while removing
+   `pos`.
+5. Zero renders `+0.00%` and uses `pos`.
+6. Null and non-finite values render `Return unavailable` and remove both sign
+   classes.
+7. The painter does not calculate `(lastValue - firstValue) / firstValue`.
+8. The painter does not inspect chart mode, benchmark datasets, costs, summary
+   data, or live quote data.
+9. The period return elements are not added to the privacy geometry-lock target
+   list and are not replaced with `****`.
+10. The summary poll does not own or overwrite the period return.
 
-Do not require permanent negative caching. Failed market data must remain
-retryable.
+### E. Styling And Responsive Behavior
 
-### 1.6 Profile failures wake waiters and remain retryable
+Tests must assert focused CSS contracts without over-locking exact decoration:
 
-Add the equivalent test for `get_profile()` in `tests/test_allocation.py`.
-Require no `_profile_cache` entry after failure and a successful later retry.
+1. The readout selector exists and uses a simple flex or grid layout.
+2. The result uses `font-variant-numeric: tabular-nums`.
+3. Positive and negative states use `var(--green-pos)` and
+   `var(--red-neg)`.
+4. The explanatory text uses `var(--text-secondary)`.
+5. The base readout does not add a background, border, box-shadow, or pill-like
+   radius.
+6. A `@media (max-width: 600px)` rule gives the readout a deliberate narrow
+   layout that can stack or wrap without fixed viewport widths.
+7. The mobile rule does not use `100vw` or hidden overflow as a workaround.
+8. Existing comparison-readout and chart-control mobile rules remain intact.
 
-### 1.7 Preserve existing cache behavior
+### F. Existing Backend Coverage
 
-Keep all existing tests for:
+Do not duplicate the complete TWR calculation suite. Confirm that the existing
+`tests/test_twrr.py` coverage remains green for:
 
-- quote TTL expiry;
-- finite-number validation;
-- profile missing fields;
-- empty profiles raising;
-- successful process-lifetime profile caching; and
-- defensive copies.
+- empty and fewer-than-two-bar histories;
+- deposits and withdrawals;
+- buys and sells on bars;
+- null/unpriceable cases;
+- truncation at non-positive bases;
+- pending flow timing; and
+- finite positive, negative, and zero returns.
 
-### 1.8 Run the first red tests
+Add backend tests only if implementation reveals an untested API contract. A
+frontend-only readout must not trigger speculative backend refactoring.
 
-Run:
+## Implementation Plan
+
+Implementation starts only after the tests above fail for the intended missing
+behavior.
+
+### 1. Add The Dashboard Markup
+
+In `templates/index.html`:
+
+1. Inside `.chart-card`, insert the readout immediately before `.chart-box`.
+2. Use one semantic container with `aria-live="polite"`.
+3. Add a label span with a stable id, initially describing the default period
+   as `5D return`.
+4. Add an empty value span with a stable id. The browser painter owns its
+   content; do not ship a mock return.
+5. Add the fixed explanatory sentence in a secondary text element.
+6. Keep the canvas, comparison readout, mode tray, timeframe tray, and compare
+   picker in their current relative order.
+
+### 2. Extend The Shared Chart Factory
+
+In `static/js/common.js`:
+
+1. Add optional `onPeriodSummary` to the `setupTimeframeChart` options.
+2. Keep `onPeriodData` unchanged for stock-detail consumers.
+3. In `paint(data, period)`, normalize the summary value with
+   `Number.isFinite(data.twrr_pct) ? data.twrr_pct : null`.
+4. Invoke `onPeriodSummary({period, returnPct})` for every successful visible
+   paint, including a valid unavailable result.
+5. Do not derive this callback from `plotValues`; `index_values` can truncate,
+   and the backend's `twrr_pct` is the authority for the same covered span.
+6. Ensure silent prefetch and stale-generation exits remain before `paint`.
+7. In `refresh`'s catch path, report `{period, returnPct: null}` only when:
+   - the request is visible;
+   - it is still the latest visible generation; and
+   - `lastReply` is null.
+8. Preserve an existing readout after a later failure, matching the preserved
+   chart and selected timeframe button.
+9. Do not change cache policy, request URLs, generation counters, button sync,
+   recovery listeners, or returned chart-handle methods.
+
+### 3. Add The Dashboard Painter
+
+In `static/js/main.js`:
+
+1. Query the two new element ids once near the dashboard chart setup.
+2. Define a small painter that accepts `{period, returnPct}`.
+3. Always update the label to `${period} return` for the state being painted.
+4. For a finite value:
+   - use `toFixed(2)`;
+   - prepend `+` when the value is zero or positive;
+   - append `%`;
+   - apply exactly one of `pos` or `neg`.
+5. For an unavailable value:
+   - render `Return unavailable`;
+   - remove both sign classes.
+6. Pass the painter as `onPeriodSummary` in the dashboard's existing
+   `setupTimeframeChart` call.
+7. Do not add the readout to `lastPortfolioPaint`, `applyPortfolioPrivacy`,
+   `clearPortfolioGeometryLocks`, or `refreshPortfolioSummary`.
+
+### 4. Style The Readout
+
+In `static/style.css`:
+
+1. Add a compact top-of-card readout style before the chart canvas rules.
+2. Align the period label and result on a clear shared baseline.
+3. Give the result modest emphasis rather than hero-size typography.
+4. Put the explanation on a quiet secondary line.
+5. Reuse the existing sign-color tokens and tabular-number convention.
+6. Add a narrow-screen rule in the established final mobile section so the
+   label/result and explanation fit without clipping.
+7. Do not move or redesign the Value/Performance and timeframe controls.
+
+### 5. Keep Documentation Accurate
+
+Code comments must explain only non-obvious contracts:
+
+- why TWR is used instead of first-to-last portfolio value;
+- why initial failure becomes unavailable but later failure preserves the old
+  result; and
+- why `1D return` is not called `Today`.
+
+Do not add comments that restate assignments or CSS declarations.
+
+## Focused Verification
+
+Run these commands after implementation:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_market_data.py tests/test_allocation.py -q
+python -m pytest tests/test_period_return_ui.py
+python -m pytest tests/test_chart_refresh.py tests/test_chart_recovery.py tests/test_compare_ui.py
+python -m pytest tests/test_twrr.py tests/test_privacy_toggles.py tests/test_ui_revamp.py
 ```
 
-Expected pre-implementation failures are duplicate same-symbol Yahoo calls and
-failure of the in-flight-map cleanup assertions. Existing tests must stay
-green. If the different-symbol concurrency tests fail before implementation
-because the current code already permits concurrency, record them as
-regression guards rather than expected red tests.
+Resolve every failure without weakening unrelated contracts.
 
-## Part 2: Deduplicate In-Flight Market Requests
-
-Edit `market_data.py` only after Part 1 has produced the intended failures.
-
-### 2.1 Add coordination state
-
-Use one short-held `threading.Lock` to protect cache inspection and in-flight
-map mutation. Add two separate in-flight maps:
-
-- quote symbol to `concurrent.futures.Future`; and
-- profile symbol to `concurrent.futures.Future`.
-
-The maps coordinate work only while a request is running. They are not caches
-and must not retain completed entries.
-
-Do not hold the coordination lock while calling yfinance. The lock can protect
-dictionary operations, but unrelated symbols must perform network work in
-parallel.
-
-### 2.2 Change `get_quote()`
-
-Implement this exact ownership flow:
-
-1. Normalize nothing new; retain the caller's current symbol contract.
-2. Acquire the coordination lock.
-3. Check `_cache` and return a defensive copy when the entry is still inside
-   `TTL_SECONDS`.
-4. If an in-flight future already exists for the symbol, retain that future and
-   mark this caller as a waiter.
-5. Otherwise create and store a future and mark this caller as the owner.
-6. Release the lock.
-7. A waiter calls `future.result()` outside the lock and returns a defensive
-   copy of the successful dictionary. The same exception must propagate if the
-   owner fails.
-8. The owner performs the existing `fast_info` fetch, validation, and payload
-   construction outside the lock.
-9. On success, acquire the lock, write the completed quote and a completion-time
-   `fetched_at`, complete the future, and remove that exact future from the
-   in-flight map.
-10. On failure, acquire the lock, complete the future with the exception, remove
-    that exact future, and re-raise.
-
-Use an identity check before removing an in-flight entry so cleanup cannot
-delete a newer future if later code changes allow an immediate retry.
-
-Successful data remains the only data written to `_cache`.
-
-### 2.3 Change `get_profile()`
-
-Use the same owner/waiter flow with `_profile_cache` and the profile in-flight
-map.
-
-Preserve:
-
-- the existing `Ticker.info` source;
-- empty-profile `ValueError` behavior;
-- the four returned fields;
-- finite market-cap filtering; and
-- defensive copies for owners, waiters, and later cache hits.
-
-### 2.4 Keep cache clearing safe
-
-`clear_market_caches()` must clear completed cache data as it does now. Tests
-call it only when no market operation is active. Do not add production logic
-that cancels active futures or leaves waiters blocked.
-
-Add short comments beside the lock and in-flight maps. Explain that the lock is
-released before Yahoo calls so same-symbol work is deduplicated without
-serializing different symbols.
-
-### 2.5 Verify the data layer
-
-Run:
-
-```bash
-python -m pytest tests/test_market_data.py tests/test_allocation.py -q
-```
-
-All concurrency, retry, TTL, validation, and defensive-copy tests must pass
-before changing the route.
-
-## Part 3: Write a Failing Allocation-Route Parallelism Test
-
-Add the route test to `tests/test_allocation.py` before editing `app.py`.
-
-### 3.1 Prove eligible profiles overlap
-
-Add `test_profile_dimensions_fetch_eligible_profiles_in_parallel`.
-
-The test must:
-
-- seed at least three positive, priced, supported-currency holdings;
-- patch `app_module.get_profile`, because the route uses the imported name;
-- make each fake profile call wait at a barrier whose party count equals the
-  number of eligible symbols;
-- give the barrier a finite timeout;
-- request `/api/portfolio/allocation?by=sector`;
-- assert every profile call crossed the barrier;
-- assert every ticker appears in the correct slice; and
-- assert the route retains its value, weight, and sorting contracts.
-
-The current serial profile loop must fail this test. A broken barrier must make
-the route result fail its slice assertions rather than hang the suite.
-
-### 3.2 Lock the eligible-symbol boundary
-
-Add or extend tests to prove profile workers are not started for:
-
-- a quote failure;
-- a flat position;
-- a short position;
-- an unsupported quote currency; and
-- a USD holding when the required live USDCAD conversion failed.
-
-Retain the existing Currency test that proves `get_profile()` is never called.
-
-### 3.3 Preserve per-symbol failure degradation
-
-Keep the existing profile-failure test and strengthen it if necessary so one
-worker failure excludes only that symbol while successful workers still
-produce slices.
-
-### 3.4 Run the route red test
-
-Run:
-
-```bash
-python -m pytest tests/test_allocation.py -q
-```
-
-The new profile-overlap test must fail before the route change. Existing
-grouping and resilience tests must remain green.
-
-## Part 4: Parallelize Cold Profile Loading
-
-Edit `portfolio_allocation()` in `app.py`.
-
-### 4.1 Identify eligible symbols first
-
-After quotes and the optional live FX rate are available, derive the symbols
-that can contribute to a profile-based allocation:
-
-- `held > 0`;
-- quote exists;
-- quote currency is CAD or USD; and
-- a USD quote has an available live USDCAD rate.
-
-Do not fetch a profile for a symbol that already has a final exclusion reason
-or cannot receive a wedge.
-
-### 4.2 Skip profile work for Currency
-
-When the selected dimension has `profile_field is None`, do not create a
-profile executor and do not call `get_profile()`.
-
-### 4.3 Fetch profiles through a bounded pool
-
-For Sector, Country, Type, and Cap:
-
-- define a small route-local worker that returns `(symbol, profile)`;
-- catch and log `get_profile()` failures at the route boundary;
-- return `(symbol, None)` for a failed profile;
-- use `ThreadPoolExecutor(max_workers=min(len(eligible_symbols), 8))` when the
-  list is non-empty; and
-- collect results into a symbol-keyed dictionary before aggregation.
-
-Do not make Flask calls, database calls, or `jsonify()` calls in worker
-threads.
-
-### 4.4 Aggregate with the prefetched profiles
-
-Keep the existing aggregation pass and exclusion wording. Replace the serial
-`get_profile(symbol)` call with the prefetched dictionary lookup.
-
-The response must be byte-for-byte equivalent in shape and equivalent in
-meaning. Only request timing and execution order change.
-
-### 4.5 Verify the route
-
-Run:
-
-```bash
-python -m pytest tests/test_allocation.py tests/test_portfolio_summary.py -q
-```
-
-All allocation calculations and failure paths must pass.
-
-## Part 5: Write Failing Frontend State Contracts
-
-The repository does not run JavaScript in pytest. Add narrow source-contract
-tests to `tests/test_allocation_ui.py`; do not snapshot whole functions or add a
-JavaScript dependency.
-
-### 5.1 One in-flight request per allocation dimension
-
-Replace the generation-based same-dimension test with a test that requires:
-
-- one `allocInFlight` object keyed by dimension;
-- `fetchAllocDimension(by)` to return the existing promise when that key is
-  already in flight;
-- a newly created promise to be stored before callers can start another fetch;
-- cleanup in `finally`; and
-- cleanup to delete only the promise that is still registered for that key.
-
-Remove requirements for `allocRequestGenerations` and
-`isLatestAllocRequest()`. Same-key requests cannot arrive out of order when
-only one can exist.
-
-### 5.2 Retain active-view protection
-
-Keep a source contract that successful and failed requests inspect
-`isActiveAllocView(by)` before changing visible state.
-
-A request may populate its cache after the user leaves that slide. It must not
-paint or show a warning on another slide.
-
-### 5.3 Stale-while-revalidate
-
-Add a test that requires an existing `allocCache[by]` entry to paint before a
-stale entry starts its network refresh. A fresh entry must still paint and
-return without fetching.
-
-The cached entry can contain a successful empty result. Do not use truthiness
-of `slices.length` as the test for whether a valid cache entry exists.
-
-### 5.4 Failed refresh preserves valid state
-
-Add contracts that require the allocation catch path to:
-
-- avoid `paintAllocation([], [])`;
-- keep the matching last valid data visible when it exists;
-- show a stale warning for that selected dimension; and
-- show an unavailable state when no valid result exists for the selected
-  dimension.
-
-### 5.5 Portfolio summary is single-flight
-
-Add a test that requires one module-level summary promise. Repeated
-`refreshPortfolioSummary()` calls must return that promise while it is active,
-and `finally` must clear it after success or failure.
-
-### 5.6 By Ticker failure states
-
-Add contracts requiring the summary failure and `nothingPriced` paths to
-update donut state when By Ticker is active:
-
-- retain the previous By Ticker donut and mark it stale if valid prior ticker
-  data exists; and
-- otherwise show unavailable, never a successful empty-portfolio message.
-
-The portfolio header's existing unavailable behavior must remain.
-
-### 5.7 Explicit accessible status markup
-
-Add a rendered-template test requiring one allocation status element inside
-`.donut-card` with:
-
-- `id="alloc-status"`;
-- `class="empty-state"` or an existing compatible quiet status style;
-- `role="status"`;
-- `aria-live="polite"`; and
-- initial text `Loading allocation...`.
-
-Require the donut box to start hidden until valid data is painted. Use the HTML
-`hidden` attribute rather than an inline `display` declaration.
-
-### 5.8 Distinct state messages
-
-Add narrow source assertions for four semantic states:
-
-- loading before the selected dimension has returned;
-- successful empty using the existing no-priced-holdings wording;
-- unavailable after initial failure; and
-- stale warning after a refresh failure with valid prior data.
-
-Do not lock punctuation if that would make the test brittle. Lock the distinct
-state-setting calls and their important wording.
-
-### 5.9 Canvas sizing and reveal resize
-
-Add CSS and JavaScript source contracts requiring:
-
-- `.donut-box` to keep its fixed height and positioned ancestor;
-- `.donut-box > canvas` to use `display: block`;
-- width and height to be `100% !important`, matching `.chart-box > canvas`;
-- a scheduled `allocationChart.resize()` after a hidden donut box is revealed;
-  and
-- the resize to tolerate a null chart handle.
-
-Use `requestAnimationFrame()` for the resize so layout has completed before
-Chart.js measures the box.
-
-### 5.10 Run the frontend red tests
-
-Run:
-
-```bash
-python -m pytest tests/test_allocation_ui.py -q
-```
-
-Expected failures include no in-flight promise map, destructive failure paint,
-no explicit status element, no donut canvas sizing rule, and no reveal resize.
-
-## Part 6: Implement Frontend Request Coordination
-
-Edit `static/js/main.js` after Part 5 is red.
-
-### 6.1 Track valid displayed data
-
-Keep these pieces of state local to the allocation section:
-
-- the existing per-dimension `allocCache`;
-- an `allocInFlight` object keyed by non-ticker dimension;
-- the dimension key represented by the currently displayed chart, where
-  `null` means By Ticker; and
-- whether successful By Ticker data has been received.
-
-Do not add localStorage fields. Only the existing selected index persists.
-
-### 6.2 Replace request generations with one promise per key
-
-Refactor `fetchAllocDimension(by)` in this order:
-
-1. Read any cache entry.
-2. If it exists, paint it immediately when `by` is active.
-3. If it exists and is fresh, return without fetching.
-4. If no cache entry exists and `by` is active, show loading unless the exact
-   same dimension already has valid displayed data.
-5. If `allocInFlight[by]` exists, return that promise.
-6. Create an async request promise and store it in `allocInFlight[by]` before
-   yielding control.
-7. On success, cache `{data, fetchedAt}` and paint only if `by` is still active.
-8. On failure, log once and change visible state only if `by` is still active.
-9. In `finally`, delete the map entry only when it still equals this request
-   promise.
-10. Return the promise to every caller.
-
-Do not use `AbortController` for this fix. Cached background completion is
-useful when the user returns to a slide.
-
-### 6.3 Preserve stale data on allocation failure
-
-If the selected dimension has a prior successful cache entry, repaint or retain
-that exact entry and show the stale-warning state. Do not change its
-`fetchedAt`; it must stay stale and retry on the next refresh.
-
-If it has no prior successful entry, hide data from any previous dimension and
-show unavailable.
-
-Never call `paintAllocation([], [])` from a request catch block. Empty arrays
-are valid only when the server successfully returned an empty result.
-
-### 6.4 Make portfolio summary single-flight
-
-Wrap the existing summary fetch/paint operation in one stored promise:
-
-- return the existing promise when present;
-- preserve every current summary paint and privacy behavior;
-- clear the promise in `finally`; and
-- continue to catch and log at the frontend boundary.
-
-Do not debounce or delay the initial summary request.
-
-### 6.5 Handle By Ticker degradation honestly
-
-On a successful summary response, cache and paint its holdings as now.
-
-If all quotes failed (`nothingPriced`) or the summary request failed:
-
-- when By Ticker is active and prior successful ticker slices exist, retain
-  them and show the stale warning;
-- when By Ticker is active without prior successful ticker slices, hide any
-  other dimension and show unavailable; and
-- when another view is active, do not alter that view's visible donut status.
-
-Do not treat `[]` as failure. A successful summary can honestly report no
-holdings.
-
-## Part 7: Implement Explicit Donut States and Sizing
-
-Edit `templates/index.html`, `static/js/main.js`, and `static/style.css`.
-
-### 7.1 Add status markup
-
-Inside `.donut-card`, keep the header first. Add the status element before or
-after `.donut-box`, but keep it in the card and outside the canvas box.
-
-Initial markup:
-
-```html
-<p id="alloc-status" class="empty-state" role="status"
-   aria-live="polite">Loading allocation...</p>
-```
-
-Add `hidden` to `.donut-box` initially. Keep pagination and the excluded note in
-their current order and preserve all existing IDs.
-
-### 7.2 Replace the dynamically created empty paragraph
-
-Remove the JavaScript-created `donutEmptyState`. Use the template's persistent
-`#alloc-status` element for all non-chart state and refresh warnings.
-
-Create small state functions with one responsibility each, or one function
-with an explicit state argument. It must support:
-
-- loading: chart hidden when no matching valid data exists, status visible;
-- ready: chart visible, status hidden;
-- empty: chart hidden, status visible with the no-holdings message;
-- unavailable: chart hidden, status visible with failure wording; and
-- stale: matching chart remains visible, status visible with warning wording.
-
-Use `hidden` properties or attributes as the source of truth. Do not mix them
-with inline `style.display` state.
-
-### 7.3 Prevent cross-dimension stale displays
-
-When loading an uncached slide, data from the previously selected dimension
-must not remain visible under the new label. Hide the box and show loading.
-
-Only show stale data when its recorded dimension key equals the selected key.
-
-### 7.4 Paint successful empty responses
-
-`paintAllocation()` must continue to destroy the Chart.js instance after a
-successful empty response so no obsolete wedges remain associated with an
-honest empty result. Record the dimension as successfully loaded even when its
-slice list is empty.
-
-This is different from a catch path, which must never pass fabricated empty
-arrays into the painter.
-
-### 7.5 Resize after reveal
-
-When ready or stale state changes `.donut-box.hidden` from true to false,
-schedule:
-
-```javascript
-requestAnimationFrame(() => allocationChart?.resize());
-```
-
-Creating a new chart can proceed normally. Updating an existing hidden chart
-must still receive the scheduled resize after reveal.
-
-### 7.6 Add the canvas sizing contract
-
-Immediately after `.donut-box`, add:
-
-```css
-.donut-box > canvas {
-    display: block;
-    width: 100% !important;
-    height: 100% !important;
-}
-```
-
-Do not change the 220px donut-box height in this fix.
-
-### 7.7 Preserve carousel behavior
-
-Keep:
-
-- the six-view source array;
-- saved `allocationDimension` parsing;
-- previous/next wrapping;
-- clickable pagination dots;
-- position counter;
-- swipe threshold;
-- crossfade on deliberate navigation only;
-- reduced-motion behavior;
-- excluded-ticker note; and
-- tooltip privacy behavior.
-
-## Part 8: Focused Verification
-
-Run the core changed areas:
-
-```bash
-source .venv/bin/activate
-python -m pytest \
-  tests/test_market_data.py \
-  tests/test_allocation.py \
-  tests/test_allocation_ui.py \
-  tests/test_portfolio_summary.py -q
-```
-
-Run nearby frontend and route regressions:
-
-```bash
-python -m pytest \
-  tests/test_ui_redesign.py \
-  tests/test_web_refresh_wiring.py \
-  tests/test_routes.py \
-  tests/test_quote.py \
-  tests/test_ledger_groups.py -q
-```
-
-If Node is available, run:
-
-```bash
-node --check static/js/main.js
-```
-
-Node was not installed during the prior feature. Its absence is not a pytest
-failure; report it accurately.
-
-## Part 9: Full-Suite Gate
+## Full Verification
 
 The lead agent must run:
 
@@ -746,119 +382,53 @@ source .venv/bin/activate
 python -m pytest
 ```
 
-Do not report implementation complete unless the full suite passes. Do not
-weaken existing tests to accommodate this fix.
+No implementation is complete until the full suite passes.
 
-## Part 10: Browser GUI Approval Gate
+## Browser GUI Approval Checklist
 
-After pytest is green, stop and wait for the user's browser approval before any
-commit or push.
+After pytest passes, stop and ask the user to inspect the browser. Do not commit
+or push before this approval.
 
-### Cold-load preparation
+The browser check must cover:
 
-- Restart the Flask process so quote and profile caches are empty.
-- Open the dashboard with browser developer tools visible.
-- Test once with By Ticker saved and once with a profile-based view such as By
-  Sector saved.
+1. Desktop light mode: the readout is above the chart and visually quiet.
+2. Desktop dark mode: text and green/red results have clear contrast.
+3. Mobile width: no horizontal page overflow, clipped copy, or collision with
+   the chart.
+4. Default load: `5D return` matches the default 5D chart.
+5. Every timeframe: label and return update together after the chart loads.
+6. Rapid 1M -> 1Y -> 1M clicks: only the final successfully painted chart and
+   return are shown.
+7. Value/Performance switching: return stays the same while the line mode
+   changes.
+8. Add/remove comparison overlays: the portfolio return stays correct and the
+   existing comparison readout remains usable.
+9. Privacy on/off: the period percentage remains visible and no hero layout
+   shift is introduced.
+10. Empty or non-computable portfolio history: `Return unavailable` appears
+    without green/red styling.
+11. Temporary failed period request after a valid chart: the prior chart,
+    selected button, and readout remain paired.
+12. Reconnect or return from a hidden tab: a successful retry updates the
+    readout with the recovered chart.
 
-### Initial loading
+## Completion Gates
 
-- The selected view label and pagination position are correct immediately.
-- `Loading allocation...` appears instead of an unexplained blank canvas.
-- Data from a previously selected dimension never appears under the new label.
-- The donut becomes visible when its data arrives.
-- The donut has a circular shape and correct legend placement on first paint.
+1. Detailed plan written and roadmap item pulled: this document.
+2. User approves this plan before implementation.
+3. Failing tests are written first.
+4. Production code is implemented.
+5. Focused tests pass.
+6. Full `python -m pytest` passes.
+7. User approves the browser GUI.
+8. Only then ask whether to commit and push.
+9. Mark roadmap item #9 shipped only in the approved commit, with the required
+   date and PR number or direct-main date.
 
-### Profile-based cold load
+## Definition Of Done
 
-- Sector, Country, Type, and Cap no longer wait for profiles one ticker at a
-  time.
-- The request completes near the duration of the slowest worker batch, not the
-  sum of every ticker's profile duration.
-- Currency remains faster and does not require profile metadata.
-
-### Refresh and stale behavior
-
-- Refresh after a successful load keeps the existing donut visible while new
-  data is pending.
-- A temporary failed refresh keeps the previous valid donut and displays a
-  clear stale warning.
-- A first-load failure displays unavailable, not the no-holdings message.
-- Reconnecting and triggering refresh restores ready state without reloading
-  the page.
-- A successful genuinely empty portfolio shows the existing no-holdings
-  message.
-
-### Rapid interaction
-
-- Click arrows and pagination dots quickly across all six views.
-- Swipe rapidly on a phone-sized viewport.
-- The selected label, dots, counter, wedges, legend, tooltip, excluded note,
-  and status always refer to the same dimension.
-- Repeated selection of one stale dimension does not launch duplicate browser
-  requests while its first request remains active.
-
-### Layout and recovery
-
-- Test desktop and phone widths in light and dark themes.
-- Hide and restore the tab, then return to the donut.
-- If available, repeat the hide/restore test in Android WebView.
-- The canvas fills its 220px box after every hidden-to-visible transition.
-- No zero-size canvas, clipped legend, horizontal overflow, or stretched donut
-  appears.
-- Reduced-motion preference still disables the crossfade and first-build
-  Chart.js animation as before.
-
-## Success Criteria
-
-Implementation is complete only when all of these are true:
-
-1. Concurrent same-symbol quote misses perform one Yahoo quote operation.
-2. Concurrent same-symbol profile misses perform one Yahoo profile operation.
-3. Different symbols still perform network operations concurrently.
-4. Failed market operations wake all waiters, cache nothing, and permit retry.
-5. Profile-based allocation requests use at most eight workers and preserve all
-   existing response semantics.
-6. One browser request exists per active allocation dimension at a time.
-7. One portfolio-summary browser request exists at a time.
-8. No request failure destroys valid donut data or pretends the portfolio is
-   empty.
-9. Every first load has a visible loading or error explanation.
-10. The displayed chart and status always belong to the selected dimension.
-11. The donut canvas has correct dimensions after it is revealed.
-12. Focused tests and the full pytest suite pass.
-13. The user approves the browser behavior.
-
-## Files Expected To Change During Implementation
-
-- `feature.md`: plan, progress, verification results, and final handoff.
-- `market_data.py`: per-symbol quote/profile in-flight coordination.
-- `app.py`: bounded parallel profile retrieval in the allocation route.
-- `static/js/main.js`: request coordination, stale cache behavior, and donut
-  states.
-- `static/style.css`: explicit donut canvas sizing.
-- `templates/index.html`: persistent accessible allocation status element and
-  initial hidden canvas box.
-- `tests/test_market_data.py`: quote concurrency and retry tests.
-- `tests/test_allocation.py`: profile concurrency and route parallelism tests.
-- `tests/test_allocation_ui.py`: frontend state, request, markup, and sizing
-  contracts.
-
-No expected changes:
-
-- `roadmap.md`;
-- `project-brief.md`;
-- `db.py`;
-- `static/js/common.js`;
-- `templates/base.html`;
-- dependency files;
-- API response shapes; or
-- Docker and Android files.
-
-## Worktree Note
-
-The untracked files `comparison.html` and `ui-nomenclature-audit.html` are user
-files unrelated to this bug. Do not edit, delete, stage, or commit them.
-
-Do not commit or push until implementation passes pytest, the user approves the
-browser behavior, and the user explicitly authorizes git action.
+The feature is complete when the dashboard keeps its stable live summary,
+shows an honest cash-flow-neutral return for the successfully displayed chart
+period, preserves request-order correctness and graceful failure behavior,
+fits desktop and mobile in both themes, passes the full test suite, and has the
+user's browser approval.

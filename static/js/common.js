@@ -1209,7 +1209,7 @@ function oppositePositioner(items, eventPosition) {
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
-      modeBar, getBenchmarks, comparisonReadout,
+      onPeriodSummary, modeBar, getBenchmarks, comparisonReadout,
       comparisonPrimaryLabel = datasetLabel }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
@@ -2259,6 +2259,16 @@ function setupTimeframeChart(
             syncTimeframeButtons(period);
         } catch (err) {
             console.error("chart refresh failed:", err);
+            // Initial-load failure: no chart ever painted, so the readout
+            // must say "unavailable" rather than appear to load forever.
+            // A LATER failure keeps the old readout — the old chart and the
+            // old active timeframe button are still on screen, so the number
+            // must keep describing them. Only the latest visible request may
+            // report; a stale failure cannot blank a newer success.
+            if (!silent && visibleGeneration === visibleRequestGeneration
+                && lastReply === null) {
+                emitPeriodSummary(period, null);
+            }
         }
     }
 
@@ -2381,6 +2391,21 @@ function setupTimeframeChart(
         });
     }
 
+    // Report the selected period's cash-flow-neutral return to the page.
+    // The backend's twrr_pct is the authority: it removes buys and sells so
+    // a deposit can neither fake nor dilute a return. A non-finite or
+    // missing value becomes null (unavailable) — never 0, which would read
+    // as a real flat result. The stock page passes no callback and is
+    // untouched.
+    function emitPeriodSummary(period, reply) {
+        if (!onPeriodSummary) return;
+        const raw = reply ? reply.twrr_pct : null;
+        onPeriodSummary({
+            period,
+            returnPct: Number.isFinite(raw) ? raw : null,
+        });
+    }
+
     function paint(data, period) {
         lastReply = data;  // kept for instant view swaps (see modeBar)
 
@@ -2468,6 +2493,10 @@ function setupTimeframeChart(
                 period,
             });
         }
+        // The readout follows the data that actually reached the canvas.
+        // Runs on a mode-only repaint too, handing back the same twrr_pct —
+        // the metric is mode-independent.
+        emitPeriodSummary(period, data);
     }
 
     // The highlighted button describes the data that successfully reached

@@ -128,6 +128,23 @@
                      GET /api/portfolio/history from the ledger + close
                      prices). -->
                 <div class="card chart-card">
+                    <!-- Period return readout: the cash-flow-neutral return
+                         (TWR) for whichever timeframe the chart captured
+                         successfully. It deliberately does NOT replace the
+                         hero's live "Today" figure — the 1D chart span starts
+                         at the first intraday bar, not at the previous close.
+                         main.js paints it from the history reply's twrr_pct;
+                         the value ships empty and the label ships the default
+                         period, so no mock number can masquerade as live data. -->
+                    <div class="period-return" id="period-return"
+                         aria-live="polite">
+                        <span class="period-return-label"
+                              id="period-return-label">5D return</span>
+                        <span class="period-return-value"
+                              id="period-return-value"></span>
+                        <p class="period-return-note">Deposits and withdrawals excluded</p>
+                    </div>
+
                     <div class="chart-box">
                         <canvas id="portfolioChart"></canvas>
                     </div>

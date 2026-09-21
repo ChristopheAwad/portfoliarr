@@ -831,6 +831,43 @@ a.logo { text-decoration: none; }
    trusting CSS that does nothing. The class survives in main.js as a
    semantic marker; the pos/neg rules above handle the unmasked pills. */
 
+/* Period return readout above the chart canvas — the selected timeframe's
+   cash-flow-neutral return. Quiet by design: an unboxed row so it reads as
+   a caption to the chart, not another card. The label and value share one
+   baseline; the explanation drops to its own line below them. */
+.period-return {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-start;
+    column-gap: 10px;
+    row-gap: 2px;
+    margin-bottom: 10px;
+}
+
+.period-return-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.period-return-value {
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.period-return-value.pos { color: var(--green-pos); }
+.period-return-value.neg { color: var(--red-neg); }
+
+.period-return-note {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
 /* Chart Canvas Area. A fixed height (so the card layout is stable) and
    position: relative, which gives Chart.js a positioned ancestor to
    measure itself against — with responsive:true +
@@ -2837,5 +2874,14 @@ input[type="date"]::-moz-placeholder {
 
     .comparison-readout-item {
         white-space: nowrap;
+    }
+
+    .period-return {
+        justify-content: flex-start;
+        column-gap: 8px;
+    }
+
+    .period-return-value {
+        font-size: 14px;
     }
 }
