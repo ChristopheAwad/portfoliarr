@@ -180,7 +180,6 @@ def test_different_profile_symbols_can_fetch_concurrently(monkeypatch):
 def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
         monkeypatch):
     calls = []
-    entered = []                     # one entry per thread inside .info
     gate = threading.Event()
     fail = True
     errors = []
@@ -200,7 +199,6 @@ def test_concurrent_profile_failure_wakes_waiters_and_stays_retryable(
 
         @property
         def info(self):
-            entered.append(self.symbol)
             if not gate.wait(10):
                 raise RuntimeError("gate never opened")
             if fail:

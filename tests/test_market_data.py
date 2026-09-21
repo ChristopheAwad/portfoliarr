@@ -292,7 +292,6 @@ def test_different_quote_symbols_can_fetch_concurrently(monkeypatch):
 def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
         monkeypatch):
     calls = []
-    entered = []                     # one entry per thread inside .fast_info
     gate = threading.Event()
     fail = True
     state = {
@@ -302,9 +301,9 @@ def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
     errors = []
     error_lock = threading.Lock()
     # All threads cross the same start gate right before calling get_quote,
-    # so the four callers begin their lock-section race together (the main
-    # thread then waits for the owner's slot below — no long sleeps that a
-    # loaded machine could strap over).
+    # so the four callers begin their lock-section race together; the main
+    # thread waits for the owner's in-flight slot below, then a short
+    # settle absorbs the join window for the remaining three waiters.
     arrivals = 0
     arrival_lock = threading.Lock()
     start = threading.Barrier(4, timeout=10)
@@ -316,7 +315,6 @@ def test_concurrent_quote_failure_wakes_waiters_and_stays_retryable(
 
         @property
         def fast_info(self):
-            entered.append(self.symbol)
             # Hold the fetch open so every caller either joins the shared
             # future (fixed) or reaches its own fetch (naive) BEFORE the
             # first one raises — otherwise threads would serialize and the
