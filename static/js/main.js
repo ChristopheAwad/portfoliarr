@@ -691,6 +691,30 @@ const chartButtonsEl = document.querySelector(".chart-timeframe-selectors");
 // claims is selected.
 const DEFAULT_CHART_PERIOD = "5D";
 
+// The chart card's period return readout: one percentage for the timeframe
+// the canvas is showing, reported by the shared chart factory. It uses the
+// backend's time-weighted return (cash flows removed), so a deposit cannot
+// appear as a gain — which is why this is separate from the hero's live
+// "Today" pill. The label and value ship in index.html; this code owns
+// their content. No dollar amount, so privacy masking leaves it visible.
+const periodReturnLabelEl = document.getElementById("period-return-label");
+const periodReturnValueEl = document.getElementById("period-return-value");
+
+function paintPeriodReturn({ period, returnPct }) {
+    if (periodReturnLabelEl) {
+        periodReturnLabelEl.textContent = `${period} return`;
+    }
+    if (!periodReturnValueEl) return;
+    periodReturnValueEl.classList.remove("pos", "neg");
+    if (!Number.isFinite(returnPct)) {
+        periodReturnValueEl.textContent = "Return unavailable";
+        return;
+    }
+    const sign = returnPct >= 0 ? "+" : "";
+    periodReturnValueEl.textContent = `${sign}${returnPct.toFixed(2)}%`;
+    periodReturnValueEl.classList.add(returnPct >= 0 ? "pos" : "neg");
+}
+
 // Build once at load with empty data; every refresh swaps the arrays and
 // redraws — no re-creating the Chart, no page reload. The factory wires
 // the delegated .time-btn listener too, so a click re-fetches with the
@@ -722,6 +746,8 @@ const portfolioChartHandle = setupTimeframeChart({
     getBenchmarks: () => (comparePicker ? comparePicker.getSymbols() : []),
     comparisonReadout: document.getElementById("portfolio-comparison-readout"),
     comparisonPrimaryLabel: "Portfolio",
+    // The chart card's period return readout — the selected timeframe's TWR.
+    onPeriodSummary: paintPeriodReturn,
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",

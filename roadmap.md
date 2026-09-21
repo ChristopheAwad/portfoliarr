@@ -108,11 +108,19 @@ request (no new endpoint). Currency-agnostic by construction (ratios only).
 
 ## Tier 2.5 — Quick Extends (1 day each)
 
-### 9. Dashboard Period-Aware Return Pills
-Extend the stock detail page's dynamic period return (shipped separately) to the dashboard. The portfolio "Today" pill and the ledger's "Day Gain" / "Day %" columns would reflect the selected chart period instead of always showing single-day moves. The portfolio history endpoint already returns aggregate values for any period, so `last - first` gives the period gain in CAD. The ledger column headers would rename ("Day Gain" → "1M Gain") and swap their data source. Touches the column-count contract (4 places per AGENTS.md).
+### 9. Dashboard Period Return Readout
+Add a quiet, period-aware return directly above the dashboard chart while
+keeping the header's live `Today` and cost-based `Total` facts unchanged. Use
+the portfolio history endpoint's existing `twrr_pct`, not a first-to-last value
+delta, so buys and sells cannot fake performance. The readout follows the
+successfully painted 1D–MAX period in both Value and Performance modes, explains
+that deposits and withdrawals are excluded, and degrades honestly when no
+return is computable. The ledger's daily columns remain daily.
 
-**Files:** `static/js/main.js` (summary strip + ledger rendering), `templates/index.html` (column headers)
-**Depends on:** Dynamic Period Return on Stock Detail Page (shipped first as a pattern)
+**Effort:** 1 day
+**Files:** `templates/index.html`, `static/js/common.js`, `static/js/main.js`, `static/style.css`, `tests/test_period_return_ui.py`
+**Depends on:** #13 (shipped) for `twrr_pct`
+**Status:** shipped 2026-09-21 (PR #63)
 
 ---
 
@@ -189,7 +197,7 @@ Tier 2 (all independent of each other):
   17. Comparison Overlays ─────────────┘
 
 Tier 2.5:
-  9. Dashboard Period Return ─────────── depends on stock detail page version
+  9. Dashboard Period Return ─────────── depends on #13 (shipped)
   13. TWR Performance Chart ──────────── independent (its rebase-to-100
                                            machinery makes #7 cheaper)
   14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
@@ -216,7 +224,7 @@ For maximum compounding value:
 7. **Benchmark Line** → context for performance (superseded by #17)
 8. **Multi-Currency** → international expansion
 17. **Comparison Overlays** → arbitrary ticker/portfolio comparison; replaces #7
-9. **Dashboard Period Return** → extends stock page pattern to dashboard
+9. **Dashboard Period Return** → shows the selected chart period's TWR without replacing live daily facts
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
 15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
