@@ -1953,9 +1953,10 @@ input[type="date"]::-moz-placeholder {
 
 /* Keyboard parity with hover. visibility:hidden removes a button from the
    tab order, so a keyboard user could never reach the actions at all;
-   :focus-within reveals them once focus lands inside the row (the row's
-   ticker link is the tab stop that gets there). The button's own
-   :focus-visible outline then shows WHICH action has focus. */
+   :focus-within reveals them once focus lands inside the row. The tab stop
+   that gets focus there is the group row's ticker link, or (on detail
+   rows) the actions cell's own tabIndex. The button's own :focus-visible
+   outline then shows WHICH action has focus. */
 .ledger-row:focus-within .tx-action-btn,
 .ledger-group:focus-within .tx-action-btn { visibility: visible; }
 
