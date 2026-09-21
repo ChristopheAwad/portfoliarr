@@ -135,7 +135,10 @@ def test_painter_prefixes_the_dollar_sign_on_the_absolute_amount():
 
 def test_painter_appends_the_percent_pair():
     body = _painter_body()
-    assert "pct.toFixed(2)" in body
+    assert "${sign}${Math.abs(pct).toFixed(2)}" in body, (
+        "the percent must be absolute behind the sign, like the amount — "
+        "otherwise a loss renders a double minus '(--2.34%)'"
+    )
     assert "%" in body
     assert "pct === null" in body, (
         "a null percentage must drop the parenthetical, not print NaN"

@@ -51,7 +51,7 @@ function paintPeriodChange(el, period, value, pct) {
     const amount = `${sign}$${formatNumber(Math.abs(value))}`;
     el.textContent = pct === null
         ? `${period}: ${amount}`
-        : `${period}: ${amount} (${sign}${pct.toFixed(2)}%)`;
+        : `${period}: ${amount} (${sign}${Math.abs(pct).toFixed(2)}%)`;
     // Green for a gain, red for a loss — one call each, same as paintChange.
     el.classList.toggle("pos", value >= 0);
     el.classList.toggle("neg", value < 0);
