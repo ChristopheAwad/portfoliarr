@@ -2638,10 +2638,20 @@ input[type="date"]::-moz-placeholder {
         flex-wrap: nowrap;
         overflow-x: auto;
         scrollbar-width: none;
+        gap: 0;
+        background: none;
     }
 
     .market-grid::-webkit-scrollbar {
         display: none;
+    }
+
+    /* The base grid paints its 1px hairlines through a border-coloured
+       background behind 1px gaps; a flex row must draw them per-pair or the
+       background would read as a grey tail after the last chip when the
+       strip is narrower than the panel. */
+    .market-item + .market-item {
+        border-left: 1px solid var(--border-color);
     }
 
     /* Natural-width chip: the row scrolls instead of squeezing a name. */

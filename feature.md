@@ -2,15 +2,16 @@
 
 ## Status
 
-PLANNED 2026-09-22 (revision 3). Phone-only redesign of the market strip shipped
+SHIPPING 2026-09-22 (PR #73). Phone-only redesign of the market strip shipped
 in PR #70. Revision 1 stacked phone cells into three lines ("double row"). The
 user rejected revision 2 (2-column, one-line cells) too: the approved phone
 layout is ONE HORIZONTAL SCROLLING ROW of instruments per category, like the
 pre-#70 index chips. No roadmap item: it is a design correction.
 
-Workflow: write the failing tests FIRST, then the template/CSS/JS edits. Run the
-full `python -m pytest` suite. After it is green, STOP for the user's browser
-GUI approval. Do not commit or push before that approval.
+Verification: implementation complete; full `python -m pytest` is 894 passed;
+focused `python -m pytest tests/test_market_tabs.py` is 55 passed. GUI approved
+by the user (they said "Push pr"). The `static/js/main.js` currency-span revert
+(Step 2) turned out to be a no-op — main.js already matched the target.
 
 ## User Goal
 
@@ -39,9 +40,11 @@ Markets today
    phones (stays in the HTML, so `test_market_heading_and_live_label` passes).
 3. Phone panel: no box shadow; padding 6px.
 4. Phone instrument row: `.market-grid` becomes a non-wrapping horizontal scroll
-   container (`display: flex`), each `.market-item` `flex: 0 0 auto`. The base
-   `gap: 1px` + `background: var(--border-color)` stays, so vertical hairlines
-   separate the chips and the panel still reads as ONE strip.
+   container (`display: flex`), each `.market-item` `flex: 0 0 auto`. Hairlines
+   are drawn per-pair (`.market-item + .market-item { border-left: 1px solid
+   var(--border-color); }`) with the base gap/background dropped — a border-
+   coloured background gap would paint a grey tail after the last chip when the
+   row is narrower than the panel.
 5. The odd-count `.market-grid-filler` is DELETED (template + CSS + tests). It
    only plugged the empty cell of the old 2-column phone grid; a scrolling row
    has no empty cell.
@@ -101,6 +104,10 @@ and restore the original teaching comment:
 // textContent (never innerHTML): plain text, immune to HTML injection.
 // Every price carries its native currency code — native display, no FX.
 ```
+
+DONE status: this edit was already satisfied when the branch was created —
+`static/js/main.js:94` already used `textContent` with the original comment, so
+main.js has NO net change in this PR (kept out of the commit).
 
 ### Step 3 — `templates/index.html`
 
@@ -171,5 +178,6 @@ two-column grid to one horizontal scrolling row of chips.
 
 ## Files
 
-`static/js/main.js`, `static/style.css`, `templates/index.html`,
-`project-brief.md`, `tests/test_market_tabs.py`, `feature.md`.
+`static/style.css`, `templates/index.html`, `project-brief.md`,
+`tests/test_market_tabs.py`, `feature.md`. (`static/js/main.js` has no net
+change; see Step 2.)
