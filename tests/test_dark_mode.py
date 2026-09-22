@@ -60,6 +60,29 @@ def test_preferences_page_has_sort_controls(client):
     assert 'id="pref-sort-dir-btn"' in html, "pref-sort-dir-btn missing from preferences page"
 
 
+def test_ledger_header_sort_does_not_overwrite_default_preference():
+    """A ledger header click changes only the current page's sort.
+
+    Preferences owns the persistent default, so applyLedgerSort must not
+    write or remove the ledgerDefaultSort localStorage value.
+    """
+    ledger_js = (PROJECT_ROOT / "static/js/ledger.js").read_text()
+    start = ledger_js.index("function applyLedgerSort(")
+    end = ledger_js.index("ledgerHead.addEventListener(\"click\"", start)
+    apply_sort = ledger_js[start:end]
+
+    assert "ledgerSort =" in apply_sort, \
+        "header sorting must still update the in-memory ledger sort"
+    assert "ledgerDefaultSort" not in apply_sort, \
+        "header sorting must not overwrite the Preferences default"
+    assert "localStorage" not in apply_sort, \
+        "header sorting must remain temporary for the current page session"
+
+    preferences_js = (PROJECT_ROOT / "static/js/preferences.js").read_text()
+    assert 'localStorage.setItem("ledgerDefaultSort"' in preferences_js, \
+        "Preferences must remain the owner of the persistent default sort"
+
+
 def test_profile_btn_is_button_element(client):
     """The profile button must be a <button> for keyboard accessibility —
     buttons are focusable and fire Enter/Space natively."""

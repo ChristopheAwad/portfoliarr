@@ -252,9 +252,9 @@ const expandedTickers = new Set();
 // data-col values the sortable <th>s carry and dir is "asc"|"desc".
 let ledgerSort = null;
 
-// Persistent default sort — loaded from localStorage at boot. When no
-// user-initiated sort is active (ledgerSort === null), this controls the
-// initial sort order. Survives page reloads. {col, dir} or null.
+// Persistent default sort — loaded from localStorage at boot. Preferences
+// owns this value; header clicks change only ledgerSort for the current page
+// session. {col, dir} or null.
 let defaultSort = null;
 
 // Which data-col values identity keys off. The sortable columns (matching
@@ -1087,10 +1087,6 @@ function applyLedgerSort(col) {
         const defaultDir = col === "ticker" ? "asc" : "desc";
         ledgerSort = { col, dir: defaultDir };
     }
-
-    // Persist header-click sort as the new default so it survives reload.
-    defaultSort = { ...ledgerSort };
-    localStorage.setItem("ledgerDefaultSort", JSON.stringify(defaultSort));
 
     renderLedger(lastTransactions);
 }
