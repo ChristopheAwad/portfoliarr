@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+// The web app and APK expose the same human-readable release number.
+val sharedVersion = rootProject.projectDir.parentFile.resolve("VERSION").readText().trim()
+require(sharedVersion.matches(Regex("""[0-9]+\.[0-9]+(?:\.[0-9]+)?"""))) {
+    "Invalid app version in root VERSION"
+}
+
 android {
     namespace = "com.portfoliarr.app"
     compileSdk = 34
@@ -11,10 +17,9 @@ android {
         applicationId = "com.portfoliarr.app"
         minSdk = 24
         targetSdk = 34
-        // Read from gradle.properties so versionCode/Name live in one place.
-        // Falls back to 1 / "1.0" if the properties are missing.
+        // versionCode is Android-specific; versionName is shared with Flask.
         versionCode = project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 1
-        versionName = project.findProperty("VERSION_NAME")?.toString() ?: "1.0"
+        versionName = sharedVersion
     }
 
     // Shared debug keystore checked into the repo — both local and CI builds

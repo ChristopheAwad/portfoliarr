@@ -79,7 +79,7 @@ makes the displayed quote stale.
 **Effort:** 1 day
 **Files:** `static/js/ledger.js`, `static/style.css` if needed, `tests/test_ledger_quick_sell.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #72)
 
 ---
 
@@ -110,6 +110,20 @@ Gunicorn access-log duplication, or logging inside the pure data layers.
 **Files:** `app.py`, `docker-compose.yml`, `project-brief.md`, `tests/test_logging.py`, `tests/test_docker.py`, existing route-log assertions
 **Depends on:** Nothing
 **Status:** shipped 2026-09-22 (PR #71)
+
+---
+
+### 22. In-App Version Display
+Show the current Portfoliarr release in a quiet About card at the bottom of
+Preferences. Use one root version file for both the Flask UI and Android's
+`versionName`, while Android's independently increasing `versionCode` remains
+in Gradle properties. Reject a missing or malformed shared version at startup
+or build time so the two clients cannot silently drift.
+
+**Effort:** less than 1 day
+**Files:** `VERSION`, `app.py`, `templates/preferences.html`, `static/style.css`, `android/app/build.gradle.kts`, `android/gradle.properties`, `project-brief.md`, `tests/test_app_version.py`
+**Depends on:** Nothing
+**Status:** in progress
 
 ---
 
@@ -257,7 +271,8 @@ Tier 1 (all independent):
   16. Android Biometric/PIN Lock ────────┤
   18. Ledger Quick Sell ─────────────────┤
   19. Date-Aware Price Auto-Fill ────────┤
-  21. High-Value Operational Logging ────┘
+  21. High-Value Operational Logging ────┤
+  22. In-App Version Display ─────────────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -302,6 +317,7 @@ For maximum compounding value:
 15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
 20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
 21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
+22. **In-App Version Display** → identifies the deployed web and Android release from one shared version source
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

@@ -357,6 +357,12 @@ h2, h3 {
     color: var(--text-primary);
 }
 
+.app-version {
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
 /* Select used on the preferences page. */
 .pref-select {
     width: 140px;

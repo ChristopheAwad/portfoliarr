@@ -50,9 +50,8 @@ def _function_body(js, signature):
 
 def test_preferences_page_ships_the_switch():
     """preferences.html must carry the switch, inside the Ledger card.
-    The Ledger card is the page's LAST card, so 'after the Ledger h3'
-    pins the placement — a switch appended to some future card would
-    fail this."""
+    Checking that it occurs after the Ledger heading prevents the control
+    from drifting into an earlier card."""
     html = PREFS_HTML.read_text()
     assert 'id="pref-show-closed"' in html, \
         "preferences.html is missing the show-closed switch"

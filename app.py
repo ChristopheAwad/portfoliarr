@@ -1,6 +1,8 @@
 import logging
 import math
 import os
+from pathlib import Path
+import re
 import sqlite3
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
@@ -42,6 +44,18 @@ import db
 
 SLOW_REQUEST_MS = 2000
 LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+def _load_app_version(path=None):
+    """Read the shared web/Android release version and reject drift."""
+    version_path = path or Path(__file__).with_name("VERSION")
+    version = version_path.read_text().strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", version) is None:
+        raise ValueError(f"Invalid app version in {version_path}")
+    return version
+
+
+APP_VERSION = _load_app_version()
 
 
 def _resolve_log_level(configured_level):
@@ -322,7 +336,7 @@ def index():
 def preferences_page():
     """Render the preferences page. No server-side state — all settings
     are stored in the browser's localStorage by preferences.js."""
-    return render_template("preferences.html")
+    return render_template("preferences.html", app_version=APP_VERSION)
 
 
 @app.route("/ledger")

@@ -60,6 +60,11 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ## Design Rules (permanent)
 
+- **The root `VERSION` file is the human-readable release source for both the
+  Flask UI and Android `versionName`.** Preferences displays it in the About
+  card. Android's independently increasing `VERSION_CODE` remains in
+  `android/gradle.properties`; release work bumps both values. Missing or
+  malformed shared versions fail startup/build instead of silently falling back.
 - **Operational logs are console-only, production-INFO `key=value` events
   owned by the Flask route boundary; pure data layers raise.** Each request
   gets a server-generated ID returned in `X-Request-ID`. Mutation audits omit

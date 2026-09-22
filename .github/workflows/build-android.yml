@@ -2,15 +2,17 @@
 # MOVE THIS FILE when android/ gets its own repo.
 #
 # To move:
-#   1. Copy this file to <new-repo>/.github/workflows/build.yml
-#   2. Remove the `paths:` filter (no longer needed — the whole
+#   1. Copy android/ and the root VERSION file to the new repo. Change
+#      build.gradle.kts to resolve VERSION from rootProject.projectDir.
+#   2. Copy this file to <new-repo>/.github/workflows/build.yml
+#   3. Remove the `paths:` filter (no longer needed — the whole
 #      repo is the Android app).
-#   3. Change the `working-directory` below from `android` to `.`
+#   4. Change the `working-directory` below from `android` to `.`
 #      (or remove it entirely).
-#   4. Update the artifact path from
+#   5. Update the artifact path from
 #      `android/app/build/outputs/apk/debug/app-debug.apk`
 #      to `app/build/outputs/apk/debug/app-debug.apk`.
-#   5. Delete this file from the portfoliarr repo.
+#   6. Delete this file from the portfoliarr repo.
 # ──────────────────────────────────────────────────────────────
 
 name: Build Android APK
@@ -19,6 +21,7 @@ on:
   push:
     paths:
       - "android/**"
+      - "VERSION"
   workflow_dispatch:
 
 jobs:
