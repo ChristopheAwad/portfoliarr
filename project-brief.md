@@ -26,7 +26,9 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - **Markets today** — the first content on the page, above the whole
   portfolio: six category tabs (North America, Europe, Asia-Pacific, Crypto,
   Commodities, Currencies) over one divided strip of live instruments, each
-  cell a link to its stock detail page; only the selected category is fetched
+  cell a link to its stock detail page; only the selected category is fetched.
+  Phones show each category's instruments as ONE horizontal scrolling row of
+  flat divided chips (not a two-column grid), so names are never truncated.
 - Value summary strip (total value, day change, total return, cost basis)
 - Holdings table (ticker, name, qty, avg cost, current price, market value, unrealized P/L $/%, day change)
 - Portfolio-value-over-time line chart (Chart.js)

@@ -227,7 +227,9 @@ into a full-width tabbed strip. North America, Europe, Asia-Pacific, Crypto,
 Commodities, and Currencies each show a small approved set of representative
 instruments. Fetch and poll only the active category, preserve per-symbol
 failure handling and native stock-detail links, use adaptive precision for
-CAD-base currency pairs, and render a two-column instrument grid on phones.
+CAD-base currency pairs, and render a one-row horizontally scrolling instrument
+strip on phones (a later design correction in PR #73 replaced the original
+two-column phone grid).
 
 **Effort:** 2 days
 **Files:** `app.py`, `templates/index.html`, `static/js/main.js`, `static/style.css`, `project-brief.md`, `tests/test_routes.py`, `tests/test_market_tabs.py`, `tests/test_compare_ui.py`

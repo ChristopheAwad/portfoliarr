@@ -641,15 +641,6 @@ a.logo { text-decoration: none; }
     background: var(--border-color);
 }
 
-/* Covers the cell a 2-column phone grid leaves empty after an ODD
-   instrument count — without it, the grid's gap-coloured background paints
-   that cell as a solid grey block. Hidden here because desktop already has
-   one column per instrument, so there is no empty cell to cover; the
-   ≤600px block turns it on. */
-.market-grid-filler {
-    display: none;
-}
-
 /* A cell is a cell of one strip, not a card: no radius, no shadow, no
    margin. min-width: 0 releases it from the flex min-content floor so a
    long label truncates rather than pushing the strip past the viewport.
@@ -2626,37 +2617,80 @@ input[type="date"]::-moz-placeholder {
         flex: 0 0 auto;
     }
 
-    /* Market strip on phones. Two decisions, both pinned by contract:
+    /* Market strip on phones. Two decisions, all pinned by contract:
        (1) the category tab row becomes a PLAIN horizontal overflow tray —
        no scroll-snap and no legacy -webkit-overflow-scrolling, either of
        which made the fixed bottom tab bar jitter/vanish on Android;
-       (2) the instrument panel drops to exactly TWO columns and nothing
-       spans, so Asia-Pacific's odd fifth cell stays one normal cell.
-       Cells keep a thumb-sized padding so both tabs and links stay tappable. */
+       (2) the instruments become ONE horizontal scrolling row of flat
+       divided chips (the old index-strip feel): the grid turns into a flex
+       row, each chip keeps its natural width so names never truncate, and
+       the base 1px gap + border-coloured background keep drawing the
+       hairline dividers — it is still one strip. */
     .market-tabs {
         flex-wrap: nowrap;
         overflow-x: auto;
         padding-bottom: 2px;
+        border-bottom: 1px solid var(--border-color);
     }
 
     .market-grid {
-        grid-template-columns: 1fr 1fr;
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        gap: 0;
+        background: none;
     }
 
-    /* Odd instrument count = the sixth cell of the 2-column grid has no
-       item; paint it card-background so the grid's divider colour does not
-       show through as a grey block. */
-    .market-grid-filler {
-        display: block;
-        background: var(--card-bg);
+    .market-grid::-webkit-scrollbar {
+        display: none;
     }
 
+    /* The base grid paints its 1px hairlines through a border-coloured
+       background behind 1px gaps; a flex row must draw them per-pair or the
+       background would read as a grey tail after the last chip when the
+       strip is narrower than the panel. */
+    .market-item + .market-item {
+        border-left: 1px solid var(--border-color);
+    }
+
+    /* Natural-width chip: the row scrolls instead of squeezing a name. */
     .market-item {
-        padding: 9px 8px;
+        flex: 0 0 auto;
+        padding: 10px 12px;
     }
 
+    /* Flatter card: the shadow is weight a small screen does not need. */
+    .market-panel {
+        box-shadow: none;
+        padding: 6px;
+    }
+
+    /* Quiet header: the redundant "Live" badge goes, and the heading steps
+       down so the strip does not outshout the portfolio below it. */
+    .market-header h2 {
+        font-size: 18px;
+    }
+
+    .market-live {
+        display: none;
+    }
+
+    /* Flat underlined tabs instead of pills — the tab's own baseline sits on
+       the tray's border, and the active one wears the accent ink. */
     .market-tab {
-        padding: 8px 12px;
+        padding: 8px 10px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: transparent;
+    }
+
+    .market-tab.active {
+        background: transparent;
+        border-color: transparent;
+        border-bottom-color: var(--accent);
+        color: var(--text-primary);
     }
 
     .card {

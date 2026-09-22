@@ -1,191 +1,183 @@
-# Feature #22: In-App Version Display
+# Design Fix: Phone Market Strip ("Markets today") — one scrolling row
 
 ## Status
 
-APPROVED 2026-09-22 for PR #72. Automated Flask and browser-source verification
-is green, the user approved the GUI, and GitHub's JDK 17 Build Android APK
-workflow passed. The local Android build remains unavailable because this
-machine has only JDK 25 (`25.0.4.1`).
+SHIPPING 2026-09-22 (PR #73). Phone-only redesign of the market strip shipped
+in PR #70. Revision 1 stacked phone cells into three lines ("double row"). The
+user rejected revision 2 (2-column, one-line cells) too: the approved phone
+layout is ONE HORIZONTAL SCROLLING ROW of instruments per category, like the
+pre-#70 index chips. No roadmap item: it is a design correction.
 
-Verification completed:
-
-- Red test-first run: 15 expected failures.
-- `python -m pytest tests/test_app_version.py`: 15 passed.
-- Preferences regression run: 23 passed.
-- `python -m pytest`: 888 passed.
-- `git diff --check`: passed.
-- `./gradlew assembleDebug`: locally blocked by the installed JDK 25 before
-  Gradle evaluated the project (`IllegalArgumentException: 25.0.4.1`).
-
-This file is the complete test-first implementation handoff. Write all failing
-tests before production edits. After implementation and a green full pytest
-suite, stop for the user's browser GUI approval. Do not commit or push before
-that approval.
+Verification: implementation complete; full `python -m pytest` is 894 passed;
+focused `python -m pytest tests/test_market_tabs.py` is 55 passed. GUI approved
+by the user (they said "Push pr"). The `static/js/main.js` currency-span revert
+(Step 2) turned out to be a no-op — main.js already matched the target.
 
 ## User Goal
 
-Make the installed or deployed Portfoliarr release easy to identify inside the
-app. Show the release number in a small About card at the bottom of Preferences.
-The web app and Android APK must report the same human-readable version instead
-of maintaining duplicate values that can drift.
+The user dislikes the market strip on phones. The strip MUST stay the first thing
+on the page (pinned by `project-brief.md` and `tests/test_market_tabs.py`). Fix
+the phone presentation only. Desktop and tablet must stay byte-identical.
 
-## Approved Product Decisions
+Approved phone layout: each category's instruments are one HORIZONTAL SCROLLING
+ROW of flat divided chips. Each chip is as wide as its content, so names are
+never truncated and nothing is hidden.
 
-1. Put the visible version on `/preferences`, not in the navbar, profile menu,
-   bottom tabs, or every-page footer.
-2. Add an `About` card after the existing Ledger card.
-3. Show one read-only row with the label `Version` and the release text. The
-   initial shared release is `1.1`.
-4. Keep the display visually quiet. It is release metadata, not a control or a
-   primary action.
-5. Use a root `VERSION` text file as the one source for the human-readable app
-   version. It must contain only the release value and a trailing newline.
-6. Flask reads the root file and supplies that value to the Preferences Jinja
-   template. Do not hardcode `1.1` in Python or HTML.
-7. Android Gradle reads the same root file for `versionName`. Do not retain a
-   second `VERSION_NAME` value in `android/gradle.properties`.
-8. Keep Android `VERSION_CODE` in `android/gradle.properties`. It serves a
-   different Android installation contract and must still increase before each
-   APK release.
-9. Accept release values with two or three numeric components, such as `1.1`
-   and `1.1.0`. Reject empty values, arbitrary words, `v1.1`, and suffixes.
-10. A missing or malformed shared version is a packaging error. Flask startup
-    and Android Gradle configuration must fail clearly instead of using a
-    fallback that could hide version drift.
-11. Do not add an API endpoint, database setting, browser storage key, network
-    request, or JavaScript for static release metadata.
-12. Do not change the release number in this feature. The first displayed value
-    is the existing Android `VERSION_NAME=1.1`.
+```
+Markets today
+[North America] Europe  Asia-Pacific  ...        <- underlined rail (scrolls)
+┌────────────────────────────────────────────────────┐
+│ S&P 500   7,650.50 USD │ Nasdaq 26,522.54 USD │ →  │
+│ +12.74 (+0.17%)        │ +104.24 (+0.39%)      │    │
+└────────────────────────────────────────────────────┘
+```
 
-## Architecture And Data Flow
+## Approved Decisions
 
-1. Root `VERSION` contains `1.1`.
-2. `app.py` resolves it relative to `app.py`, not the process working directory.
-3. A small pure loader reads, trims, and validates the complete value. Missing
-   files keep their clear `FileNotFoundError`; malformed values raise a clear
-   `ValueError`.
-4. `APP_VERSION` loads once when `app.py` imports. A running release does not
-   need repeated disk reads.
-5. `preferences_page()` passes `app_version=APP_VERSION` to the template.
-6. `preferences.html` renders the escaped value as plain text.
-7. Android Gradle resolves the same file from `rootProject.projectDir.parentFile`,
-   validates it during configuration, and assigns it to `versionName`.
-8. `android/gradle.properties` keeps `VERSION_CODE=2` but removes
-   `VERSION_NAME=1.1`.
-9. Docker requires no special copy rule: `COPY . .` includes root `VERSION`.
+1. Phone tab rail: flat underlined rail. Active tab underlines with
+   `var(--accent)` and drops the accent fill.
+2. Phone header: `.market-header h2` shrinks to 18px; `.market-live` hidden on
+   phones (stays in the HTML, so `test_market_heading_and_live_label` passes).
+3. Phone panel: no box shadow; padding 6px.
+4. Phone instrument row: `.market-grid` becomes a non-wrapping horizontal scroll
+   container (`display: flex`), each `.market-item` `flex: 0 0 auto`. Hairlines
+   are drawn per-pair (`.market-item + .market-item { border-left: 1px solid
+   var(--border-color); }`) with the base gap/background dropped — a border-
+   coloured background gap would paint a grey tail after the last chip when the
+   row is narrower than the panel.
+5. The odd-count `.market-grid-filler` is DELETED (template + CSS + tests). It
+   only plugged the empty cell of the old 2-column phone grid; a scrolling row
+   has no empty cell.
+6. The `main.js` currency-span change from revision 2 is REVERTED. Natural-width
+   chips have room, so the price goes back to one text run with its native
+   currency.
+7. `project-brief.md` gains a note that phones use a one-row scrolling strip,
+   overriding the PR #70 "two-column instrument grid on phones" language.
 
-## Test-First Work
+## Implementation Steps (test-first)
 
-Create `tests/test_app_version.py` before production edits. Keep tests focused
-on observable behavior and the single-source contract.
+### Step 1 — Update tests (write first; they must fail before code edits)
 
-### Shared File Tests
+In `tests/test_market_tabs.py`:
 
-1. Assert root `VERSION` exists.
-2. Assert its exact trimmed value is `1.1`.
-3. Assert it matches the approved full numeric format with two or three parts.
-4. Assert it has no `v` prefix or release suffix.
+- KEEP `test_market_phone_header_is_quiet`.
+- KEEP `test_market_phone_tabs_are_underlined_not_pills`.
+- KEEP `test_market_phone_active_tab_underlines_with_accent`.
+- KEEP `test_market_phone_panel_is_flat`.
+- DELETE `test_market_phone_cells_are_single_line`.
+- DELETE `test_market_phone_labels_truncate_on_one_line`.
+- DELETE `test_market_js_wraps_currency_in_hideable_span`.
+- DELETE `test_market_phone_last_item_does_not_span_two_columns`.
+- REPLACE `test_market_phone_grid_is_two_columns` with
+  `test_market_phone_instruments_scroll_in_one_row`:
+  - `media_body("600px", ".market-grid")` is not None.
+  - It contains `display: flex` and `overflow-x: auto`.
+  - It does NOT contain `grid-template-columns`.
+  - `media_body("600px", ".market-item")` contains `flex: 0 0 auto`.
+- REPLACE `test_odd_category_ships_phone_grid_filler` with
+  `test_odd_category_has_no_grid_filler`:
+  - `"market-grid-filler"` not in `STYLE_CSS`.
+  - `"market-grid-filler"` not in `(ROOT / "templates" / "index.html").read_text()`.
 
-### Flask Loader Tests
+Also update the section header comment above the phone-redesign tests to say
+"one horizontal scrolling row".
 
-1. Verify a temporary file containing `2.3\n` returns `2.3`.
-2. Verify valid surrounding whitespace is trimmed.
-3. Parameterize invalid content: empty text, whitespace, `v1.1`, `1`, `1.`,
-   `.1`, `1.x`, `1.2.3.4`, and `1.2-beta`.
-4. Assert each invalid value raises `ValueError` with a message that identifies
-   an invalid app version.
-5. Pass a nonexistent path and assert `FileNotFoundError` is not hidden by a
-   fallback.
-6. Assert `app.APP_VERSION` equals root `VERSION` after trimming.
+Run `python -m pytest tests/test_market_tabs.py -k phone` and confirm the
+intended failures (old grid rule present, filler still present), not syntax
+errors.
 
-### Preferences Route Tests
+### Step 2 — `static/js/main.js`
 
-1. Request `/preferences` and assert HTTP 200.
-2. Assert the About card occurs after the Ledger card.
-3. Assert the card includes a `Version` label and exact `APP_VERSION` value.
-4. Assert the version is static text, not an input, select, checkbox, button,
-   or link.
-5. Preserve existing theme, default-sort, direction, and show-closed controls.
+Revert the revision-2 currency span. In `updateMarketItem` replace:
+```js
+priceEl.replaceChildren(
+    document.createTextNode(formatMarketLevel(quote.price)),
+    marketTextSpan("market-item-ccy", ` ${quote.currency}`)
+);
+```
+with:
+```js
+priceEl.textContent = `${formatMarketLevel(quote.price)} ${quote.currency}`;
+```
+and restore the original teaching comment:
+```js
+// textContent (never innerHTML): plain text, immune to HTML injection.
+// Every price carries its native currency code — native display, no FX.
+```
 
-### Android Single-Source Tests
+DONE status: this edit was already satisfied when the branch was created —
+`static/js/main.js:94` already used `textContent` with the original comment, so
+main.js has NO net change in this PR (kept out of the commit).
 
-1. Assert `android/app/build.gradle.kts` resolves root `VERSION`.
-2. Assert `versionName` is assigned from the shared loaded value.
-3. Assert Gradle trims and validates it without a fallback.
-4. Assert `android/gradle.properties` retains `VERSION_CODE=2`.
-5. Assert `android/gradle.properties` no longer defines `VERSION_NAME`.
-6. Assert release comments name root `VERSION` and Android `VERSION_CODE`.
+### Step 3 — `templates/index.html`
 
-### Docker Packaging Test
+Remove the odd-count filler block (the `{% if cat['instruments']|length % 2 == 1 %}`
+block containing `<span class="market-grid-filler" aria-hidden="true"></span>`)
+and adjust the surrounding comment so the grid comment no longer mentions a
+phone 2-column grid.
 
-1. Extend Docker source tests only if needed to lock that `.dockerignore` does
-   not exclude `VERSION` and `Dockerfile` retains `COPY . .`.
-2. Do not require Docker locally; Docker is unavailable on this machine.
+### Step 4 — `static/style.css`
 
-## Implementation Steps
+In the `@media (max-width: 600px)` market block:
 
-1. Write all `tests/test_app_version.py` tests above.
-2. Run `python -m pytest tests/test_app_version.py`; confirm failures cover the
-   missing root file, loader, About card, and Gradle wiring.
-3. Add root `VERSION` with exactly `1.1` and a trailing newline.
-4. In `app.py`, import `Path` and `re` using the existing style.
-5. Add `_load_app_version(path=None)` near application constants. Its default
-   path is `Path(__file__).with_name("VERSION")`.
-6. Validate with a full match for two or three dot-separated integer parts.
-   Raise `ValueError` for invalid content and do not catch missing files.
-7. Assign `APP_VERSION = _load_app_version()` at module import.
-8. Pass `app_version=APP_VERSION` only from `preferences_page()`. Do not use a
-   global Jinja context because other pages do not display it.
-9. Add the About card after Ledger in `templates/preferences.html`. Reuse the
-   existing card and preference-row classes.
-10. Add only one small CSS class if needed for subdued, right-aligned version
-    text. Use existing color tokens and do not change layout widths.
-11. Update `android/app/build.gradle.kts` to read parent root `VERSION`, trim and
-    validate it with the same format, and set `versionName` from it.
-12. Use a clear Gradle `require(...)` message for invalid content. Let a missing
-    file fail naturally. Remove the old version-name fallback.
-13. Remove `VERSION_NAME=1.1` from `android/gradle.properties`, retain
-    `VERSION_CODE=2`, and correct the release comments.
-14. Add a Design Rule to `project-brief.md`: root `VERSION` is shared by web and
-    Android; Android `VERSION_CODE` stays separate; invalid values fail.
-15. Correct `AGENTS.md` so APK release instructions say to bump root `VERSION`
-    and Android `VERSION_CODE`, not two Gradle properties.
+- REPLACE `.market-grid { grid-template-columns: 1fr 1fr; }` with:
+  ```css
+  .market-grid {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+  }
 
-## Verification
+  .market-grid::-webkit-scrollbar {
+      display: none;
+  }
+  ```
+- REPLACE `.market-item { padding: 12px 10px; }` with:
+  ```css
+  .market-item {
+      flex: 0 0 auto;
+      padding: 10px 12px;
+  }
+  ```
+- DELETE the phone `.market-item-top`, `.market-item-label`,
+  `.market-item-price`, `.market-item-change`, `.market-item-ccy`, and
+  `.market-item-move` rules added in revision 2.
+- DELETE the phone `.market-grid-filler` rule.
+- KEEP `.market-panel`, `.market-header h2`, `.market-live`, `.market-tab`,
+  `.market-tab.active`, `.market-tabs`.
 
-1. Run `python -m pytest tests/test_app_version.py`.
-2. Run `python -m pytest tests/test_dark_mode.py tests/test_show_closed_pref.py tests/test_routes.py::test_preferences_page_renders_200`.
-3. Run `python -m pytest tests/test_docker.py` if packaging tests change.
-4. Run `android/gradlew assembleDebug` from `android/` with JDK 17 and SDK 34.
-5. Run the final full suite: `python -m pytest`.
-6. Record command results in this file's status section.
-7. Stop for browser approval. The user checks Preferences at desktop and narrow
-   widths in light and dark themes and confirms `Version 1.1` is readable and
-   visually quiet.
-8. A green Build Android APK workflow and on-device approval are required before
-   merge. If local Android tools are unavailable, state that limitation.
-9. Only after approvals, ask whether to commit/push. Never do so automatically.
+In the BASE (desktop) rules, DELETE the `.market-grid-filler { display: none; }`
+rule (the class no longer exists).
 
-## Files Expected To Change
+Update comments: the phone market block comment must describe the one-row
+scrolling strip; the base `.market-grid` comment must drop the filler mention.
 
-- `VERSION`
-- `app.py`
-- `templates/preferences.html`
-- `static/style.css` only if needed
-- `android/app/build.gradle.kts`
-- `android/gradle.properties`
-- `tests/test_app_version.py`
-- `project-brief.md`
-- `AGENTS.md`
-- `roadmap.md`
-- `feature.md`
+### Step 5 — `project-brief.md`
 
-## Explicit Non-Goals
+In the `Markets today` dashboard bullet, change the phone clause from a
+two-column grid to one horizontal scrolling row of chips.
 
-- No Git-tag or package-version generation.
-- No commit SHA, build date, updater, changelog, or release notes UI.
-- No version API endpoint.
-- No version outside Preferences.
-- No database migration or stored preference.
-- No Android `VERSION_CODE` change for this UI feature.
-- No fallback release number in Flask or Gradle.
+### Step 6 — Verify
+
+1. `source .venv/bin/activate`
+2. `python -m pytest tests/test_market_tabs.py` (all green).
+3. `python -m pytest` (full suite green; previously 898 passed).
+4. `python -m pytest tests/test_docker.py` is unaffected but run it once if any
+   container file changed (it did not).
+5. STOP. Ask the user to open the dashboard at phone width and approve the GUI
+   before any commit.
+
+## Out Of Scope
+
+- Do not move the strip below the portfolio.
+- Do not change the desktop grid (one equal track per instrument).
+- Do not remove the "Live" text from the template; hide it with CSS only.
+- Do not add scroll fades, snap, or new motion.
+- Do not touch `app.py`.
+
+## Files
+
+`static/style.css`, `templates/index.html`, `project-brief.md`,
+`tests/test_market_tabs.py`, `feature.md`. (`static/js/main.js` has no net
+change; see Step 2.)
