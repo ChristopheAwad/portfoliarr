@@ -39,13 +39,19 @@ function managedMarketItems(panel) {
     return panel.querySelectorAll(".market-item[data-symbol]");
 }
 
-// Blank one panel's cells:
-// EMPTY while waiting (the CSS :empty shimmer shows),
+// Blank one panel's cells with ONE placeholder:
+// "" while waiting (the CSS :empty shimmer shows, on BOTH rows),
 // "—" when the backend is unreachable for the whole category.
+// The change row takes the SAME placeholder as the level row: an empty
+// change row would re-trigger its :empty shimmer, so the skeleton would
+// outlive a failure. pos/neg are cleared too — a placeholder is not a move,
+// and a green "—" would read as a gain.
 function setMarketPanelValues(panel, text) {
     managedMarketItems(panel).forEach((item) => {
         item.querySelector(".market-item-price").textContent = text;
-        item.querySelector(".market-item-change").textContent = "";
+        const changeEl = item.querySelector(".market-item-change");
+        changeEl.textContent = text;
+        changeEl.classList.remove("pos", "neg");
     });
 }
 
@@ -128,12 +134,15 @@ async function refreshMarketOverview(category = activeMarketCategory) {
         // Gap-fill: the backend returns successes only, so any item whose
         // symbol did NOT arrive just failed while its siblings lived. BOTH
         // rows take "—" — an EMPTY change row would re-trigger its :empty
-        // loading shimmer, i.e. the skeleton would outlive the failure.
+        // loading shimmer, i.e. the skeleton would outlive the failure —
+        // and pos/neg clear, so a degraded cell cannot paint its dash green.
         const answered = new Set(quotes.map((q) => q.symbol));
         managedMarketItems(panel).forEach((item) => {
             if (!answered.has(item.dataset.symbol)) {
                 item.querySelector(".market-item-price").textContent = "—";
-                item.querySelector(".market-item-change").textContent = "—";
+                const changeEl = item.querySelector(".market-item-change");
+                changeEl.textContent = "—";
+                changeEl.classList.remove("pos", "neg");
             }
         });
     } catch (err) {

@@ -309,8 +309,31 @@ def test_market_js_gap_fill_marks_both_rows_unavailable():
     js = market_js()
     block = js[js.index("const answered"):]
     block = block[: block.index("} catch")]
-    assert block.count('textContent = "—"') >= 2, (
-        "a failed symbol must show — in BOTH its level and its change row"
+    assert '".market-item-price").textContent = "—"' in block, (
+        "a failed symbol's level row must show —"
+    )
+    assert 'changeEl.textContent = "—"' in block, (
+        "a failed symbol's change row must show —, not stay empty"
+    )
+    assert 'classList.remove("pos", "neg")' in block, (
+        "a degraded cell must not keep the template's green .pos"
+    )
+
+
+def test_market_js_panel_placeholder_covers_change_row_and_color():
+    """setMarketPanelValues drives BOTH placeholder states: "" while loading
+    and "—" for a category-wide failure (503 / network error). It must write
+    the SAME text to the change row as to the level row, or every change row
+    shimmers until the next successful poll."""
+    js = market_js()
+    fn = js[js.index("function setMarketPanelValues"):]
+    fn = fn[: fn.index("\n}")]
+    assert 'changeEl.textContent = text' in fn, (
+        "the change row must take the same placeholder as the level row"
+    )
+    assert 'classList.remove("pos", "neg")' in fn, (
+        "a placeholder is not a move — clear pos/neg so a degraded "
+        "cell cannot paint its em dash green"
     )
 
 
