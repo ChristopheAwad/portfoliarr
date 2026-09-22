@@ -202,7 +202,7 @@ CAD-base currency pairs, and render a two-column instrument grid on phones.
 **Effort:** 2 days
 **Files:** `app.py`, `templates/index.html`, `static/js/main.js`, `static/style.css`, `project-brief.md`, `tests/test_routes.py`, `tests/test_market_tabs.py`, `tests/test_compare_ui.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #70)
 
 ---
 
