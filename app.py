@@ -591,15 +591,15 @@ Algorithm: walk every trading day in the range forward, keeping a
                         benchmark_errors[symbol] = (
                             f"no history available for {symbol}"
                         )
-                        if error_type is not None:
-                            failures.append((symbol, error_type))
+                        failures.append((symbol,
+                                         error_type or "EmptyHistory"))
                     else:
                         benchmark_histories[symbol] = history
 
         _log_aggregate_degradation(
             "market_history_degraded", "comparison_history",
             len(missing_benchmarks),
-            len(missing_benchmarks) - len(failures), failures, period=period,
+            len(benchmark_histories), failures, period=period,
         )
 
         for symbol in benchmark_symbols:

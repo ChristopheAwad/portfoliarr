@@ -2,9 +2,9 @@
 
 ## Status
 
-IMPLEMENTED - automated verification passed on 2026-09-22; awaiting the user's
-live-log approval. Roadmap item #21 remains in progress until approved and
-shipped.
+SHIPPED 2026-09-22 in PR #71. Automated verification passed; live Docker log
+approval remains a post-deployment check because the image is published only
+after this PR reaches `main`.
 
 This file is the complete test-first implementation handoff. Write all failing
 tests before production edits. After implementation and a green full pytest

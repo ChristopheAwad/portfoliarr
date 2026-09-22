@@ -109,7 +109,7 @@ Gunicorn access-log duplication, or logging inside the pure data layers.
 **Effort:** 1–2 days
 **Files:** `app.py`, `docker-compose.yml`, `project-brief.md`, `tests/test_logging.py`, `tests/test_docker.py`, existing route-log assertions
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #71)
 
 ---
 

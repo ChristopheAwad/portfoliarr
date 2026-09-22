@@ -244,6 +244,23 @@ def test_portfolio_history_uses_shared_aggregate_warning(
     assert record.exc_info is None
 
 
+def test_empty_comparison_history_is_logged_as_a_failed_attempt(
+        client, fake_market, caplog):
+    fake_market.histories["SPY"] = {}
+    with caplog.at_level(logging.WARNING):
+        response = client.get(
+            "/api/portfolio/history?period=1M&benchmark=SPY"
+        )
+
+    (record,) = messages(caplog, "market_history_degraded")
+    assert response.status_code == 200
+    assert "operation=comparison_history" in record.getMessage()
+    assert "attempted=1 succeeded=0 failed=1" in record.getMessage()
+    assert "symbols=['SPY']" in record.getMessage()
+    assert "error_types=['EmptyHistory']" in record.getMessage()
+    assert record.exc_info is None
+
+
 def test_failed_search_logs_length_not_query(client, monkeypatch, caplog):
     query = "private-investment-search"
     monkeypatch.setattr(app_module, "search_tickers", lambda _query: (
