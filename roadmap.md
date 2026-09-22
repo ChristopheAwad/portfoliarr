@@ -79,7 +79,7 @@ makes the displayed quote stale.
 **Effort:** 1 day
 **Files:** `static/js/ledger.js`, `static/style.css` if needed, `tests/test_ledger_quick_sell.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #72)
 
 ---
 

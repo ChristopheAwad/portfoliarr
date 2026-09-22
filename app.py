@@ -50,7 +50,7 @@ def _load_app_version(path=None):
     """Read the shared web/Android release version and reject drift."""
     version_path = path or Path(__file__).with_name("VERSION")
     version = version_path.read_text().strip()
-    if re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version) is None:
+    if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", version) is None:
         raise ValueError(f"Invalid app version in {version_path}")
     return version
 

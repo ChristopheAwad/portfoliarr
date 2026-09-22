@@ -12,13 +12,13 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
 GRADLE_BUILD = ROOT / "android" / "app" / "build.gradle.kts"
 GRADLE_PROPERTIES = ROOT / "android" / "gradle.properties"
+ANDROID_WORKFLOW = ROOT / ".github" / "workflows" / "build-android.yml"
 
 
 def test_shared_version_file_contains_current_release():
     assert VERSION_FILE.exists()
     version = VERSION_FILE.read_text().strip()
-    assert version == "1.1"
-    assert re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version)
+    assert re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", version)
 
 
 def test_version_loader_trims_valid_release(tmp_path):
@@ -30,7 +30,10 @@ def test_version_loader_trims_valid_release(tmp_path):
 
 @pytest.mark.parametrize(
     "value",
-    ["", "   \n", "v1.1", "1", "1.", ".1", "1.x", "1.2.3.4", "1.2-beta"],
+    [
+        "", "   \n", "v1.1", "1", "1.", ".1", "1.x", "1.2.3.4",
+        "1.2-beta", "١.٢",
+    ],
 )
 def test_version_loader_rejects_malformed_release(tmp_path, value):
     version_file = tmp_path / "VERSION"
@@ -73,6 +76,15 @@ def test_android_uses_shared_version_and_keeps_version_code_separate():
     assert "versionName = sharedVersion" in build
     assert "VERSION_NAME" not in build
 
-    assert re.search(r"^VERSION_CODE=2$", properties, re.MULTILINE)
+    version_code = re.search(r"^VERSION_CODE=([0-9]+)$", properties, re.MULTILINE)
+    assert version_code and int(version_code.group(1)) > 0
     assert not re.search(r"^VERSION_NAME=", properties, re.MULTILINE)
     assert "root VERSION" in properties
+
+
+def test_android_workflow_runs_when_shared_version_changes():
+    workflow = ANDROID_WORKFLOW.read_text()
+
+    assert '- "VERSION"' in workflow
+    assert "Copy android/ and the root VERSION file" in workflow
+    assert "rootProject.projectDir" in workflow

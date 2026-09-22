@@ -5,7 +5,7 @@ plugins {
 
 // The web app and APK expose the same human-readable release number.
 val sharedVersion = rootProject.projectDir.parentFile.resolve("VERSION").readText().trim()
-require(sharedVersion.matches(Regex("""\d+\.\d+(?:\.\d+)?"""))) {
+require(sharedVersion.matches(Regex("""[0-9]+\.[0-9]+(?:\.[0-9]+)?"""))) {
     "Invalid app version in root VERSION"
 }
 

@@ -2,11 +2,10 @@
 
 ## Status
 
-IMPLEMENTED 2026-09-22. Automated Flask and browser-source verification is
-green. The local Android build is blocked before project evaluation because the
-machine has only JDK 25 (`25.0.4.1`), while this project requires JDK 17; the
-Build Android APK workflow must provide that gate. Browser GUI and on-device
-approval remain pending.
+APPROVED 2026-09-22 for PR #72. Automated Flask and browser-source verification
+is green, the user approved the GUI, and GitHub's JDK 17 Build Android APK
+workflow passed. The local Android build remains unavailable because this
+machine has only JDK 25 (`25.0.4.1`).
 
 Verification completed:
 

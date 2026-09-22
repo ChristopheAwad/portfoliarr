@@ -49,6 +49,19 @@ def _read(filename: str) -> str:
     return path.read_text()
 
 
+def test_shared_version_is_included_in_docker_build_context():
+    """Flask cannot start in the image if its root VERSION is excluded."""
+    dockerfile = _read("Dockerfile")
+    ignored_entries = {
+        line.strip().rstrip("/")
+        for line in _read(".dockerignore").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert "COPY . ." in dockerfile
+    assert "VERSION" not in ignored_entries
+
+
 # ---------------------------------------------------------------------------
 # Dockerfile
 # ---------------------------------------------------------------------------
