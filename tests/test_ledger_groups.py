@@ -557,3 +557,31 @@ def test_unquoted_usd_group_without_fx_degrades_to_native_average(
     assert row["display_currency"] == "USD"
     assert row["group_avg_cost"] == pytest.approx(100.0)
     assert "group_value" not in row
+
+
+def test_unquoted_usd_group_with_mixed_fx_has_null_average(client,
+                                                           fake_market):
+    """One stored-rate row and one legacy fx_rate=None row in the same
+    unquoted USD ticker: the rows display in different currencies (CAD vs
+    USD), so folding both prices into one pool would invent a blended
+    number. group_avg_cost must be NULL (parent Price shows "—"); each
+    detail row keeps its own honest price_display."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=100.0, qty=10,
+                     currency="USD", fx_rate=None)
+    # fake_market.quotes stays empty → quote failure (the reachable path
+    # for mixed converts: unquoted rows key off their own stored rate).
+
+    res = client.get("/api/transactions")
+    assert res.status_code == 200
+    rows = [r for r in res.get_json() if r["ticker"] == "AAPL"]
+    assert len(rows) == 2
+    # The mixed situation is real: one row CAD, one row native USD.
+    assert {r["display_currency"] for r in rows} == {"CAD", "USD"}
+    for row in rows:
+        assert row["group_avg_cost"] is None
+    # Detail facts survive untouched.
+    by_date = {r["transaction_date"]: r for r in rows}
+    assert by_date["2026-08-01"]["price_display"] == pytest.approx(140.0)
+    assert by_date["2026-08-02"]["price_display"] == pytest.approx(100.0)

@@ -35,6 +35,13 @@ from market_data import (
 )
 import db
 
+# One flat-position tolerance for every cost-pool replay in this file:
+# fractional quantities (the importer's 6-decimal input) leave binary
+# residue — 0.1 + 0.2 − 0.3 is 5.55e-17 — so "flat" is abs(qty) within
+# this epsilon, never == 0. The frontend mirrors the same 1e-9 for its
+# net-qty checks (static/js/ledger.js).
+FLAT_QTY_TOL = 1e-9
+
 # datetime's date/datetime classes know how to both VALIDATE and NORMALIZE
 # dates: date.fromisoformat("2026-08-31") raises ValueError on garbage, and
 # its .isoformat() hands back the same canonical "YYYY-MM-DD" text we store.
@@ -1341,7 +1348,7 @@ def portfolio_realized():
         # is 5.55e-17 — and an exact check would glue an unrated ancestry
         # to the ticker forever, poisoning every later row and the total
         # (regression locked by test_fractional_positions_still_go_flat).
-        if abs(pos["qty"]) < 1e-9:
+        if abs(pos["qty"]) < FLAT_QTY_TOL:
             pos["cost_native"] = 0.0
             pos["cost_cad"] = 0.0
             pos["rated"] = True
@@ -2211,15 +2218,13 @@ def list_transactions():
     for tx in transactions:
         groups.setdefault(tx["ticker"], []).append(tx)
 
-    # Flat tolerance for the cost pool — the same 1e-9 the frontend uses
-    # for net-quantity checks: a remainder inside it is a closed
-    # position, never a huge average from dividing by floating dust.
-    _POOL_FLAT = 1e-9
-
     for ticker, rows in groups.items():
         # --- Average-cost replay (stored facts; quote-independent). ---
         # rows arrive newest-first (db.get_transactions order); the pool
         # must fold oldest-first, so walk reversed(rows).
+        # Flat checks use the module-level FLAT_QTY_TOL (same epsilon as
+        # the realized-gain fold): a remainder inside it is a closed
+        # position, never a huge average from dividing by dust.
         pos_qty = 0.0
         pos_cost = 0.0
         for tx in reversed(rows):
@@ -2228,7 +2233,7 @@ def list_transactions():
             )
             px = tx["price_display"]
 
-            if abs(pos_qty) <= _POOL_FLAT:
+            if abs(pos_qty) <= FLAT_QTY_TOL:
                 # Flat (or dust): this transaction opens the pool at its
                 # own price — long for BUY, short for SELL.
                 pos_qty = signed
@@ -2248,14 +2253,14 @@ def list_transactions():
             if abs(signed) <= abs(pos_qty):
                 pos_qty += signed
                 pos_cost = abs(pos_qty) * pool_avg
-                if abs(pos_qty) <= _POOL_FLAT:
+                if abs(pos_qty) <= FLAT_QTY_TOL:
                     pos_qty = 0.0
                     pos_cost = 0.0
             else:
                 # Crosses through flat: only the EXCESS opens the
                 # opposite-side pool, at this transaction's own price.
                 excess = abs(signed) - abs(pos_qty)
-                if excess <= _POOL_FLAT:
+                if excess <= FLAT_QTY_TOL:
                     pos_qty = 0.0
                     pos_cost = 0.0
                 else:
@@ -2264,9 +2269,17 @@ def list_transactions():
 
         avg_cost = (
             pos_cost / abs(pos_qty)
-            if abs(pos_qty) > _POOL_FLAT
+            if abs(pos_qty) > FLAT_QTY_TOL
             else None
         )
+        # Mixed display currencies inside ONE ticker (an unquoted USD
+        # group where a stored-rate row converts to CAD but a legacy
+        # fx_rate=None row stays native): folding both price scales into
+        # one pool would invent a blended number with no real currency.
+        # Unavailable → NULL → the parent Price renders "—"; each detail
+        # row keeps its own honest price_display / display_currency.
+        if len({tx["display_currency"] for tx in rows}) > 1:
+            avg_cost = None
         # Attach BEFORE the quote guard below: average price is facts-
         # only, so a dead ticker still shows its parent-row Price.
         for tx in rows:

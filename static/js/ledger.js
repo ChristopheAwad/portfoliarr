@@ -647,19 +647,25 @@ function buildGroupRow(ticker, txs) {
     qtyCell.className = "num";
     qtyCell.textContent = formatNumber(netQty, 4);
 
+    // One display currency for the whole group — read ONCE and shared by
+    // the Price cell and the live cells below, so the two render paths
+    // can never label the same row with different currencies.
+    // (Backend construction keeps the group homogeneous — except for a
+    // mixed-currency unquoted group, which sends avg_cost null anyway.)
+    const currency = txs[0].display_currency || txs[0].currency;
+
     // The parent Price is the backend's average acquisition price for
     // the CURRENT open position (average-cost pool of stored facts — a
     // partial sale does not reprice remaining shares). Painted OUTSIDE
     // the hasLive branch below: it needs no quote, so a Yahoo failure
     // still shows the average while Value/Gain degrade to "—". Null =
-    // flat position (or legacy reply) → "—"; the check is explicit so a
-    // legitimate 0 is never mistaken for missing.
+    // flat or mixed-currency position (or legacy reply) → "—"; the
+    // check is explicit so a legitimate 0 is never mistaken for missing.
     const priceCell = document.createElement("td");
     priceCell.className = "num";
     if (avgCost === null) {
         priceCell.textContent = "—";
     } else {
-        const currency = txs[0].display_currency || txs[0].currency;
         priceCell.textContent = `${formatNumber(avgCost)} ${currency}`;
     }
 
@@ -678,11 +684,9 @@ function buildGroupRow(ticker, txs) {
     dayPctCell.className = "num ledger-live";
 
     if (hasLive) {
-        // One display currency per group by construction: the backend
-        // converts (or not) per row, and every row of a group shares the
-        // same ticker and rate situation. In CAD mode that's "CAD"; in
+        // The group's currency was read once above (one label source for
+        // Price and every live cell). In CAD mode that's "CAD"; in
         // native mode the group's own trading currency.
-        const currency = txs[0].display_currency || txs[0].currency;
 
         // The same aggregates groupSortKeys reads for sorting — render
         // them here so the table and the sort order can never disagree.
