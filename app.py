@@ -88,6 +88,9 @@ dictConfig({
     },
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
 })
+# yfinance uses INFO for internal cache diagnostics. Those lines are not
+# actionable application events and otherwise obscure our production logs.
+logging.getLogger("yfinance").setLevel(logging.WARNING)
 
 # One flat-position tolerance for every cost-pool replay in this file:
 # fractional quantities (the importer's 6-decimal input) leave binary
