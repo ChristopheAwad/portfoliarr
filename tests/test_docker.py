@@ -382,3 +382,12 @@ def test_compose_restarts_on_boot():
     deliberately stopped it (unlike `always`)."""
     compose = _read("docker-compose.yml")
     assert "restart: unless-stopped" in compose
+
+
+def test_compose_bounds_local_log_retention():
+    """Repeated upstream failures must not fill the home server's disk."""
+    compose = _read("docker-compose.yml")
+    assert re.search(r"(?m)^    logging:\s*$", compose)
+    assert re.search(r"(?m)^      driver: json-file\s*$", compose)
+    assert re.search(r'(?m)^        max-size: "10m"\s*$', compose)
+    assert re.search(r'(?m)^        max-file: "3"\s*$', compose)
