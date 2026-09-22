@@ -240,27 +240,17 @@ def test_first_tab_ships_selected_pill_class(client):
         )
 
 
-def test_odd_category_ships_phone_grid_filler(client):
-    """The phone grid is 2 columns, so an ODD instrument count leaves the
-    last cell uncovered — and .market-grid paints its gaps with its own
-    background, which would show as a grey block. One filler per odd-count
-    category, shown on phones only."""
-    section = market_section(client.get("/").get_data(as_text=True))
-    expected = sum(
-        1 for cat in app_module.MARKET_CATEGORIES.values()
-        if len(cat["instruments"]) % 2 == 1
+def test_odd_category_has_no_grid_filler():
+    """Phones now show ONE scrolling row, so there is no empty grid cell to
+    plug. The odd-count filler class must be gone from both the template and
+    the stylesheet."""
+    assert "market-grid-filler" not in STYLE_CSS, (
+        "the filler's CSS must be removed with the two-column phone grid"
     )
-    assert section.count('class="market-grid-filler"') == expected, (
-        "exactly one filler per odd-count category"
+    template = (ROOT / "templates" / "index.html").read_text()
+    assert "market-grid-filler" not in template, (
+        "the template must stop emitting a filler that no layout needs"
     )
-    assert "aria-hidden" in section, "the filler carries no information"
-
-    assert "display: none" in css_body(".market-grid-filler"), (
-        "desktop already has one column per instrument — keep it hidden"
-    )
-    phone = media_body("600px", ".market-grid-filler")
-    assert phone is not None, "phone rule must reveal the filler"
-    assert "var(--card-bg)" in phone, "filler must paint card background"
 
 
 # ═══ 2. FRONTEND BEHAVIOR (JS SOURCE/META) ═══════════════════════════
@@ -496,23 +486,22 @@ def test_market_labels_do_not_force_page_overflow():
     assert "overflow" in body and "ellipsis" in body
 
 
-def test_market_phone_grid_is_two_columns():
+def test_market_phone_instruments_scroll_in_one_row():
     body = media_body("600px", ".market-grid")
     assert body is not None, "phone media query must style .market-grid"
-    decl = [d for d in body.split(";") if "grid-template-columns" in d]
-    assert decl, "phone .market-grid rule must set grid-template-columns"
-    # Normalise whitespace, then compare: exactly two equal tracks, nothing
-    # else — this catches a stray third track or a hard-coded repeat().
-    assert "".join(decl[0].split()) == "grid-template-columns:1fr1fr", (
-        "phone grid must be exactly two equal columns"
+    assert "display: flex" in body, (
+        "the phone strip is one flex row, not a two-column grid"
+    )
+    assert "overflow-x" in body and "auto" in body, (
+        "the phone strip scrolls sideways"
+    )
+    assert "grid-template-columns" not in body, (
+        "the two-column phone grid is gone"
     )
 
-
-def test_market_phone_last_item_does_not_span_two_columns():
-    body = media_body("600px", ".market-grid")
-    assert body is not None, "phone .market-grid rule required"
-    assert "span 2" not in body, (
-        "an odd fifth instrument must stay one normal cell"
+    item = media_body("600px", ".market-item")
+    assert item is not None and "flex: 0 0 auto" in item, (
+        "each chip keeps its natural width and the row scrolls"
     )
 
 
@@ -549,3 +538,52 @@ def test_market_reduced_motion_freezes_skeleton():
         "market loading shimmer must freeze under reduced motion"
     )
     assert "animation: none" in reduced
+
+
+# ═══ 4. PHONE REDESIGN (mobile-only market strip) ═══════════════════════
+# The strip stays first on the page, but on phones its presentation is
+# corrected: the pill rail becomes a flat underlined rail, the header goes
+# quiet, and each category's instruments become ONE horizontal scrolling row
+# of flat divided chips. Every assertion reads the ≤600px block, so a base
+# (desktop) rule can never satisfy it.
+
+def test_market_phone_header_is_quiet():
+    heading = media_body("600px", ".market-header h2")
+    assert heading is not None, "phone block must shrink the market heading"
+    assert "font-size: 18px" in heading
+
+    live = media_body("600px", ".market-live")
+    assert live is not None, "phone block must hide the Live badge"
+    assert "display: none" in live
+
+
+def test_market_phone_tabs_are_underlined_not_pills():
+    body = media_body("600px", ".market-tab")
+    assert body is not None, "phone block must style .market-tab"
+    assert "border-radius: 0" in body, "phone tabs drop the pill radius"
+    assert "border-bottom" in body and "transparent" in body, (
+        "phone tabs reserve a transparent underline track"
+    )
+    assert "999px" not in body, "phone tabs must not keep the pill radius"
+
+
+def test_market_phone_active_tab_underlines_with_accent():
+    active = media_body("600px", ".market-tab.active")
+    assert active is not None, "phone block must style the active tab"
+    assert "var(--accent)" in active, "active underline wears the accent"
+    assert "background: transparent" in active, (
+        "active tab drops the accent fill on phones"
+    )
+
+    tabs = media_body("600px", ".market-tabs")
+    assert tabs is not None
+    assert "scroll-snap" not in tabs, "scroll-snap caused Android tab-bar jitter"
+    assert "-webkit-overflow-scrolling" not in tabs, (
+        "legacy momentum hint made the fixed bottom tab bar vanish"
+    )
+
+
+def test_market_phone_panel_is_flat():
+    body = media_body("600px", ".market-panel")
+    assert body is not None, "phone block must flatten the market panel"
+    assert "box-shadow: none" in body

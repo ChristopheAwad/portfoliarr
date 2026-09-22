@@ -76,8 +76,9 @@
                 {% endif %}
                 <!-- --market-cols gives this panel's grid equal tracks for
                      ITS OWN instrument count (4 or 5) without hard-coding a
-                     column count; the phone media query overrides it to two
-                     columns. The 1px gap draws the hairline dividers. -->
+                     column count; the phone media query turns the grid into
+                     a single sideways-scrolling row. The 1px gap draws the
+                     hairline dividers. -->
                 <div class="market-grid" style="--market-cols: {{ cat['instruments']|length }};">
                     {% for inst in cat['instruments'] %}
                     <a class="market-item"
@@ -90,17 +91,6 @@
                         <span class="market-item-change pos"></span>
                     </a>
                     {% endfor %}
-                    {% if cat['instruments']|length % 2 == 1 %}
-                    <!-- The phone grid is forced to TWO columns, so an odd
-                         instrument count (Asia-Pacific's five) leaves the last
-                         cell uncovered. .market-grid paints its 1px gaps with
-                         its own background, so that uncovered cell would show
-                         as a solid grey block. This filler covers it — but ONLY
-                         on phones: desktop already has one column per
-                         instrument, so style.css keeps it display:none there.
-                         aria-hidden because it carries no information. -->
-                    <span class="market-grid-filler" aria-hidden="true"></span>
-                    {% endif %}
                 </div>
             </div>
             {% endfor %}
