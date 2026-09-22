@@ -191,6 +191,21 @@ painting after rapid navigation.
 
 ---
 
+### 20. Dashboard Market Overview Tabs
+Move the dashboard's market snapshot above the complete portfolio and expand it
+into a full-width tabbed strip. North America, Europe, Asia-Pacific, Crypto,
+Commodities, and Currencies each show a small approved set of representative
+instruments. Fetch and poll only the active category, preserve per-symbol
+failure handling and native stock-detail links, use adaptive precision for
+CAD-base currency pairs, and render a two-column instrument grid on phones.
+
+**Effort:** 2 days
+**Files:** `app.py`, `templates/index.html`, `static/js/main.js`, `static/style.css`, `project-brief.md`, `tests/test_routes.py`, `tests/test_market_tabs.py`, `tests/test_compare_ui.py`
+**Depends on:** Nothing
+**Status:** shipped 2026-09-22 (PR #70)
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -239,6 +254,7 @@ Tier 2.5:
                                            machinery makes #7 cheaper)
   14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
   15. Allocation Carousel Pagination ─── independent frontend quick extend
+  20. Dashboard Market Tabs ──────────── independent frontend/API quick extend
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -267,6 +283,7 @@ For maximum compounding value:
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
 15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
+20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

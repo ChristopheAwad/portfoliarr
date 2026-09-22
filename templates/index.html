@@ -11,6 +11,101 @@
 
 {% block content %}
 
+        <!-- MARKET OVERVIEW — the tabbed market snapshot. Deliberately the
+             FIRST thing on the page, above the whole portfolio, so the page
+             opens with outside market context ("what is the market doing
+             today?") rather than portfolio metadata. Tabs, panels, labels
+             and links all render from MARKET_CATEGORIES (passed in by the /
+             route) — the same dict /api/indices validates against, so a new
+             instrument is ONE backend edit, never a template edit.
+
+             Each instrument is a real <a> to its detail page: a plain anchor
+             gives native middle-click / open-in-new-tab / keyboard Enter for
+             free (same rule as the ledger's ticker links). url_for
+             percent-encodes symbols the URL requires (^GSPC → /stock/%5EGSPC;
+             Flask decodes on the way in). Keep data-symbol and url_for's
+             symbol in sync — one for JS, one for the browser.
+
+             The price/change spans ship COMPLETELY EMPTY (no whitespace): the
+             CSS :empty shimmer stands in for each number until main.js paints
+             live data, and a failed quote still degrades to "—". No mockup
+             numbers here — static lookalikes would masquerade as live data. -->
+        <section class="market-overview" aria-labelledby="market-heading">
+            <div class="market-header">
+                <h2 id="market-heading">Markets today</h2>
+                <span class="market-live">Live</span>
+            </div>
+
+            <!-- Category tabs. The WAI-ARIA tabs pattern: role=tablist/tab,
+                 aria-controls points each tab at its panel, aria-labelledby
+                 points each panel back at its tab, and roving tabindex (the
+                 selected tab 0, the rest -1) lets one Tab stop reach the whole
+                 group. main.js moves selection/focus on click and on
+                 ArrowLeft/ArrowRight/Home/End.
+
+                 The `active` class ships from the SAME loop.first test that
+                 sets aria-selected, because CSS paints the selected pill only
+                 from `.market-tab.active` and main.js adds that class only on
+                 a click — without it, a fresh load would show the default tab
+                 as unselected until the user touched a tab. -->
+            <div class="market-tabs" role="tablist" aria-label="Market categories">
+                {% for key, cat in market_categories.items() %}
+                <button type="button" class="market-tab{% if loop.first %} active{% endif %}"
+                        role="tab"
+                        id="market-tab-{{ key }}"
+                        aria-controls="market-panel-{{ key }}"
+                        aria-selected="{{ 'true' if loop.first else 'false' }}"
+                        tabindex="{{ 0 if loop.first else -1 }}"
+                        data-category="{{ key }}">{{ cat['label'] }}</button>
+                {% endfor %}
+            </div>
+
+            {% for key, cat in market_categories.items() %}
+            <!-- One panel per category. North America (the first) starts
+                 visible; every other panel ships hidden and is revealed by
+                 main.js on activation. Only the ACTIVE panel is fetched, so
+                 inactive panels sit empty until first shown. -->
+            <div class="market-panel"
+                 role="tabpanel"
+                 id="market-panel-{{ key }}"
+                 aria-labelledby="market-tab-{{ key }}"
+                 data-category="{{ key }}"
+                 {% if not loop.first %}hidden{% endif %}>
+                {% if key == 'currencies' %}
+                <p class="market-caption">1 CAD buys</p>
+                {% endif %}
+                <!-- --market-cols gives this panel's grid equal tracks for
+                     ITS OWN instrument count (4 or 5) without hard-coding a
+                     column count; the phone media query overrides it to two
+                     columns. The 1px gap draws the hairline dividers. -->
+                <div class="market-grid" style="--market-cols: {{ cat['instruments']|length }};">
+                    {% for inst in cat['instruments'] %}
+                    <a class="market-item"
+                       data-symbol="{{ inst['symbol'] }}"
+                       href="{{ url_for('stock_page', symbol=inst['symbol']) }}">
+                        <div class="market-item-top">
+                            <span class="market-item-label">{{ inst['label'] }}</span>
+                            <span class="market-item-price"></span>
+                        </div>
+                        <span class="market-item-change pos"></span>
+                    </a>
+                    {% endfor %}
+                    {% if cat['instruments']|length % 2 == 1 %}
+                    <!-- The phone grid is forced to TWO columns, so an odd
+                         instrument count (Asia-Pacific's five) leaves the last
+                         cell uncovered. .market-grid paints its 1px gaps with
+                         its own background, so that uncovered cell would show
+                         as a solid grey block. This filler covers it — but ONLY
+                         on phones: desktop already has one column per
+                         instrument, so style.css keeps it display:none there.
+                         aria-hidden because it carries no information. -->
+                    <span class="market-grid-filler" aria-hidden="true"></span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+
         <!-- THE HERO — the portfolio's headline, deliberately NOT boxed
              (style.css dissolves .stock-header-card into the page: no
              border, no shadow). Everything below it is "material on the
@@ -69,51 +164,6 @@
                  privacy eye masks it like the rest of the header. -->
             <p class="cost-basis-caption">Cost basis <span id="portfolio-cost-basis"></span></p>
         </div>
-
-        <!-- Market Index Chips. data-symbol is the hook main.js uses to find
-             each chip (by meaning, not position). Every chip here is managed:
-             the price/change spans ship EMPTY and main.js fills them with
-             live data — while a span is empty, a CSS :empty shimmer box
-             stands in for the number (and a failed quote still degrades to
-             "—"). No mockup numbers in the markup: static lookalikes would
-             masquerade as live data. Each chip is ALSO a real <a> to its
-             detail page — a plain anchor (not a JS click handler) gives
-             native middle-click / open-in-new-tab / keyboard Enter for
-             free, same rule as the ledger's ticker links. url_for
-             percent-encodes ^ (illegal raw in a URL) → /stock/%5EGSPC;
-             Flask decodes it back on the way in. Keep data-symbol and
-             url_for's symbol in sync — same ticker, two hooks: one for
-             JS, one for the browser. -->
-        <section class="indices-bar">
-            <a class="chip" data-symbol="^GSPC" href="{{ url_for('stock_page', symbol='^GSPC') }}">
-                <div class="chip-top">
-                    <span class="index-name">S&amp;P 500</span>
-                    <span class="index-price"></span>
-                </div>
-                <span class="index-change pos"></span>
-            </a>
-            <a class="chip" data-symbol="^IXIC" href="{{ url_for('stock_page', symbol='^IXIC') }}">
-                <div class="chip-top">
-                    <span class="index-name">Nasdaq</span>
-                    <span class="index-price"></span>
-                </div>
-                <span class="index-change pos"></span>
-            </a>
-            <a class="chip" data-symbol="^GSPTSE" href="{{ url_for('stock_page', symbol='^GSPTSE') }}">
-                <div class="chip-top">
-                    <span class="index-name">TSX</span>
-                    <span class="index-price"></span>
-                </div>
-                <span class="index-change neg"></span>
-            </a>
-            <a class="chip" data-symbol="BTC-USD" href="{{ url_for('stock_page', symbol='BTC-USD') }}">
-                <div class="chip-top">
-                    <span class="index-name">Bitcoin</span>
-                    <span class="index-price"></span>
-                </div>
-                <span class="index-change pos"></span>
-            </a>
-        </section>
 
         <!-- Main Dashboard Content Grid -->
         <div class="dashboard-grid">
