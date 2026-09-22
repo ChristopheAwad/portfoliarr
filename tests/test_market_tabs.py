@@ -224,6 +224,45 @@ def test_tabs_are_type_button(client):
         assert 'type="button"' in tag, "tabs must not submit a future form"
 
 
+def test_first_tab_ships_selected_pill_class(client):
+    """CSS paints the selected pill ONLY from `.market-tab.active`, and
+    main.js adds that class on click alone — so a fresh load would show the
+    default tab unselected unless the template emits the class too."""
+    section = market_section(client.get("/").get_data(as_text=True))
+    tabs = re.findall(r"<button[^>]*role=\"tab\"[^>]*>", section)
+    assert len(tabs) == len(app_module.MARKET_CATEGORIES)
+    assert 'class="market-tab active"' in tabs[0], (
+        "the default tab must ship already painted as selected"
+    )
+    for tag in tabs[1:]:
+        assert 'class="market-tab active"' not in tag, (
+            "only the default tab ships active on a fresh load"
+        )
+
+
+def test_odd_category_ships_phone_grid_filler(client):
+    """The phone grid is 2 columns, so an ODD instrument count leaves the
+    last cell uncovered — and .market-grid paints its gaps with its own
+    background, which would show as a grey block. One filler per odd-count
+    category, shown on phones only."""
+    section = market_section(client.get("/").get_data(as_text=True))
+    expected = sum(
+        1 for cat in app_module.MARKET_CATEGORIES.values()
+        if len(cat["instruments"]) % 2 == 1
+    )
+    assert section.count('class="market-grid-filler"') == expected, (
+        "exactly one filler per odd-count category"
+    )
+    assert "aria-hidden" in section, "the filler carries no information"
+
+    assert "display: none" in css_body(".market-grid-filler"), (
+        "desktop already has one column per instrument — keep it hidden"
+    )
+    phone = media_body("600px", ".market-grid-filler")
+    assert phone is not None, "phone rule must reveal the filler"
+    assert "var(--card-bg)" in phone, "filler must paint card background"
+
+
 # ═══ 2. FRONTEND BEHAVIOR (JS SOURCE/META) ═══════════════════════════
 
 def test_market_js_block_exists_with_markers():
@@ -261,6 +300,18 @@ def test_market_js_gap_fills_unanswered_symbols():
     js = market_js()
     assert '"—"' in js, "unanswered symbols degrade to an em dash"
     assert "answered" in js, "gap-fill tracks which symbols responded"
+
+
+def test_market_js_gap_fill_marks_both_rows_unavailable():
+    """:empty IS the loading skeleton. If a failed symbol degraded only its
+    level row, its change row would stay empty and shimmer forever — the
+    exact "skeleton outlives the data" bug the shimmer block forbids."""
+    js = market_js()
+    block = js[js.index("const answered"):]
+    block = block[: block.index("} catch")]
+    assert block.count('textContent = "—"') >= 2, (
+        "a failed symbol must show — in BOTH its level and its change row"
+    )
 
 
 def test_market_js_race_token_guards_stale_responses():
@@ -425,7 +476,13 @@ def test_market_labels_do_not_force_page_overflow():
 def test_market_phone_grid_is_two_columns():
     body = media_body("600px", ".market-grid")
     assert body is not None, "phone media query must style .market-grid"
-    assert "1fr 1fr" in body or "1fr 1fr" in body.replace(" ", "")
+    decl = [d for d in body.split(";") if "grid-template-columns" in d]
+    assert decl, "phone .market-grid rule must set grid-template-columns"
+    # Normalise whitespace, then compare: exactly two equal tracks, nothing
+    # else — this catches a stray third track or a hard-coded repeat().
+    assert "".join(decl[0].split()) == "grid-template-columns:1fr1fr", (
+        "phone grid must be exactly two equal columns"
+    )
 
 
 def test_market_phone_last_item_does_not_span_two_columns():

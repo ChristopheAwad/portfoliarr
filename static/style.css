@@ -635,6 +635,15 @@ a.logo { text-decoration: none; }
     background: var(--border-color);
 }
 
+/* Covers the cell a 2-column phone grid leaves empty after an ODD
+   instrument count — without it, the grid's gap-coloured background paints
+   that cell as a solid grey block. Hidden here because desktop already has
+   one column per instrument, so there is no empty cell to cover; the
+   ≤600px block turns it on. */
+.market-grid-filler {
+    display: none;
+}
+
 /* A cell is a cell of one strip, not a card: no radius, no shadow, no
    margin. min-width: 0 releases it from the flex min-content floor so a
    long label truncates rather than pushing the strip past the viewport.
@@ -2626,6 +2635,14 @@ input[type="date"]::-moz-placeholder {
 
     .market-grid {
         grid-template-columns: 1fr 1fr;
+    }
+
+    /* Odd instrument count = the sixth cell of the 2-column grid has no
+       item; paint it card-background so the grid's divider colour does not
+       show through as a grey block. */
+    .market-grid-filler {
+        display: block;
+        background: var(--card-bg);
     }
 
     .market-item {

@@ -41,10 +41,16 @@
                  points each panel back at its tab, and roving tabindex (the
                  selected tab 0, the rest -1) lets one Tab stop reach the whole
                  group. main.js moves selection/focus on click and on
-                 ArrowLeft/ArrowRight/Home/End. -->
+                 ArrowLeft/ArrowRight/Home/End.
+
+                 The `active` class ships from the SAME loop.first test that
+                 sets aria-selected, because CSS paints the selected pill only
+                 from `.market-tab.active` and main.js adds that class only on
+                 a click — without it, a fresh load would show the default tab
+                 as unselected until the user touched a tab. -->
             <div class="market-tabs" role="tablist" aria-label="Market categories">
                 {% for key, cat in market_categories.items() %}
-                <button type="button" class="market-tab"
+                <button type="button" class="market-tab{% if loop.first %} active{% endif %}"
                         role="tab"
                         id="market-tab-{{ key }}"
                         aria-controls="market-panel-{{ key }}"
@@ -84,6 +90,17 @@
                         <span class="market-item-change pos"></span>
                     </a>
                     {% endfor %}
+                    {% if cat['instruments']|length % 2 == 1 %}
+                    <!-- The phone grid is forced to TWO columns, so an odd
+                         instrument count (Asia-Pacific's five) leaves the last
+                         cell uncovered. .market-grid paints its 1px gaps with
+                         its own background, so that uncovered cell would show
+                         as a solid grey block. This filler covers it — but ONLY
+                         on phones: desktop already has one column per
+                         instrument, so style.css keeps it display:none there.
+                         aria-hidden because it carries no information. -->
+                    <span class="market-grid-filler" aria-hidden="true"></span>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}

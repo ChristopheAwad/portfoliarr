@@ -126,12 +126,14 @@ async function refreshMarketOverview(category = activeMarketCategory) {
         for (const quote of quotes) updateMarketItem(panel, quote);
 
         // Gap-fill: the backend returns successes only, so any item whose
-        // symbol did NOT arrive just failed while its siblings lived.
+        // symbol did NOT arrive just failed while its siblings lived. BOTH
+        // rows take "—" — an EMPTY change row would re-trigger its :empty
+        // loading shimmer, i.e. the skeleton would outlive the failure.
         const answered = new Set(quotes.map((q) => q.symbol));
         managedMarketItems(panel).forEach((item) => {
             if (!answered.has(item.dataset.symbol)) {
                 item.querySelector(".market-item-price").textContent = "—";
-                item.querySelector(".market-item-change").textContent = "";
+                item.querySelector(".market-item-change").textContent = "—";
             }
         });
     } catch (err) {
