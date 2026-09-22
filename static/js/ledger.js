@@ -543,6 +543,11 @@ function buildTxRow(tx) {
 //   Qty = NET position: buys add, sells subtract (computed HERE from
 //         facts, so the Qty cell stays honest even when the group's
 //         quote failed this cycle).
+//   Price = the backend's group_avg_cost: the current open position's
+//         average acquisition price (average-cost pool — a partial sale
+//         does NOT reprice the shares that remain). Facts-only, so it
+//         paints even when the live quote failed; null (flat position)
+//         reads as "—".
 //   Value / Total Gain / Day Gain (+ pcts) = the backend's group
 //         aggregates (groupSortKeys reads them off the group's first
 //         row): holdings math with SELLS NETTED OUT — value is the net
@@ -560,16 +565,19 @@ function buildTxRow(tx) {
 // either every row has live math or none — no partial-group ambiguity.
 //
 // --- Group aggregates (read from the backend, not re-derived) -----------
-// Every live number a GROUP displays comes from list_transactions: the
-// backend decorates each row with its TICKER's group fields (group_value,
-// group_cost_basis, group_total_gain, group_day_gain + their pcts),
-// computed with the same holdings math as /api/portfolio/summary. One
-// formula, one implementation — the ledger and the header can't drift.
+// Every number a GROUP displays comes from list_transactions: the
+// backend decorates each row with its TICKER's group fields (group_avg_cost,
+// group_value, group_cost_basis, group_total_gain, group_day_gain + their
+// pcts), computed with the same holdings math as /api/portfolio/summary
+// (and an average-cost replay for the price). One formula, one
+// implementation — the ledger and the header can't drift.
 // This function is the frontend's SINGLE reading point: buildGroupRow
 // renders these numbers, and the ledger sorter keys off the very same
 // values — so what you see above a column header is exactly what sorting
 // by that header uses. Returns a plain object; fields:
 //   netQty        Σ BUY.qty − Σ SELL.qty (the one fact-computed field)
+//   avgCost       the backend's group_avg_cost — null when the position
+//                 is flat (or a legacy reply omitted it)
 //   value         the backend's group_value (live)
 //   totalGain     the backend's group_total_gain (live)
 //   dayGain       the backend's group_day_gain (live)
@@ -591,6 +599,7 @@ function groupSortKeys(txs) {
     const first = txs[0] || {};
     return {
         netQty,
+        avgCost: first.group_avg_cost ?? null,
         value: first.group_value,
         totalGain: first.group_total_gain,
         totalGainPct: first.group_total_gain_pct ?? null,
@@ -633,16 +642,26 @@ function buildGroupRow(ticker, txs) {
     tickerEl.append(tickerLink);
     tickerCell.append(tickerEl);
 
-    const { netQty } = groupSortKeys(txs);
+    const { netQty, avgCost } = groupSortKeys(txs);
     const qtyCell = document.createElement("td");
     qtyCell.className = "num";
     qtyCell.textContent = formatNumber(netQty, 4);
 
-    // No single honest price for a group (average cost is Step 3's job) —
-    // the column stays, but reads as empty.
+    // The parent Price is the backend's average acquisition price for
+    // the CURRENT open position (average-cost pool of stored facts — a
+    // partial sale does not reprice remaining shares). Painted OUTSIDE
+    // the hasLive branch below: it needs no quote, so a Yahoo failure
+    // still shows the average while Value/Gain degrade to "—". Null =
+    // flat position (or legacy reply) → "—"; the check is explicit so a
+    // legitimate 0 is never mistaken for missing.
     const priceCell = document.createElement("td");
     priceCell.className = "num";
-    priceCell.textContent = "—";
+    if (avgCost === null) {
+        priceCell.textContent = "—";
+    } else {
+        const currency = txs[0].display_currency || txs[0].currency;
+        priceCell.textContent = `${formatNumber(avgCost)} ${currency}`;
+    }
 
     // --- Live cells (all-or-nothing per group, like the detail rows) ---
     const hasLive = !ledgerStale && txs[0].price_now !== undefined;
