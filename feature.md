@@ -1,309 +1,369 @@
-# Feature #20: Dashboard Market Overview Tabs
+# Feature #21: High-Value Operational Logging
 
 ## Status
 
-PLANNED - awaiting implementation. The product direction and this test-first
-plan were approved on 2026-09-22. Roadmap item #20 is in progress.
+IMPLEMENTED - automated verification passed on 2026-09-22; awaiting the user's
+live-log approval. Roadmap item #21 remains in progress until approved and
+shipped.
 
-Do not implement a different instrument set, add a market breadth roll-up, or
-replace the requested `Live` label without new user approval.
+This file is the complete test-first implementation handoff. Write all failing
+tests before production edits. After implementation and a green full pytest
+suite, stop for the user's live-log approval. Do not commit or push before that
+approval.
 
 ## Problem
 
-The dashboard currently renders four independent market chips after the
-portfolio headline and before the portfolio chart. This placement makes the
-chips look like portfolio or chart metadata. They are intended to answer a
-broader question first: "What do the markets look like today?"
+The application already logs caught failures at the Flask route boundary, which
+is the correct architectural location. However, the current output is difficult
+to use in production:
 
-The current bar is also too narrow for that job. It contains only the S&P 500,
-Nasdaq, TSX, and Bitcoin, with no way to inspect Europe, Asia-Pacific, other
-major cryptocurrencies, commodities, or currencies.
+1. Flask's production logger level is not explicitly configured, so useful
+   `INFO` events may be hidden.
+2. Concurrent requests and worker-thread failures have no correlation ID.
+3. Most successful ledger and watchlist mutations have no audit record.
+4. Routine Yahoo outages can emit one full traceback per symbol, producing more
+   noise than diagnosis.
+5. Normal request durations exist only at `DEBUG`; unusually slow requests are
+   not promoted to a visible warning.
+6. Some degradation paths, including transaction-list and import quote
+   failures, are silent.
+7. The failed-search warning includes the user's raw query.
+8. Docker log storage has no explicit size or file-count limit.
 
-## Goal
+The goal is not to log every action or payload. The goal is to make a small
+production log answer: what operation failed, which request it belonged to,
+whether stored data changed, and whether the app was unusually slow.
 
-Turn the existing index chips into a full-width, tabbed market overview at the
-top of the dashboard, before the complete portfolio section.
+## Approved Product And Engineering Decisions
 
-The overview must:
+1. Logs remain console-only. Python writes to stderr and Docker collects the
+   stream. Do not add files, SQLite log tables, cloud services, or a logging
+   dependency.
+2. Use one human-readable `key=value` line per event. Do not emit application
+   JSON inside Docker's JSON log envelope.
+3. The stable line prefix is local ISO-8601 time with numeric offset, level,
+   logger name, then the event fields:
 
-1. Appear before the `Your Portfolio` headline and all portfolio values.
-2. Present one cohesive market strip rather than unrelated floating cards.
-3. Offer North America, Europe, Asia-Pacific, Crypto, Commodities, and
-   Currencies tabs.
-4. Fetch only the active category on initial load, tab selection, and polling.
-5. Keep every instrument as a real link to its existing stock-detail page.
-6. Preserve per-symbol failure handling so one failed Yahoo quote cannot blank
-   its category.
-7. Work on desktop and mobile without widening the viewport.
-8. Keep the visible `Live` label requested by the user.
+   ```text
+   2026-09-22T14:31:05-0400 INFO app event=transaction_created request_id=... tx_id=42 ticker='AAPL'
+   ```
 
-## Approved Product Decisions
+4. Production defaults to `INFO`. `LOG_LEVEL` may override it only with one of
+   `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`, case-insensitively. A
+   missing value means `INFO`. An invalid value falls back to `INFO` and emits
+   one warning that names the invalid level with `%r`; it must not prevent boot.
+5. Configure Python logging before constructing the Flask app. Use the standard
+   library only. Keep existing loggers enabled so Gunicorn can retain its own
+   process lifecycle output.
+6. Do not enable Gunicorn access logging. Browser polling would duplicate the
+   application request records and produce low-value volume.
+7. Keep logging ownership in `app.py`. `db.py` and `market_data.py` continue to
+   raise and never log.
+8. Every request gets a new server-generated `uuid.uuid4().hex` ID. Do not trust
+   or reuse an inbound `X-Request-ID`; this LAN app has no trusted reverse-proxy
+   correlation contract, and server generation prevents log injection.
+9. Return the ID on every Flask response as `X-Request-ID`, including 4xx and
+   handled 500 responses.
+10. Every application log emitted while serving a request includes
+    `request_id=<32 lowercase hex characters>`. Worker closures capture the
+    string before entering a thread; they do not access Flask `request` or `g`
+    from worker threads.
+11. User-controlled strings are formatted with `%r`, so quotes, newlines, and
+    other control characters are escaped instead of creating forged log lines.
+12. Never log request or response bodies, pasted import text, transaction price,
+    quantity, FX rate, portfolio value, cost basis, gain, or complete database
+    rows.
+13. Tickers and database IDs may be logged where they identify a mutation or a
+    failed market lookup. They are useful operational identifiers, but no
+    financial amounts accompany them.
+14. Do not log the raw ticker-search query. A failed search records only
+    `query_length` and the exception type.
+15. Successful read-only requests do not appear at `INFO`. Their completion
+    event remains `DEBUG`.
+16. A request taking at least `SLOW_REQUEST_MS = 2000` is logged once at
+    `WARNING` instead of also receiving a duplicate `DEBUG` completion line.
+    Keep this threshold as a named code constant, not an environment setting.
+17. Request completion logs use the route path only. Do not include query
+    strings, fragments, bodies, client IPs, or user-agent strings.
+18. Routine Yahoo/yfinance failures are recovered degradation, not bugs. Log a
+    compact `WARNING` with operation, attempted/succeeded/failed counts, failed
+    symbols, and distinct exception class names. Do not attach `exc_info`.
+19. Unexpected exceptions that reach the global Flask handler remain `ERROR`
+    with `exc_info=True` and a full traceback.
+20. Database write failures caught for best-effort import remain `WARNING` with
+    `exc_info=True`, because they indicate a local persistence problem rather
+    than expected bad market data. Include line number and request ID, never the
+    imported row.
+21. Confirmed data mutations emit one `INFO` audit event after the database
+    reports success. Rejected, duplicate, missing, or rolled-back mutations do
+    not emit a success event.
+22. Docker uses the existing `json-file` driver with `max-size: "10m"` and
+    `max-file: "3"`. This bounds retained local logs to approximately 30 MB plus
+    Docker overhead.
+23. No cache hit/miss telemetry, SQL statement logging, metrics backend,
+    tracing system, health endpoint, alerting system, or frontend logging is in
+    this feature.
 
-1. The section heading is `Markets today`.
-2. A small visible `Live` label sits with the section heading.
-3. Do not add a sentence such as `3 of 4 higher`. These instruments overlap,
-   so that count would not be honest market-breadth data.
-4. The category order is fixed:
-   - North America
-   - Europe
-   - Asia-Pacific
-   - Crypto
-   - Commodities
-   - Currencies
-5. North America is the default category on every fresh dashboard load.
-6. Do not persist the selected tab in localStorage or sessionStorage in this
-   feature.
-7. The approved market configuration is:
+## Event Vocabulary
 
-| Category key | Label | Yahoo symbol | Display label |
-|---|---|---|---|
-| `north-america` | North America | `^GSPC` | S&P 500 |
-| `north-america` | North America | `^IXIC` | Nasdaq |
-| `north-america` | North America | `^GSPTSE` | TSX |
-| `north-america` | North America | `^RUT` | Russell 2000 |
-| `europe` | Europe | `^STOXX` | STOXX Europe 600 |
-| `europe` | Europe | `^FTSE` | FTSE 100 |
-| `europe` | Europe | `^GDAXI` | DAX |
-| `europe` | Europe | `^FCHI` | CAC 40 |
-| `asia-pacific` | Asia-Pacific | `^N225` | Nikkei 225 |
-| `asia-pacific` | Asia-Pacific | `^HSI` | Hang Seng |
-| `asia-pacific` | Asia-Pacific | `000001.SS` | Shanghai Composite |
-| `asia-pacific` | Asia-Pacific | `^NSEI` | Nifty 50 |
-| `asia-pacific` | Asia-Pacific | `^AXJO` | ASX 200 |
-| `crypto` | Crypto | `BTC-USD` | Bitcoin |
-| `crypto` | Crypto | `ETH-USD` | Ethereum |
-| `crypto` | Crypto | `SOL-USD` | Solana |
-| `crypto` | Crypto | `XRP-USD` | XRP |
-| `commodities` | Commodities | `GC=F` | Gold |
-| `commodities` | Commodities | `CL=F` | WTI Oil |
-| `commodities` | Commodities | `HG=F` | Copper |
-| `commodities` | Commodities | `NG=F` | Natural Gas |
-| `currencies` | Currencies | `CADUSD=X` | CAD/USD |
-| `currencies` | Currencies | `CADEUR=X` | CAD/EUR |
-| `currencies` | Currencies | `CADGBP=X` | CAD/GBP |
-| `currencies` | Currencies | `CADJPY=X` | CAD/JPY |
+Use the exact lower-snake-case event names below. Each log message starts with
+`event=<name>` and then its required fields. Stable names make `docker compose
+logs portfoliarr | grep 'event=...'` useful without a log platform.
 
-8. Currency pairs all use CAD as the base. The Currencies panel includes the
-   short explanatory caption `1 CAD buys`.
-9. Positive currency movement therefore consistently means that CAD
-   strengthened against the displayed quote currency.
-10. Keep Natural Gas in Commodities. Do not substitute Wheat in this feature.
-11. Daily percentage movement is visually more prominent than absolute point
-    movement because percentages are comparable across instruments.
-12. Continue to show the current level, absolute daily move, percentage daily
-    move, and Yahoo-provided native currency. Do not invent conversions.
-13. Currency levels need adaptive precision. Values with an absolute value
-    below 1 use four decimal places; all other market levels keep the existing
-    two-decimal presentation. Do not globally change `formatPrice`, because
-    portfolio and stock-page money formatting remains two decimals.
-14. On desktop, the active category is one bordered strip divided into equal
-    instrument cells. Individual cells do not get separate card shadows.
-15. The five-instrument Asia-Pacific category must fit the same strip without
-    hard-coding a four-column layout.
-16. On phones, category tabs may scroll horizontally, but the instrument panel
-    uses a two-column grid. Do not create nested horizontal scrolling for both
-    tabs and instruments.
-17. An odd fifth instrument stays one normal-width grid cell. It must not
-    stretch across both phone columns.
-18. Each instrument cell remains a plain anchor with native Enter,
-    open-in-new-tab, and middle-click behavior.
-19. The existing green/red semantics remain: zero counts as positive, matching
-    the current chip behavior.
-20. Failed symbols display `—` and no stale change. Successful siblings remain
-    visible.
-21. If every symbol in the active category fails, all cells in that panel show
-    `—`; no global modal or toast is added.
-22. This feature does not add market-open detection, timestamps, breadth,
-    interest rates, bonds, market signals, sectors, Latin America, Africa, or
-    Middle East categories.
+### Process Events
 
-## Backend Contract
+1. `logging_level_invalid`
+   Required fields: `configured_level`.
+   Level: `WARNING`.
+2. `database_initialization_failed`
+   Required fields: none beyond `event`; include `exc_info=True`.
+   Level: `CRITICAL`; re-raise after logging so the process fails fast.
+3. `application_started`
+   Required fields: `log_level`, `database=initialized`.
+   Level: `INFO`; emit only after `db.init()` succeeds.
 
-### Market Configuration
+Process events have no request ID because no request exists yet.
 
-Replace the single flat product configuration with one ordered market-category
-configuration in `app.py`. Use insertion order as the category and instrument
-display order. Each category stores its human label and ordered instruments;
-each instrument stores its Yahoo symbol and display label.
+### Request Events
 
-Keep `INDEX_SYMBOLS` available as an ordered flat list derived from the market
-configuration, not as a second manually maintained source. Existing comparison
-recommendation tests use it to confirm that supported benchmark symbols exist.
+1. `request_complete`
+   Required fields: `request_id`, `method`, `path`, `status`, `duration_ms`.
+   Level: `DEBUG` below 2000 ms, `WARNING` at or above 2000 ms.
+2. `unhandled_error`
+   Required fields: `request_id`, `method`, `path`.
+   Level: `ERROR` with `exc_info=True`.
 
-The `/` route passes the category configuration to `templates/index.html` so
-Jinja renders tabs, panels, labels, symbols, and stock-detail links from the
-same backend source used by the API. Do not duplicate all symbols in template
-markup or JavaScript.
+Use `%r` for `path`. The timing hook must tolerate a defensive missing start
+time by defaulting to the current `perf_counter()`; normal Flask dispatch always
+sets it, but error paths must not cause a second error while logging.
 
-### `GET /api/indices`
+### Mutation Audit Events
 
-1. Accept an optional `category` query parameter.
-2. Missing or empty `category` selects `north-america`, preserving the current
-   no-query smoke-check URL.
-3. A recognized category fetches only that category's symbols.
-4. An unknown category returns HTTP 400 with
-   `{ "error": "invalid market category" }` before any quote call.
-5. Keep parallel quote fetching, but size the worker pool from the selected
-   category only, capped at eight workers.
-6. Keep wide exception handling and warning logging at the route boundary for
-   each failed symbol.
-7. Return successful quote objects only, in the configured category order.
-8. If some symbols fail, return HTTP 200 with successful siblings only.
-9. If every selected symbol fails, return the existing HTTP 503 payload
-   `{ "error": "quote service unavailable" }`.
-10. Logging must identify the selected category and relevant symbol/count so a
-    failure can be diagnosed from server output.
-11. Do not fetch or return symbols from inactive categories.
-12. Do not change `market_data.get_quote`, its cache, or its native quote
-    payload.
+1. `watchlist_added`: `request_id`, `symbol`.
+2. `watchlist_removed`: `request_id`, `symbol`.
+3. `transaction_created`: `request_id`, `tx_id`, `ticker`, `type`.
+4. `transaction_updated`: `request_id`, `tx_id`, `ticker`, `type`.
+5. `transaction_deleted`: `request_id`, `tx_id`.
+6. `ticker_transactions_deleted`: `request_id`, `ticker`, `deleted_count`.
+7. `transaction_import_completed`: `request_id`, `imported_count`,
+   `failed_count`.
 
-## Template And Accessibility Contract
+All mutation audit events are `INFO`. Do not add price, quantity, date,
+currency, FX rate, or the original import line.
 
-Move the market section to the first dashboard content inside `<main>`, before
-`.stock-header-card`.
+### Expected Rejection Events
 
-Render:
+Keep the currently useful typo and not-found diagnostics at `INFO`, converted to
+stable events:
 
-1. One semantic `<section>` labelled by the `Markets today` heading.
-2. The visible `Live` label beside the heading.
-3. One tab list with six real `<button type="button">` controls.
-4. Stable ids that connect each tab's `aria-controls` to its panel and each
-   panel's `aria-labelledby` back to its tab.
-5. `role="tablist"`, `role="tab"`, and `role="tabpanel"` semantics.
-6. North America with `aria-selected="true"` and `tabindex="0"`.
-7. All inactive tabs with `aria-selected="false"` and `tabindex="-1"`.
-8. North America visible initially; every inactive panel has `hidden`.
-9. Every instrument anchor with `class="market-item"`, `data-symbol`, and a
-   `url_for('stock_page', symbol=...)` href generated from the same configured
-   symbol.
-10. Empty level and change spans so CSS loading skeletons cannot be mistaken
-    for market data.
-11. The `1 CAD buys` caption only in the Currencies panel.
+1. `watchlist_symbol_rejected`: `request_id`, `symbol`,
+   `reason=unquotable`.
+2. `transaction_ticker_rejected`: `request_id`, `ticker`,
+   `reason=unquotable`.
+3. `ticker_delete_rejected`: `request_id`, `ticker`,
+   `reason=no_transactions`.
+4. `historical_price_unavailable`: `request_id`, `symbol`, `date`.
+5. `quote_unavailable`: `request_id`, `operation`, `symbol` for the existing
+   endpoints that intentionally translate a quote miss to HTTP 404.
 
-Keyboard tab behavior follows the WAI-ARIA tabs pattern:
+Do not add logs for generic validation 400s, duplicate watchlist 409s, missing
+row 404s, or normal empty lists.
 
-1. Click activates the selected tab.
-2. Left and Right arrows move focus and selection, wrapping at both ends.
-3. Home selects the first tab.
-4. End selects the last tab.
-5. Activation updates `aria-selected`, roving `tabindex`, and panel `hidden`
-   states together.
-6. The newly active category fetch starts immediately after activation.
+### Recovered Degradation Events
 
-## Frontend Data Contract
+Use compact `WARNING` events without `exc_info` for expected upstream failures.
+For operations that attempt multiple symbols, emit one aggregate record after
+the loop or executor completes, only when at least one attempt failed:
 
-Refactor the top market code in `static/js/main.js` around the active panel:
+1. `market_quotes_degraded`
+   Required fields: `request_id`, `operation`, `attempted`, `succeeded`,
+   `failed`, `symbols`, `error_types`.
+   Allowed operation values: `indices`, `portfolio_summary`, `allocation`,
+   `watchlist`, `transaction_list`, `import_preview`, `import_commit`.
+   The indices form also includes `category`.
+2. `market_history_degraded`
+   Required fields: `request_id`, `operation`, `period`, `attempted`,
+   `succeeded`, `failed`, `symbols`, `error_types`.
+   Operation is `portfolio_history` or `comparison_history` as applicable.
+3. `market_fx_degraded`
+   Required fields: `request_id`, `operation`, `pair`, `error_type`.
+4. `market_profile_degraded`
+   Required fields: `request_id`, `operation=allocation`, `attempted`,
+   `succeeded`, `failed`, `symbols`, `error_types`.
+5. `stock_data_degraded`
+   Required fields: `request_id`, `operation`, `symbol`, `error_type`.
+   Use this for single-symbol name, stats, quote, profile, or history recovery
+   where aggregate counts add no value.
+6. `search_failed`
+   Required fields: `request_id`, `query_length`, `error_type`.
+7. `volume_leaders_failed`
+   Required fields: `request_id`, `error_type`.
+8. `import_database_write_failed`
+   Required fields: `request_id`, `line`; include `exc_info=True`.
+9. `market_currency_unsupported`
+   Required fields: `request_id`, `operation`, `symbol`, `currency`.
+   Use this where a portfolio route recovers from a Yahoo quote currency other
+   than CAD or USD.
 
-1. Track the active category from the selected tab's `data-category`.
-2. Scope managed instruments to the requested panel. Never reset or gap-fill
-   hidden panels while processing another category's response.
-3. Build the request with `URLSearchParams` or equivalent safe encoding:
-   `/api/indices?category=<active-key>`.
-4. Set an unrequested panel's values to empty so its skeleton is visible on
-   first activation.
-5. Set only the requested panel to loading before its fetch.
-6. Paint each response by `data-symbol`, not DOM position.
-7. Gap-fill unanswered symbols in that panel with `—` and clear their changes.
-8. On HTTP, JSON, or network failure, mark only that requested panel
-   unavailable.
-9. Protect rapid tab switching and overlapping poll/tab requests with a
-   monotonically increasing request token per category. An older response must
-   not overwrite a newer response for that same category.
-10. A response for a panel that became inactive may populate that hidden panel,
-    but it must not switch tabs or alter the active panel.
-11. Keep user-entered category choice during ordinary polling; polling refreshes
-    the active category only.
-12. The one existing `setupAutoRefresh` callback calls the active-category
-    market refresh. Do not add `setInterval`.
-13. Use a market-specific formatter for levels. Currency pairs below 1 get
-    four decimals; other levels get two. Absolute change uses the same
-    precision decision as its level. Percentage change remains two decimals.
-14. Do not change shared portfolio, ledger, watchlist, stock-page, or chart
-    formatters.
+Name lookup failures are cosmetic because the symbol still identifies the
+security. Preserve them at `DEBUG` without traceback as
+`event=market_name_unavailable` with `request_id`, `operation`, `symbol`, and
+`error_type`; do not promote them to `WARNING`.
 
-## Visual Contract
+For aggregate records:
 
-Preserve the current printed-money identity: Fraunces display headings,
-Instrument Sans data, paper-like cards, ink navy/gold accents, and existing
-positive/negative colors.
+1. Preserve configured or first-attempt order in `symbols`.
+2. Deduplicate and alphabetically sort `error_types` so concurrency cannot make
+   log assertions or production output nondeterministic.
+3. Format `symbols` and `error_types` with `%r`.
+4. Do not include exception messages. yfinance messages can contain URLs and
+   other noisy implementation details; exception class names are sufficient for
+   routine degradation.
+5. A total failure produces the same single aggregate event with
+   `succeeded=0`; do not emit a second all-failed warning.
+6. Keep endpoint status and payload behavior unchanged. Logging must observe the
+   existing recovery policy, not change it.
 
-Desktop and tablet:
+## Logging Configuration Contract
 
-1. The heading row and category tabs read as one section above the portfolio.
-2. The panel is one bordered, rounded, card-background strip with the existing
-   small shadow.
-3. Instruments use equal grid tracks based on that panel's actual item count.
-4. Hairline dividers separate instruments; cells do not look like six SaaS
-   cards.
-5. Hover and `:focus-visible` identify the complete cell as a link without
-   shifting the whole strip.
-6. Long labels such as `Shanghai Composite` and `STOXX Europe 600` do not force
-   page overflow.
-7. Figures use tabular numerals.
-8. The daily percentage has stronger weight than the absolute daily move.
+Implement one small configuration block near the top of `app.py`:
 
-Phone, at the existing 600px breakpoint:
+1. Import `logging`, `logging.config.dictConfig`, `os`, and `uuid` using the
+   existing import style.
+2. Read and normalize `LOG_LEVEL` before `Flask(__name__)` is called.
+3. Validate against the exact five-level allowlist. Retain the invalid raw value
+   only long enough to emit `logging_level_invalid` with `%r` after config is
+   active.
+4. Call `dictConfig` once with:
+   - `version: 1`.
+   - `disable_existing_loggers: False`.
+   - One formatter: `%(asctime)s %(levelname)s %(name)s %(message)s`.
+   - Date format: `%Y-%m-%dT%H:%M:%S%z`.
+   - One `logging.StreamHandler` targeting `ext://sys.stderr`.
+   - The validated level on both the handler and root logger.
+5. Set `yfinance` and `peewee` loggers to `WARNING` only if they otherwise emit
+   below-warning chatter during tests or the live smoke. Do not pre-emptively add
+   a list of unrelated library loggers.
+6. Construct the Flask app only after `dictConfig`; Flask then uses the already
+   configured logging tree instead of installing its default handler.
+7. Keep `app.logger` as the call site throughout the route layer.
+8. Change the current logging comments so they describe explicit production
+   configuration, stable events, privacy rules, and route-boundary ownership.
+   Remove the inaccurate claim that no configuration is required.
+9. Wrap only startup `db.init()` in a try/except that logs
+   `database_initialization_failed` and re-raises. Do not add catch-and-log code
+   inside `db.py`.
+10. Emit `application_started` after successful initialization.
 
-1. The category tab list scrolls horizontally with its scrollbar hidden, using
-   the repository's plain-overflow rule. Do not add scroll snap or legacy
-   `-webkit-overflow-scrolling`.
-2. The active market panel becomes a two-column grid.
-3. Borders adapt so cells retain clear separation without double-thick lines.
-4. The page viewport does not grow wider than the device.
-5. Each tab and linked market cell keeps a practical touch target.
-6. The existing bottom tab bar must remain stable while category tabs scroll.
+## Request Correlation And Timing Contract
 
-Reduced motion:
+1. In the existing `before_request` hook, assign `g.request_id =
+   uuid.uuid4().hex` before assigning the timer start.
+2. Keep `time.perf_counter()` as the duration clock.
+3. In `after_request`, set `response.headers["X-Request-ID"]` from
+   `g.request_id` before returning the response.
+4. Calculate duration once and emit exactly one `request_complete` event.
+5. Select `WARNING` when `duration_ms >= SLOW_REQUEST_MS`; otherwise select
+   `DEBUG`.
+6. Do not include the query string. `request.path` is the complete logged path.
+7. Update the global unexpected-error record to `event=unhandled_error` and
+   include request ID, method, and path with `exc_info=True`.
+8. Preserve the existing `HTTPException` pass-through. Flask's 404/405 behavior
+   must not become JSON 500.
+9. `after_request` adds the request-ID header to ordinary responses, explicit
+   route 4xx responses, Flask HTTP errors, and the handled JSON 500 response.
+10. Do not add request IDs to JSON payloads; the contract is an HTTP response
+    header only.
 
-1. Loading shimmer follows the existing reduced-motion rule.
-2. Do not add automatic carousel movement, sliding panels, or decorative entry
-   animation.
+## Mutation Audit Contract
 
-## Existing Contracts To Preserve
+Add the success event immediately after each confirmed database operation:
 
-1. `/api/indices` remains the live-smoke endpoint and works without a query.
-2. Quote responses contain raw finite floats from `market_data.get_quote`.
-3. Market instruments stay in native quote currency.
-4. One failed symbol does not remove successful siblings.
-5. HTTP 503 occurs only when all requested symbols fail.
-6. Stock links percent-encode symbols such as `^GSPC`, `GC=F`, and `CADUSD=X`
-   through `url_for` and round-trip through `/stock/<symbol>`.
-7. Comparison recommendations for S&P 500, Nasdaq, and TSX remain supported by
-   `INDEX_SYMBOLS`.
-8. Dashboard portfolio summary, history chart, comparison overlays,
-   watchlist, volume leaders, allocation carousel, privacy state, and polling
-   cadence do not change.
-9. `setupAutoRefresh` remains the sole dashboard polling owner.
-10. No database, transaction, FX conversion, Android, Docker, dependency, or
-    market-data-cache change is part of this feature.
-11. Backend data stays unformatted; frontend code owns number text and
-    positive/negative classes.
-12. Failed and unrequested data never masquerades as a live value.
+1. Watchlist POST: after `db.add_symbol` returns, before the 201 response.
+2. Watchlist DELETE: after `db.remove_symbol` returns true, before the 204.
+3. Transaction POST: after `db.add_transaction` returns its ID, before the 201.
+4. Transaction PUT: after `db.update_transaction` returns true and after the
+   existing database re-read. Store the re-read row in a local variable, log
+   from that stored truth, and return the same object. Do not add a second read.
+5. Transaction DELETE: log only after `db.delete_transaction` returns true.
+   Log `tx_id`; do not add a pre-delete read solely to recover ticker.
+6. Ticker bulk DELETE: replace its prose-style success log with
+   `ticker_transactions_deleted` and retain count plus ticker.
+7. Import commit: replace its prose-style summary with
+   `transaction_import_completed` and retain imported/failed counts.
+8. Do not log one `transaction_created` event per imported row. The one import
+   summary is the audit event, which avoids large batches flooding the stream.
+9. Preview writes nothing and therefore emits no mutation audit event.
+
+## Upstream Degradation Refactor
+
+The implementation must preserve every endpoint response while reducing log
+noise:
+
+1. Where a route loops or uses `ThreadPoolExecutor`, collect each failure as a
+   `(symbol, exception_class_name)` pair instead of logging inside the worker.
+2. Emit one aggregate warning after all results are collected.
+3. A worker returns or records enough failure metadata for the route thread to
+   log. Do not call `app.logger`, read `request`, or read `g` inside a worker
+   thread. Prefer logging once on the route thread.
+4. Keep output ordering and all-success/partial-success/all-failed status rules
+   unchanged.
+5. For transaction import, change `_quote_unique_tickers` to return both the
+   existing quote map and ordered failure metadata. Both preview and commit emit
+   an operation-specific aggregate warning. Do not place a request-specific log
+   in the helper.
+6. For transaction listing, make the currently silent quote failures contribute
+   to `operation=transaction_list`.
+7. For single upstream calls, convert prose logs to the event vocabulary and
+   record only exception class name, not traceback, except for the documented
+   import database failure and global unhandled error.
+8. Remove the raw query from the search warning. Compute `query_length` from the
+   normalized query already used by the route.
+9. Preserve `INFO` 404 translation events where the endpoint deliberately turns
+   unavailable quote/history data into not-found behavior.
+10. Do not broaden or narrow any exception catch in this feature unless needed
+    to retain the exception object for its class name.
+
+## Docker Retention Contract
+
+In `docker-compose.yml`, add this exact service-level block to `portfoliarr`:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+Keep it next to `restart` or `environment`, at the service indentation level.
+Do not change image, ports, volume, timezone, restart policy, Gunicorn command,
+worker count, or thread count. Add a short comment that rotation protects the
+host during a repeated upstream outage.
 
 ## Files
 
 Production:
 
-- `app.py` - ordered market configuration, dashboard template context, and
-  category-aware `/api/indices` validation/fetching.
-- `templates/index.html` - move the market overview above the portfolio and
-  render accessible tabs/panels from backend configuration.
-- `static/js/main.js` - tab behavior, active-panel quote fetching, adaptive
-  market precision, race protection, and active-category polling.
-- `static/style.css` - cohesive market strip, tabs, loading/failure states,
-  desktop item-count layout, phone two-column layout, focus, and dark mode.
-- `project-brief.md` - replace the old fixed four-chip wording with the durable
-  tabbed-market contract after implementation is complete.
+- `app.py` - logging configuration, startup events, request IDs, timing level,
+  stable event vocabulary, mutation audits, and aggregate degradation records.
+- `docker-compose.yml` - bounded `json-file` retention.
+- `project-brief.md` - durable logging and privacy design rule.
 
 Tests:
 
-- `tests/test_routes.py` - category API behavior, configuration order, partial
-  and total failures, default behavior, validation, and rendered links.
-- `tests/test_market_tabs.py` - focused template, JavaScript source/meta, CSS,
-  accessibility, responsive, precision, and polling contracts.
-- `tests/test_compare_ui.py` - adjust the flat-symbol compatibility assertion
-  only if the configuration refactor requires it; preserve recommendation
-  coverage.
+- `tests/test_logging.py` - focused logging configuration, correlation,
+  privacy, mutation, degradation, and slow-request behavior.
+- `tests/test_error_handler.py` - preserve JSON 500 and HTTP exception behavior;
+  move detailed log assertions to `test_logging.py` unless keeping them here is
+  clearer.
+- `tests/test_routes.py` - adapt existing indices log wording assertions to the
+  stable aggregate event without weakening category/symbol/count coverage.
+- `tests/test_docker.py` - lock rotation values and unchanged deployment
+  process contract.
+- `tests/test_import.py` and existing route suites - add only endpoint-specific
+  assertions that are clearer beside current behavior; avoid duplicating the
+  focused logging matrix.
 
 Planning:
 
@@ -312,179 +372,225 @@ Planning:
 
 ## Test-First Plan
 
-Write all tests in sections A-E before production edits. Run the focused tests
-and confirm they fail because the category configuration, query validation,
-tabbed markup, scoped fetching, and new layout do not exist. Do not weaken
-existing index failure tests to make the new tests pass.
+Write sections A-F before changing production files. Run the focused red suite
+and confirm failures are caused by missing logging behavior, not fixture or
+syntax errors.
 
-### A. Backend Configuration And Route Tests - `tests/test_routes.py`
+### A. Configuration And Startup Tests - `tests/test_logging.py`
 
-1. Replace assumptions that `INDEX_SYMBOLS` is manually declared with a test
-   that the flattened list exactly equals the symbols from all ordered market
-   categories, with no duplicates.
-2. Assert the six category keys and labels exactly match the approved order.
-3. Assert every category's exact ordered `(symbol, display label)` pairs,
-   including all five Asia-Pacific instruments and all CAD-base currency pairs.
-4. Update the no-query success test to seed North America only and assert the
-   response contains exactly North America in configured order.
-5. Add a test that an empty `?category=` also defaults to North America.
-6. Parameterize all six valid category keys. For each key, seed only that
-   category and assert HTTP 200 and exact configured response order.
-7. Add a category-isolation test that records calls to `get_quote`; request
-   Europe and assert no North America, Asia-Pacific, Crypto, Commodities, or
-   Currencies symbol was called.
-8. Add an invalid-category test. Assert HTTP 400, exact error payload, and zero
-   quote calls.
-9. Adapt the existing partial-failure test to a non-default category. Seed two
-   Europe symbols, leave the others failed, and assert HTTP 200 with only the
-   successful symbols in configured order.
-10. Parameterize total failure for a four-symbol category and the five-symbol
-    Asia-Pacific boundary. Assert HTTP 503 and the existing error payload.
-11. Assert a zero change quote remains a successful object; failure handling
-    must not confuse a zero with missing data.
-12. Capture logs for one partial failure and assert the category and failed
-    symbol are identifiable.
-13. Capture logs for all-failed and assert the selected category and selected
-    symbol count are identifiable.
-14. Preserve the existing stock-detail encoded-symbol round-trip test and add
-    representative `=` and dot symbols: `GC=F`, `CADUSD=X`, and `000001.SS`.
-15. Keep `test_compare_ui.py` proving S&P 500, Nasdaq, and TSX remain in the
-    flattened supported-symbol list.
+Because `app` is imported once by pytest, test the configuration through a
+small pure helper that accepts an environment value and returns the validated
+level/config decision. Keep actual `dictConfig` application at import time.
 
-### B. Rendered Template And Accessibility Tests - `tests/test_market_tabs.py`
+1. Test missing `LOG_LEVEL` resolves to `INFO` with no invalid-level warning
+   decision.
+2. Parameterize lowercase and uppercase values for all five allowed levels and
+   assert the normalized level.
+3. Test an invalid value resolves to `INFO` and is marked for one warning.
+4. Inspect the active formatter and assert it contains timestamp, level, logger
+   name, and message in the approved order.
+5. Assert the formatter date format is `%Y-%m-%dT%H:%M:%S%z`.
+6. Assert the configured stream is stderr and the root/handler level equals the
+   validated value.
+7. Capture a normal formatted record and assert it begins with an ISO-like
+   timestamp and contains `INFO app event=` in the expected order. Do
+   not assert the current time.
+8. Unit-test invalid-level event formatting with a value containing a newline;
+   assert `%r` escapes it and the rendered event remains one physical line.
+9. Monkeypatch `db.init` to raise in an isolated import/subprocess only if
+   practical without destabilizing pytest imports; otherwise unit-test the
+   startup wrapper directly. Assert one critical record with traceback and that
+   the same exception is re-raised.
+10. Test successful startup wrapper emits `application_started` only after init
+    succeeds. Do not assert on the one real import-time startup record emitted
+    during test collection.
 
-1. Request `/` and assert the `Markets today` heading and visible `Live` text
-   occur before `Your Portfolio` and `portfolio-value` in rendered HTML.
-2. Assert one tablist and exactly six tab buttons in approved order.
-3. Assert North America is selected/focusable and all other tabs are
-   unselected with `tabindex="-1"`.
-4. Assert every tab and panel has a unique, reciprocal
-   `aria-controls`/`aria-labelledby` id pair.
-5. Assert North America is initially visible and all other panels are hidden.
-6. Assert every configured symbol appears exactly once as a market-item
-   `data-symbol` and has the correctly URL-encoded stock-detail href.
-7. Assert rendered item labels come from the approved configuration.
-8. Assert each market level and change span ships empty, with no hard-coded
-   quote-like number.
-9. Assert only the Currencies panel contains `1 CAD buys`.
-10. Assert no market breadth phrase such as `higher`, `lower`, or `of 4`
-    appears in the market section.
-11. Assert market cells are anchors rather than buttons or JavaScript-only
-    clickable wrappers.
-12. Assert tab controls are `type="button"` so they cannot submit a future
-    surrounding form.
+### B. Request ID, Error, And Timing Tests - `tests/test_logging.py`
 
-### C. Frontend Behavior Source/Meta Tests - `tests/test_market_tabs.py`
+1. Request a successful endpoint and assert `X-Request-ID` is exactly 32
+   lowercase hexadecimal characters.
+2. Make two requests and assert their IDs differ.
+3. Send an inbound `X-Request-ID` and assert the response does not reuse it.
+4. Request an explicit route-level 400 and assert it still has the response
+   header.
+5. Request an unknown URL and assert the 404 remains 404 and has the header.
+6. Force the existing global 500 path and assert the JSON body remains
+   `{ "error": "internal server error" }`, the response has the header, and
+   one `unhandled_error` record contains that same ID, method, and path.
+7. Assert the unhandled record has exception information and includes the
+   simulated exception in rendered traceback data.
+8. Assert a Flask 404 does not emit `unhandled_error`.
+9. With `SLOW_REQUEST_MS` monkeypatched very high, capture `DEBUG` and assert
+   one `request_complete` event contains matching request ID, method, path,
+   status, and a nonnegative duration.
+10. With `SLOW_REQUEST_MS` monkeypatched to zero, assert the same event is
+    `WARNING` and no duplicate `DEBUG` completion event exists.
+11. Request a URL with a query string and assert the completion record contains
+    the path but not the query key or value.
+12. Ensure the after-request hook's defensive timer fallback can run in a Flask
+    request context with no pre-set start value and still returns the response.
 
-1. Extract the market-overview JavaScript block and assert it reads the active
-   tab's category rather than using a constant flat chip list.
-2. Assert the API request includes the selected `category` query parameter.
-3. Assert managed market items are queried within a category panel, not across
-   the whole document.
-4. Assert response painting still finds instruments by `data-symbol` rather
-   than array index.
-5. Assert unanswered symbols receive `—` and have stale change text cleared.
-6. Assert fetch/HTTP/JSON failures update only the requested panel.
-7. Assert a per-category request token is incremented and checked before a
-   response paints, protecting newer same-category data.
-8. Assert activation synchronizes `aria-selected`, roving `tabindex`, and
-   panel `hidden` state.
-9. Assert click, ArrowLeft, ArrowRight, Home, and End are handled.
-10. Assert arrow navigation wraps first-to-last and last-to-first.
-11. Assert selecting a tab triggers an immediate refresh for that category.
-12. Assert the dashboard boot performs one North America market request, not
-    eager requests for all six categories.
-13. Assert the existing `setupAutoRefresh` callback refreshes the active
-    category only.
-14. Assert no new `setInterval` exists in `main.js`.
-15. Assert no localStorage or sessionStorage key is introduced for market tabs.
-16. Assert market formatting uses four decimals below absolute value 1 and two
-    otherwise, for both level and absolute move.
-17. Assert percentage formatting remains two decimals.
-18. Assert `formatPrice` in `common.js` is not modified to four decimals.
-19. Assert zero change gets the positive class and explicit plus/neutral text
-    according to the current behavior rather than becoming unavailable.
-20. Assert switching tabs does not call history, portfolio-summary,
-    allocation, watchlist, or volume-leader refresh functions.
+### C. Mutation Audit Tests - `tests/test_logging.py`
 
-### D. CSS And Responsive Contract Tests - `tests/test_market_tabs.py`
+For each success case, capture at `INFO`, select records by exact event name,
+and assert exactly one record:
 
-1. Assert the active panel uses CSS Grid with dynamic equal-width tracks, not
-   a fixed four-column declaration.
-2. Assert the panel has one outer border/background/radius/shadow treatment.
-3. Assert market items do not get individual box shadows.
-4. Assert market levels and changes use tabular numerals.
-5. Assert positive and negative values continue to use existing theme tokens.
-6. Assert linked cells have a visible `:focus-visible` rule.
-7. Assert long labels can shrink or wrap without forcing horizontal page
-   overflow (`min-width: 0` and suitable overflow/wrap behavior).
-8. Assert the phone media query makes the panel exactly two columns.
-9. Assert the phone rule does not make the last odd item span two columns.
-10. Assert the phone category tablist has plain horizontal overflow.
-11. Assert the phone tablist rule contains neither scroll snap nor legacy
-    `-webkit-overflow-scrolling`.
-12. Assert market panel items do not use horizontal overflow on phones.
-13. Assert market tab scrollbars are visually hidden while scrolling remains
-    enabled.
-14. Assert loading skeleton animation is disabled by the existing
-    `prefers-reduced-motion` handling.
-15. Preserve the existing chart-timeframe and dashboard-grid overflow tests.
+1. Successful watchlist add logs `watchlist_added` with request ID and symbol.
+2. Successful watchlist removal logs `watchlist_removed` with request ID and
+   symbol.
+3. Successful transaction creation logs `transaction_created` with request ID,
+   ID, ticker, and BUY/SELL type.
+4. Successful transaction edit logs `transaction_updated` from the re-read
+   stored row.
+5. Successful individual transaction delete logs `transaction_deleted` with
+   ID only.
+6. Successful ticker bulk delete logs `ticker_transactions_deleted` with ticker
+   and exact deleted count.
+7. Import commit logs one `transaction_import_completed` record with imported
+   and failed counts, including the boundary cases of all imported and zero
+   imported.
+8. Import does not emit per-row `transaction_created` audit events.
+9. Duplicate watchlist add, missing watchlist removal, invalid transaction,
+   missing edit/delete ID, failed bulk delete, and preview produce no success
+   audit event.
+10. Force an ordinary transaction DB write to fail and assert no
+    `transaction_created` event is emitted; the existing global error behavior
+    handles the failure.
+11. Force one best-effort import DB write to fail and assert
+    `import_database_write_failed` includes request ID and line number, has
+    exception information, and does not contain the row text.
+12. Send distinctive values for price, quantity, date, FX rate, and import text;
+    join all captured messages and assert none of those distinctive values are
+    present. Choose values that do not overlap IDs, counts, durations, or status
+    codes.
 
-### E. Regression Tests
+### D. Rejection And Privacy Tests - `tests/test_logging.py`
 
-1. Keep existing `/api/indices` no-query smoke behavior green.
-2. Run all current `tests/test_routes.py` index partial/all-failure tests after
-   adapting their fixture data to North America defaults.
-3. Run `tests/test_compare_ui.py` to protect benchmark recommendations.
-4. Run `tests/test_ui_redesign.py` to protect dashboard ordering, phone chart
-   overflow, fonts, portfolio summary, and allocation rendering.
-5. Run `tests/test_dark_mode.py` because the market strip must remain legible
-   under both token sets.
-6. Run `tests/test_polling.py` or the repository's equivalent polling contract
-   tests to confirm `setupAutoRefresh` remains the only timer owner.
+1. An unquotable watchlist symbol emits `watchlist_symbol_rejected` at `INFO`
+   with request ID, escaped symbol, and `reason=unquotable`.
+2. An unquotable transaction ticker emits `transaction_ticker_rejected` with
+   the same constraints.
+3. A bulk delete miss emits `ticker_delete_rejected` and no delete-success
+   event.
+4. Existing historical-price and quote-to-404 paths emit the approved event
+   names with request ID.
+5. Make a failed search with a distinctive raw query. Assert `search_failed`
+   contains request ID, exact normalized query length, and exception type but
+   not the raw query.
+6. Use a symbol containing an encodable quote or control-like character and
+   assert its rendered value uses repr-style escaping and cannot create a
+   second physical log line.
+7. Assert no captured message contains serialized JSON bodies or keys such as
+   the distinctive private test values.
 
-### F. Focused Red Run
+### E. Aggregate Degradation Tests - `tests/test_logging.py` And Existing Suites
 
-After writing tests and before production edits, run:
+1. Adapt the existing indices partial-failure test to assert exactly one
+   `market_quotes_degraded` warning with request ID, `operation=indices`,
+   selected category, attempted/succeeded/failed counts, failed symbols in
+   configured order, and sorted exception types.
+2. Adapt the indices all-failed test to assert the same single event has
+   `succeeded=0`; assert there is no second all-failed warning.
+3. Assert all-success indices emits no degradation warning.
+4. For portfolio summary, fail two quote lookups with different exception
+   classes and assert one aggregate quote warning with deterministic symbols
+   and sorted error types while healthy holdings remain in the response.
+5. Repeat one representative aggregate test for allocation and watchlist to
+   prove sequential and executor-based collectors both work.
+6. Add a transaction-list regression test for its formerly silent quote failure
+   and assert one `operation=transaction_list` warning.
+7. Preview an import with repeated rows for one failed ticker and one healthy
+   ticker. Assert `attempted` counts unique quoted tickers, the failed symbol
+   appears once, and no raw import text appears.
+8. Commit the same shape and assert the operation changes to `import_commit`.
+9. Test a portfolio-history partial failure and assert one
+   `market_history_degraded` record with period and counts; assert worker order
+   cannot alter configured/attempt order.
+10. Test one FX failure, one profile failure, and one stock single-call failure
+    for their exact event vocabulary and exception class field.
+11. Test volume-leader failure emits `volume_leaders_failed` without traceback.
+12. For every routine Yahoo degradation assertion, verify `record.exc_info` is
+    absent.
+13. Preserve all existing response payloads and status assertions beside the
+    logging assertions. A logging refactor must not change user-visible recovery.
+
+### F. Docker Tests - `tests/test_docker.py`
+
+1. Inspect the `portfoliarr` service and assert logging driver is exactly
+   `json-file`.
+2. Assert option `max-size` is exactly string `10m`.
+3. Assert option `max-file` is exactly string `3`.
+4. Assert rotation is service-level, not accidentally placed under environment
+   or volumes.
+5. Keep the exact existing Gunicorn command assertion green; this feature does
+   not enable access logging or change process/thread count.
+6. Keep image, port, volume, timezone, and restart-policy tests green.
+
+### G. Focused Red Run
+
+After all new tests are written and before production edits, run:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_routes.py tests/test_market_tabs.py tests/test_compare_ui.py
+python -m pytest tests/test_logging.py tests/test_error_handler.py tests/test_routes.py tests/test_import.py tests/test_docker.py
 ```
 
-Expected failure reasons include missing `MARKET_CATEGORIES`, missing category
-validation, missing tab/panel markup, old global chip queries, no tab keyboard
-handler, and the old standalone-card CSS. Fix test syntax or fixture mistakes,
-but do not change production code until failures prove the intended gaps.
+Expected failures include no explicit logging config, no response request ID,
+prose-style event messages, missing mutation events, multiple per-symbol
+tracebacks, raw search query exposure, no slow-request promotion, and no Docker
+rotation settings. Fix test syntax and fixture errors only; do not edit
+production code until the failures prove these gaps.
 
 ## Implementation Sequence
 
-1. Add the ordered market configuration to `app.py` with the exact approved
-   keys, labels, symbols, and display names.
-2. Derive `INDEX_SYMBOLS` from that configuration.
-3. Pass the configuration from `/` to `templates/index.html`.
-4. Add optional category parsing and validation to `/api/indices`.
-5. Scope parallel fetches, ordered success output, all-failed behavior, and
-   logging to the selected category.
-6. Run backend-focused tests and make them green before touching frontend
-   behavior.
-7. Replace the old four-chip markup with the configuration-driven market
-   section before the portfolio hero.
-8. Add complete tabs/panels/links/accessibility markup and currency caption.
-9. Refactor market JavaScript to use active-panel state, scoped loading,
-   category requests, gap filling, and per-category race tokens.
-10. Add click and keyboard tab activation without persistence.
-11. Change boot and the shared polling callback to fetch only the active tab.
-12. Add the market-only adaptive precision formatter.
-13. Replace standalone chip CSS with the cohesive strip, divided cells,
-    heading row, tab controls, focus treatment, skeleton, and dark-mode-safe
-    token usage.
-14. Add the phone two-column panel and horizontal tab tray.
-15. Run the complete focused set and correct failures without weakening tests.
-16. Update durable comments in `app.py`, `index.html`, `main.js`, and
-    `style.css`; remove comments that still describe a fixed four-chip bar.
-17. Update `project-brief.md` Design Rules and dashboard description with the
-    final market-category contract. Do not leave durable rationale only here.
+1. Add the standard-library imports and `SLOW_REQUEST_MS = 2000`.
+2. Add the pure log-level validation helper used by focused tests.
+3. Build and apply the `dictConfig` before Flask construction.
+4. Emit invalid-level warning after configuration when applicable.
+5. Wrap startup database initialization, emit critical failure before re-raise,
+   and emit success only after initialization.
+6. Update the logging section's durable explanation.
+7. Extend the existing before/after hooks with generated request ID, response
+   header, stable completion event, and slow warning level.
+8. Convert the global exception handler to `unhandled_error` with correlation.
+9. Run configuration, request-ID, timing, and error-handler tests until green.
+10. Add success audit events to watchlist and individual transaction routes.
+11. Replace bulk-delete and import prose logs with stable audit events.
+12. Run mutation and privacy tests until green.
+13. Convert indices quote failures from worker logging to one route-thread
+    aggregate record; preserve category and output order.
+14. Apply the same collect-then-log pattern to portfolio history, portfolio
+    summary, allocation, watchlist, and transaction listing.
+15. Refactor `_quote_unique_tickers` to return ordered failure metadata and wire
+    operation-specific preview/commit warnings.
+16. Convert FX, profile, stock, search, volume-leader, rejection, and 404
+    translation logs to the exact event vocabulary.
+17. Search `app.py` for every `app.logger` call and verify each request-bound
+    record contains request ID, user strings use `%r`, and only unexpected/local
+    failures retain tracebacks.
+18. Run all focused logging and affected route suites.
+19. Add Docker Compose rotation and its tests; do not touch the Dockerfile CMD.
+20. Add the durable design rule to `project-brief.md`.
+21. Run the complete focused set again.
+22. Run the full pytest suite as the final automated gate.
+23. Perform the live Docker log smoke checks below and stop for user approval.
+
+## Durable Documentation Update
+
+After implementation, add one concise Design Rule to `project-brief.md` that
+records:
+
+1. Route-boundary logging ownership; pure data layers raise.
+2. Console-only `key=value` output at production `INFO`.
+3. Generated request IDs returned in `X-Request-ID`.
+4. Mutation audits exclude financial amounts and bodies.
+5. Routine upstream failure is aggregate warning data without tracebacks;
+   unexpected bugs keep full tracebacks.
+6. Normal reads are debug-only, requests at least two seconds are warnings.
+7. Docker retains three 10 MB local log files.
+
+Do not put the entire implementation inventory in the permanent brief. The
+event list remains documented beside the code and in tests.
 
 ## Verification Gates
 
@@ -494,62 +600,73 @@ Run focused suites during implementation:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_routes.py tests/test_market_tabs.py tests/test_compare_ui.py tests/test_ui_redesign.py tests/test_dark_mode.py
+python -m pytest tests/test_logging.py tests/test_error_handler.py tests/test_routes.py tests/test_import.py tests/test_portfolio_summary.py tests/test_allocation.py tests/test_market_tabs.py tests/test_docker.py
 ```
 
-Then the lead agent must run the complete suite:
+Then the lead agent must run:
 
 ```bash
 source .venv/bin/activate
 python -m pytest
 ```
 
-Do not report completion unless the full suite passes. The first run may spend
-about 90 seconds warming pandas/numpy.
+Do not report implementation complete unless the full suite passes.
 
-### Live Smoke
+### Live Console Smoke
 
-With the development server running and Yahoo reachable:
+Run the development server with `LOG_LEVEL=DEBUG` and inspect stderr:
 
-1. Request `/api/indices` and confirm it returns North America only.
-2. Request each valid category and confirm at least one real quote when Yahoo
-   supports the configured symbols.
-3. Request an invalid category and confirm HTTP 400 without a server error.
-4. If a configured Yahoo symbol proves permanently invalid during this smoke
-   test, stop and report it. Do not silently substitute a different product
-   instrument without user approval.
+1. Request `/api/indices`; confirm one `request_complete` line and a matching
+   `X-Request-ID` response header.
+2. Request an invalid URL; confirm 404, request-ID header, and no
+   `unhandled_error`.
+3. Add then remove a harmless temporary watchlist ticker; confirm exactly one
+   success audit event for each action and no price/quantity/body data.
+4. Search for a distinctive query while forcing or observing a Yahoo failure;
+   confirm only query length is logged.
+5. If practical, simulate one upstream failure and confirm one compact aggregate
+   warning rather than one traceback per failed symbol.
+6. Confirm ordinary fast reads are `DEBUG`, not `INFO` or `WARNING`.
 
-### Browser GUI Approval
+### Production Container Smoke
 
-After automated tests pass, wait for the user's browser approval. Ask the user
-to verify:
+After building through the normal CI path or using an approved equivalent test
+environment:
 
-1. Markets appear above the whole portfolio.
-2. The section reads as one coherent overview rather than separate cards.
-3. All six tabs show the approved instruments and retain the visible `Live`
-   label.
-4. Clicking every instrument opens the correct stock-detail page.
-5. Rapid tab changes never paint data into the wrong visible panel.
-6. Failed quotes show `—` without blanking healthy instruments.
-7. Currency values below 1 retain useful precision and `1 CAD buys` is clear.
-8. Desktop, narrow browser, and Android WebView layouts do not overflow.
-9. Phone tabs scroll smoothly and the instrument panel remains a two-column
-   grid.
-10. Light and dark themes both have readable borders, focus, green, and red.
+1. Start the service and run `docker compose logs portfoliarr`.
+2. Confirm `application_started` appears at `INFO` with database initialized.
+3. Confirm normal polling does not create an INFO access line for every request.
+4. Confirm a data mutation creates one readable audit line.
+5. Inspect the container logging configuration and confirm `json-file`, `10m`,
+   and `3` are active.
+6. Do not wait to fill or rotate a 10 MB file as part of approval.
 
-Do not commit or push before this GUI approval. After approval, ask whether to
-commit/push. Mark roadmap item #20 shipped only in that approved commit or PR.
+### User Approval
+
+After automated and live checks pass, wait for the user to approve the logs.
+Ask the user to confirm:
+
+1. The lines are readable in `docker compose logs`.
+2. A request ID makes a warning and completion event easy to correlate.
+3. Mutation audit lines contain enough identity to be useful.
+4. No portfolio amounts, quantities, pasted text, or search terms are exposed.
+5. A Yahoo degradation is concise rather than a wall of tracebacks.
+6. Normal polling is quiet at production `INFO`.
+
+Only after approval ask whether to commit or push. Mark roadmap item #21 shipped
+in that approved commit or PR.
 
 ## Out Of Scope
 
-- Market-open/closed state and exchange-local timestamps.
-- Replacing the user-requested `Live` label.
-- Market breadth or a generated market-sentiment sentence.
-- User-customizable categories, symbols, or ordering.
-- Persisting the selected market tab.
-- Additional regions or categories beyond the approved six.
-- Interest rates, bond yields, VIX, DXY, sector indices, agriculture, or wheat.
-- Historical mini charts or sparklines inside market cells.
-- Changing quote/history cache policy.
-- Changing dashboard polling cadence.
-- Database, ledger, portfolio math, or Android-native changes.
+- External log aggregation, dashboards, alerts, email, or push notifications.
+- OpenTelemetry, distributed tracing, metrics, Prometheus, or Sentry.
+- Gunicorn access logs or reverse-proxy logs.
+- Frontend JavaScript error collection.
+- Android-native logging changes.
+- Cache hit/miss or Yahoo-call latency telemetry.
+- SQL query logging or database contents in logs.
+- Request/response body logging, client IPs, or user-agent collection.
+- User-configurable slow thresholds or retention settings in the web UI.
+- A new health/readiness endpoint.
+- Changes to endpoint payloads, status codes, cache policy, market calculations,
+  transaction semantics, or database schema.

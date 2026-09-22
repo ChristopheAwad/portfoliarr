@@ -32,6 +32,12 @@ services:
       # the server's timezone so every date matches the user.
       TZ: America/Toronto
     restart: unless-stopped
+    # Rotation protects the host during a repeated upstream outage.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 # Named volume declaration — without this block Docker wouldn't create it.
 # Inspect the ledger any time with:

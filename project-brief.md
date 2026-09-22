@@ -60,6 +60,13 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ## Design Rules (permanent)
 
+- **Operational logs are console-only, production-INFO `key=value` events
+  owned by the Flask route boundary; pure data layers raise.** Each request
+  gets a server-generated ID returned in `X-Request-ID`. Mutation audits omit
+  financial amounts and bodies. Routine upstream failures become aggregate
+  warnings without tracebacks, while unexpected bugs retain full tracebacks.
+  Normal reads are debug-only and requests taking at least two seconds are
+  warnings. Docker retains three 10 MB local `json-file` logs.
 - **Portfoliarr is not a PWA — do not half-attempt it again.** Chrome only
   installs a site from a trusted-HTTPS secure context; plain-HTTP LAN serving
   can never qualify, and accepting a self-signed cert warning does not create

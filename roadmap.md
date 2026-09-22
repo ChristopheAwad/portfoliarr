@@ -97,6 +97,22 @@ and a missing historical bar leaves the field empty rather than guessing.
 
 ---
 
+### 21. High-Value Operational Logging
+Add searchable console logs that explain failures and confirmed data changes
+without recording portfolio amounts or request bodies. Configure production at
+INFO, attach a generated request ID to responses and route logs, record concise
+mutation audit events, aggregate routine Yahoo degradation, warn on requests
+slower than two seconds, and bound Docker's local log retention. Keep full
+tracebacks for unexpected bugs only; do not add an external logging service,
+Gunicorn access-log duplication, or logging inside the pure data layers.
+
+**Effort:** 1–2 days
+**Files:** `app.py`, `docker-compose.yml`, `project-brief.md`, `tests/test_logging.py`, `tests/test_docker.py`, existing route-log assertions
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 6. Dividend Tracking
@@ -240,7 +256,8 @@ Tier 1 (all independent):
   5. Cash Balance ─────────────────────┤
   16. Android Biometric/PIN Lock ────────┤
   18. Ledger Quick Sell ─────────────────┤
-  19. Date-Aware Price Auto-Fill ────────┘
+  19. Date-Aware Price Auto-Fill ────────┤
+  21. High-Value Operational Logging ────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -284,6 +301,7 @@ For maximum compounding value:
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
 15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
 20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
+21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 

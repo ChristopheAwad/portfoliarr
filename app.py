@@ -1,8 +1,12 @@
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
+import logging
 import math
+import os
 import sqlite3
 import time
+import uuid
+from logging.config import dictConfig
 
 # ThreadPoolExecutor runs one callable across MANY OS threads and
 # collects their results — the portfolio-history route uses it to fetch
@@ -17,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 # incoming HTTP request's data — we need its JSON body for the add route),
 # and g (per-request scratch storage — the timing hook stashes its start
 # time there).
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, has_request_context, jsonify, render_template, request
 
 # HTTPException is the base class of Flask/werkzeug's OWN errors (404,
 # 405...). The top-level error handler below must let these pass through
@@ -34,6 +38,42 @@ from market_data import (
     get_fx_rate, get_fx_rate_on, get_price_on, PERIOD_MAP, get_volume_leaders
 )
 import db
+
+
+SLOW_REQUEST_MS = 2000
+LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+
+def _resolve_log_level(configured_level):
+    """Return a safe level and preserve a rejected value for one warning."""
+    if configured_level is None or not configured_level.strip():
+        return "INFO", None
+    normalized = configured_level.strip().upper()
+    if normalized in LOG_LEVELS:
+        return normalized, None
+    return "INFO", configured_level
+
+
+LOG_LEVEL, INVALID_LOG_LEVEL = _resolve_log_level(os.getenv("LOG_LEVEL"))
+dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+            "datefmt": "%Y-%m-%dT%H:%M:%S%z",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+            "level": LOG_LEVEL,
+            "stream": "ext://sys.stderr",
+        },
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+})
 
 # One flat-position tolerance for every cost-pool replay in this file:
 # fractional quantities (the importer's 6-decimal input) leave binary
@@ -54,10 +94,22 @@ from datetime import date, datetime
 # routes, config, and is what runs our web server.
 app = Flask(__name__)
 
+if INVALID_LOG_LEVEL is not None:
+    app.logger.warning(
+        "event=logging_level_invalid configured_level=%r", INVALID_LOG_LEVEL
+    )
+
 # Make sure the database schema exists before the first request arrives.
 # init() is idempotent (CREATE TABLE IF NOT EXISTS), so running it at import
 # time is safe on every startup.
-db.init()
+try:
+    db.init()
+except Exception:
+    app.logger.critical("event=database_initialization_failed", exc_info=True)
+    raise
+app.logger.info(
+    "event=application_started log_level=%s database=initialized", LOG_LEVEL
+)
 
 # The dashboard's market overview is TABBED: one category on screen at a
 # time, so /api/indices fetches only that category. This is a product
@@ -156,9 +208,9 @@ ALLOCATION_DIMENSIONS = {
 
 
 # ---------------------------------------------------------------------------
-# LOGGING — three tiers, console-only. Flask gives every app a pre-wired
-# logger: `app.logger` writes to stderr, and with debug=True (our dev
-# server) every level shows up with no configuration at all.
+# LOGGING — stable key=value events, console-only. The module configures
+# stderr before Flask is constructed, so development and Gunicorn use the
+# same searchable format and LOG_LEVEL policy.
 #
 # WHY ALL LOGGING LIVES HERE, IN THE ROUTE LAYER: market_data.py and db.py
 # are pure layers whose contract is "raise and let the route decide" — they
@@ -191,7 +243,8 @@ def handle_unexpected_error(error):
         # Flask's own errors: the correct response already exists.
         return error
     app.logger.error(
-        "unhandled error on %s %s", request.method, request.path,
+        "event=unhandled_error request_id=%s method=%s path=%r",
+        g.request_id, request.method, request.path,
         exc_info=True,
     )
     return jsonify({"error": "internal server error"}), 500
@@ -209,19 +262,51 @@ def start_request_timer():
     # perf_counter() over time.time(): it is MONOTONIC (immune to the
     # system clock jumping around for NTP sync) and high-resolution —
     # the right tool for measuring durations.
+    g.request_id = uuid.uuid4().hex
     g.request_started_at = time.perf_counter()
 
 
 @app.after_request
 def log_request_duration(response):
-    duration_ms = (time.perf_counter() - g.request_started_at) * 1000
-    app.logger.debug(
-        "%s %s -> %s (%.1f ms)",
-        request.method, request.path, response.status_code, duration_ms,
+    now = time.perf_counter()
+    duration_ms = (now - getattr(g, "request_started_at", now)) * 1000
+    request_id = getattr(g, "request_id", uuid.uuid4().hex)
+    response.headers["X-Request-ID"] = request_id
+    log = app.logger.warning if duration_ms >= SLOW_REQUEST_MS \
+        else app.logger.debug
+    log(
+        "event=request_complete request_id=%s method=%s path=%r "
+        "status=%d duration_ms=%.1f",
+        request_id, request.method, request.path,
+        response.status_code, duration_ms,
     )
     # An after_request hook MUST return the response (modified or not) —
     # forgetting this breaks every route at once.
     return response
+
+
+def _log_aggregate_degradation(event, operation, attempted, succeeded,
+                               failures, **context):
+    """Write one deterministic warning for a recovered multi-fetch failure."""
+    if not failures:
+        return
+    context_text = "".join(
+        f" {key}={value!r}" for key, value in context.items()
+    )
+
+
+def _request_id():
+    """Return request correlation when present; pure helper calls have none."""
+    if has_request_context():
+        return getattr(g, "request_id", "none")
+    return "none"
+    app.logger.warning(
+        "event=%s request_id=%s operation=%s%s attempted=%d succeeded=%d "
+        "failed=%d symbols=%r error_types=%r",
+        event, g.request_id, operation, context_text, attempted, succeeded,
+        len(failures), [symbol for symbol, _ in failures],
+        sorted({error_type for _, error_type in failures}),
+    )
 
 
 # The @app.route decorator registers this function as the handler for the
@@ -280,32 +365,37 @@ def index_quotes():
     # ~1×slowest. Same pattern as portfolio_history's history fetch.
     def fetch_index_quote(symbol):
         try:
-            return symbol, get_quote(symbol)
-        except Exception:
+            return symbol, get_quote(symbol), None
+        except Exception as exc:
             # Boundary rule: catch WIDE at the edge of the system (yfinance
             # can fail in many ways) and degrade gracefully, per symbol.
             # On screen the cell just shows "—" — this log line IS the
             # reason, and it names the CATEGORY so a panel-wide blank is
             # diagnosable from server output alone.
-            app.logger.warning(
-                "market quote failed for %s (category=%s) — cell shows \"—\"",
-                symbol, category, exc_info=True,
-            )
-            return symbol, None
+            return symbol, None, type(exc).__name__
 
     quotes_map = {}
+    failures = []
     with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
-        for symbol, quote in pool.map(fetch_index_quote, symbols):
+        for symbol, quote, error_type in pool.map(fetch_index_quote, symbols):
             if quote is not None:
                 quotes_map[symbol] = quote
+            else:
+                failures.append((symbol, error_type))
+
+    if failures:
+        app.logger.warning(
+            "event=market_quotes_degraded request_id=%s operation=indices "
+            "category=%r attempted=%d succeeded=%d failed=%d symbols=%r "
+            "error_types=%r",
+            g.request_id, category, len(symbols), len(quotes_map), len(failures),
+            [symbol for symbol, _ in failures],
+            sorted({error_type for _, error_type in failures}),
+        )
 
     # Only when EVERY symbol in this category fails is the endpoint sick:
     # 503 = "Service Unavailable — it's me, not you, try again later."
     if len(quotes_map) == 0:
-        app.logger.warning(
-            "all %d market symbols failed (category=%s) — serving 503",
-            len(symbols), category,
-        )
         return jsonify({"error": "quote service unavailable"}), 503
 
     # Successes only in configured order: failed symbols are absent. The
@@ -490,28 +580,32 @@ Algorithm: walk every trading day in the range forward, keeping a
 
         def fetch_benchmark_history(symbol):
             try:
-                return symbol, get_history(symbol, period)
-            except Exception:
-                app.logger.warning(
-                    "benchmark history failed for %s — comparison omitted",
-                    symbol,
-                    exc_info=True,
-                )
-                return symbol, None
+                return symbol, get_history(symbol, period), None
+            except Exception as exc:
+                return symbol, None, type(exc).__name__
 
+        failures = []
         if missing_benchmarks:
             with ThreadPoolExecutor(
                 max_workers=min(len(missing_benchmarks), 8)
             ) as pool:
-                for symbol, history in pool.map(
+                for symbol, history, error_type in pool.map(
                     fetch_benchmark_history, missing_benchmarks
                 ):
                     if not history:
                         benchmark_errors[symbol] = (
                             f"no history available for {symbol}"
                         )
+                        if error_type is not None:
+                            failures.append((symbol, error_type))
                     else:
                         benchmark_histories[symbol] = history
+
+        _log_aggregate_degradation(
+            "market_history_degraded", "comparison_history",
+            len(missing_benchmarks),
+            len(missing_benchmarks) - len(failures), failures, period=period,
+        )
 
         for symbol in benchmark_symbols:
             if symbol in held_histories:
@@ -567,19 +661,15 @@ Algorithm: walk every trading day in the range forward, keeping a
         thread-safe by design, and app.logger needs no request context.
         """
         try:
-            return symbol, get_history(symbol, period)
-        except Exception:
+            return symbol, get_history(symbol, period), None
+        except Exception as exc:
             # TIER 1: without a record, a dead ticker is indistinguishable
             # from "the user never traded it" — both contribute 0 and
             # flatten the line. The log separates the two.
-            app.logger.warning(
-                "history fetch failed for %s — contributes 0 to the chart",
-                symbol,
-                exc_info=True,
-            )
-            return symbol, {}  # can't be priced; treat as 0
+            return symbol, {}, type(exc).__name__
 
     histories = {}
+    history_failures = []
     with ThreadPoolExecutor(
         max_workers=min(len(unique_symbols), 8)
     ) as pool:
@@ -587,8 +677,17 @@ Algorithm: walk every trading day in the range forward, keeping a
         # so `histories` ends up keyed in the same deterministic order
         # the serial loop produced — nothing downstream can tell the
         # difference except the clock.
-        for symbol, history in pool.map(fetch_history, unique_symbols):
+        for symbol, history, error_type in pool.map(fetch_history,
+                                                    unique_symbols):
             histories[symbol] = history
+            if error_type is not None:
+                history_failures.append((symbol, error_type))
+
+    _log_aggregate_degradation(
+        "market_history_degraded", "portfolio_history", len(unique_symbols),
+        len(unique_symbols) - len(history_failures), history_failures,
+        period=period,
+    )
 
     # Keep comparisons separate from the portfolio histories. Adding a
     # benchmark must not add labels and therefore change the portfolio line.
@@ -617,12 +716,11 @@ Algorithm: walk every trading day in the range forward, keeping a
     if usd_tickers:
         try:
             live_rate = get_fx_rate("USD", "CAD")
-        except Exception:
+        except Exception as exc:
             app.logger.warning(
-                "live USDCAD rate unavailable — USD tickers (%s) "
-                "contribute 0 to the chart",
-                ", ".join(usd_tickers),
-                exc_info=True,
+                "event=market_fx_degraded request_id=%s "
+                "operation=portfolio_history pair=USDCAD error_type=%s",
+                g.request_id, type(exc).__name__,
             )
 
     # The x-axis = the union of every ticker's trading days, ascending.
@@ -1035,26 +1133,30 @@ def portfolio_summary():
     # as portfolio_history and the other quote endpoints.
     def fetch_summary_quote(symbol):
         try:
-            return symbol, get_quote(symbol)
-        except Exception:
+            return symbol, get_quote(symbol), None
+        except Exception as exc:
             # Wide catch on purpose: yfinance fails in many ways, and
             # the ledger's facts still stand — degrade, never 500.
             # TIER 1: this log line is the only trace a dead ticker
             # leaves (on screen it's just absent from the totals).
-            app.logger.warning(
-                "summary quote failed for %s — excluded from all totals",
-                symbol,
-                exc_info=True,
-            )
-            return symbol, None
+            return symbol, None, type(exc).__name__
 
     quotes = {}
+    quote_failures = []
     if net_qty:
         with ThreadPoolExecutor(
             max_workers=min(len(net_qty), 8)
         ) as pool:
-            for symbol, quote in pool.map(fetch_summary_quote, net_qty):
+            for symbol, quote, error_type in pool.map(fetch_summary_quote,
+                                                      net_qty):
                 quotes[symbol] = quote
+                if error_type is not None:
+                    quote_failures.append((symbol, error_type))
+
+    _log_aggregate_degradation(
+        "market_quotes_degraded", "portfolio_summary", len(net_qty),
+        len(net_qty) - len(quote_failures), quote_failures,
+    )
 
     # ONE live USDCAD rate for the whole response — fetched only when
     # something actually needs converting (a USD-priced holding, or a
@@ -1070,11 +1172,11 @@ def portfolio_summary():
     if needs_live_rate:
         try:
             live_rate = get_fx_rate("USD", "CAD")
-        except Exception:
+        except Exception as exc:
             app.logger.warning(
-                "live USDCAD rate unavailable — USD holdings excluded "
-                "from the summary",
-                exc_info=True,
+                "event=market_fx_degraded request_id=%s "
+                "operation=portfolio_summary pair=USDCAD error_type=%s",
+                g.request_id, type(exc).__name__,
             )
 
     # Pass 2 — price the priced slice in CAD. held == 0 (fully-sold
@@ -1097,8 +1199,9 @@ def portfolio_summary():
         currency = quote["currency"]
         if currency not in ("USD", "CAD"):
             app.logger.warning(
-                "summary cannot convert %s (%s) — excluded from all totals",
-                symbol, currency,
+                "event=market_currency_unsupported request_id=%s "
+                "operation=portfolio_summary symbol=%r currency=%r",
+                g.request_id, symbol, currency,
             )
             unpriced.append(symbol)
             continue
@@ -1576,21 +1679,24 @@ def portfolio_allocation():
     # portfolio_summary. Unpriced tickers join the excluded list.
     def fetch_alloc_quote(symbol):
         try:
-            return symbol, get_quote(symbol)
-        except Exception:
-            app.logger.warning(
-                "allocation quote failed for %s — excluded from slices",
-                symbol,
-                exc_info=True,
-            )
-            return symbol, None
+            return symbol, get_quote(symbol), None
+        except Exception as exc:
+            return symbol, None, type(exc).__name__
 
     quotes = {}
+    quote_failures = []
     with ThreadPoolExecutor(
         max_workers=min(len(net_qty), 8)
     ) as pool:
-        for symbol, quote in pool.map(fetch_alloc_quote, net_qty):
+        for symbol, quote, error_type in pool.map(fetch_alloc_quote, net_qty):
             quotes[symbol] = quote
+            if error_type is not None:
+                quote_failures.append((symbol, error_type))
+
+    _log_aggregate_degradation(
+        "market_quotes_degraded", "allocation", len(net_qty),
+        len(net_qty) - len(quote_failures), quote_failures,
+    )
 
     # ONE live USDCAD rate — fetched only when a USD holding needs
     # converting. Same logic as portfolio_summary.
@@ -1602,11 +1708,11 @@ def portfolio_allocation():
     if usd_tickers:
         try:
             live_rate = get_fx_rate("USD", "CAD")
-        except Exception:
+        except Exception as exc:
             app.logger.warning(
-                "live USDCAD rate unavailable — USD holdings excluded "
-                "from allocation",
-                exc_info=True,
+                "event=market_fx_degraded request_id=%s operation=allocation "
+                "pair=USDCAD error_type=%s",
+                g.request_id, type(exc).__name__,
             )
 
     # ── PASS 2.5: prefetch profiles in parallel ─────────────────────────
@@ -1637,22 +1743,25 @@ def portfolio_allocation():
 
         def fetch_alloc_profile(symbol):
             try:
-                return symbol, get_profile(symbol)
-            except Exception:
-                app.logger.warning(
-                    "allocation profile failed for %s — excluded from "
-                    "slices by %s",
-                    symbol, by,
-                    exc_info=True,
-                )
-                return symbol, None
+                return symbol, get_profile(symbol), None
+            except Exception as exc:
+                return symbol, None, type(exc).__name__
 
+        profile_failures = []
         with ThreadPoolExecutor(
             max_workers=min(len(profile_pool), 8)
         ) as pool:
-            for symbol, profile in pool.map(fetch_alloc_profile,
-                                            profile_pool):
+            for symbol, profile, error_type in pool.map(fetch_alloc_profile,
+                                                        profile_pool):
                 profiles[symbol] = profile
+                if error_type is not None:
+                    profile_failures.append((symbol, error_type))
+
+        _log_aggregate_degradation(
+            "market_profile_degraded", "allocation", len(profile_pool),
+            len(profile_pool) - len(profile_failures), profile_failures,
+            dimension=by,
+        )
 
     # ── PASS 3: classify + aggregate ────────────────────────────────────
     # Walk every held ticker. Priced + classified → slice; otherwise →
@@ -1674,6 +1783,11 @@ def portfolio_allocation():
         # is excluded, same as the summary.
         currency = quote["currency"]
         if currency not in ("USD", "CAD"):
+            app.logger.warning(
+                "event=market_currency_unsupported request_id=%s "
+                "operation=allocation symbol=%r currency=%r",
+                g.request_id, symbol, currency,
+            )
             excluded.append({"ticker": symbol,
                              "reason": f"unsupported currency: {currency}"})
             continue
@@ -1775,37 +1889,49 @@ def watchlist_quotes():
             # Keep route decoration local even though the market layer also
             # returns defensive copies; this makes ownership explicit here.
             quote = dict(get_quote(symbol))
-        except Exception:
+        except Exception as exc:
             # Same per-symbol resilience as the market overview: a dead
             # symbol just won't appear in "quotes"; its row gap-fills to "—".
-            app.logger.warning(
-                "watchlist quote failed for %s — row shows \"—\"", symbol,
-                exc_info=True,
-            )
-            return symbol, None
+            return symbol, None, type(exc).__name__, None
 
+        name_error = None
         try:
             quote["name"] = get_name(symbol)
-        except Exception:
+        except Exception as exc:
             # A missing name shouldn't sink the whole row — the frontend
             # falls back to showing just the symbol. TIER 1 at DEBUG:
             # this fires often (Yahoo's heavier metadata endpoint is
             # flaky), so warning level would bury the interesting lines.
-            app.logger.debug(
-                "no name available for %s — row shows symbol only", symbol,
-                exc_info=True,
-            )
+            name_error = type(exc).__name__
             quote["name"] = None
 
-        return symbol, quote
+        return symbol, quote, None, name_error
 
     quotes_map = {}
+    quote_failures = []
+    name_failures = []
     with ThreadPoolExecutor(
         max_workers=min(len(symbols), 8)
     ) as pool:
-        for symbol, quote in pool.map(fetch_watchlist_symbol, symbols):
+        for symbol, quote, quote_error, name_error in pool.map(
+                fetch_watchlist_symbol, symbols):
             if quote is not None:
                 quotes_map[symbol] = quote
+            if quote_error is not None:
+                quote_failures.append((symbol, quote_error))
+            if name_error is not None:
+                name_failures.append((symbol, name_error))
+
+    _log_aggregate_degradation(
+        "market_quotes_degraded", "watchlist", len(symbols), len(quotes_map),
+        quote_failures,
+    )
+    for symbol, error_type in name_failures:
+        app.logger.debug(
+            "event=market_name_unavailable request_id=%s operation=watchlist "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, error_type,
+        )
 
     # Preserve original symbol order for deterministic output.
     quotes = [quotes_map[s] for s in symbols if s in quotes_map]
@@ -1837,11 +1963,15 @@ def add_to_watchlist():
     # warms the price cache so the new row can render instantly.
     try:
         get_quote(symbol)
-    except Exception:
+    except Exception as exc:
         # 404 Not Found: the ticker doesn't exist (or Yahoo can't quote it).
         # TIER 1 at INFO — expected client behavior (typos happen), so no
         # traceback: the symbol string IS the story.
-        app.logger.info("watchlist add rejected: unquotable symbol %s", symbol)
+        app.logger.info(
+            "event=watchlist_symbol_rejected request_id=%s symbol=%r "
+            "reason=unquotable",
+            g.request_id, symbol,
+        )
         return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
 
     try:
@@ -1853,6 +1983,9 @@ def add_to_watchlist():
         # handler instead of being mislabeled as a harmless duplicate.
         return jsonify({"error": f"{symbol} is already on the watchlist"}), 409
 
+    app.logger.info(
+        "event=watchlist_added request_id=%s symbol=%r", g.request_id, symbol
+    )
     # 201 Created: standard status for "a new resource now exists".
     return jsonify({"symbol": symbol}), 201
 
@@ -1864,6 +1997,9 @@ def remove_from_watchlist(symbol):
     symbol = symbol.strip().upper()
     if not db.remove_symbol(symbol):
         return jsonify({"error": f"{symbol} is not on the watchlist"}), 404
+    app.logger.info(
+        "event=watchlist_removed request_id=%s symbol=%r", g.request_id, symbol
+    )
     # 204 No Content: success with nothing to say — the row is just gone.
     return "", 204
 
@@ -1973,21 +2109,23 @@ def _derive_fx_rate(currency, transaction_date):
 
     try:
         return get_fx_rate_on("USD", "CAD", transaction_date)
-    except Exception:
+    except Exception as exc:
         # TIER 1 at warning: degraded-but-recovered (a live-rate fallback
         # follows). exc_info carries the actual cause — the thing a WIDE
         # catch exists for.
         app.logger.warning(
-            "no USDCAD close on or before %s — falling back to the live rate",
-            transaction_date, exc_info=True,
+            "event=market_fx_degraded request_id=%s "
+            "operation=transaction_fx_historical pair=USDCAD error_type=%s",
+            _request_id(), type(exc).__name__,
         )
 
     try:
         return get_fx_rate("USD", "CAD")
-    except Exception:
+    except Exception as exc:
         app.logger.warning(
-            "live USDCAD rate unavailable — fx_rate stored as NULL for %s",
-            transaction_date, exc_info=True,
+            "event=market_fx_degraded request_id=%s "
+            "operation=transaction_fx_live pair=USDCAD error_type=%s",
+            _request_id(), type(exc).__name__,
         )
         return None
 
@@ -2047,10 +2185,14 @@ def log_transaction():
     # for the ledger UI's later gain calculations.
     try:
         quote = get_quote(ticker)
-    except Exception:
+    except Exception as exc:
         # TIER 1 at INFO — same expected-client-behavior rule as the
         # watchlist add route: a bad ticker is a typo, not a malfunction.
-        app.logger.info("transaction rejected: unquotable ticker %s", ticker)
+        app.logger.info(
+            "event=transaction_ticker_rejected request_id=%s ticker=%r "
+            "reason=unquotable",
+            g.request_id, ticker,
+        )
         return jsonify({"error": f"unknown or unquotable symbol: {ticker}"}), 404
     currency = quote["currency"]
 
@@ -2067,6 +2209,10 @@ def log_transaction():
         currency=currency,
         transaction_type=fields["transaction_type"],
         fx_rate=fx_rate,
+    )
+    app.logger.info(
+        "event=transaction_created request_id=%s tx_id=%d ticker=%r type=%r",
+        g.request_id, tx_id, ticker, fields["transaction_type"],
     )
 
     # 201 Created, echoing the stored row (note the DB's explicit column
@@ -2145,20 +2291,35 @@ def list_transactions():
 
     def fetch_tx_quote(symbol):
         try:
-            return symbol, get_quote(symbol)
-        except Exception:
+            return symbol, get_quote(symbol), None
+        except Exception as exc:
             # Same per-symbol resilience as everywhere else: a dead ticker
             # (delisted, Yahoo hiccup) must not sink the whole response.
             # None marks "couldn't quote" — its rows stay facts-only.
-            return symbol, None
+            return symbol, None, type(exc).__name__
 
     quotes = {}
+    quote_failures = []
     if unique_symbols:
         with ThreadPoolExecutor(
             max_workers=min(len(unique_symbols), 8)
         ) as pool:
-            for symbol, quote in pool.map(fetch_tx_quote, unique_symbols):
+            for symbol, quote, error_type in pool.map(
+                    fetch_tx_quote, unique_symbols):
                 quotes[symbol] = quote
+                if quote is None:
+                    quote_failures.append((symbol, error_type))
+
+    if quote_failures:
+        app.logger.warning(
+            "event=market_quotes_degraded request_id=%s "
+            "operation=transaction_list attempted=%d succeeded=%d failed=%d "
+            "symbols=%r error_types=%r",
+            g.request_id, len(unique_symbols),
+            len(unique_symbols) - len(quote_failures), len(quote_failures),
+            [symbol for symbol, _ in quote_failures],
+            sorted({error_type for _, error_type in quote_failures}),
+        )
 
     # ONE live USDCAD rate per response, fetched only in CAD mode AND only
     # when a quoted USD holding needs it (native mode and CAD-only
@@ -2172,11 +2333,11 @@ def list_transactions():
     ):
         try:
             live_rate = get_fx_rate("USD", "CAD")
-        except Exception:
+        except Exception as exc:
             app.logger.warning(
-                "live USDCAD rate unavailable — USD ledger rows degrade "
-                "to native display",
-                exc_info=True,
+                "event=market_fx_degraded request_id=%s "
+                "operation=transaction_list pair=USDCAD error_type=%s",
+                g.request_id, type(exc).__name__,
             )
 
     for tx in transactions:
@@ -2478,7 +2639,12 @@ def edit_transaction(tx_id):
     # 200 with the truth, RE-READ from the DB: the reply shows exactly what
     # is now on disk (including the untouched ticker/currency), not what we
     # think we wrote.
-    return jsonify(db.get_transaction(tx_id))
+    stored = db.get_transaction(tx_id)
+    app.logger.info(
+        "event=transaction_updated request_id=%s tx_id=%d ticker=%r type=%r",
+        g.request_id, tx_id, stored["ticker"], stored["transaction_type"],
+    )
+    return jsonify(stored)
 
 
 @app.route("/api/transactions/<int:tx_id>", methods=["DELETE"])
@@ -2490,6 +2656,9 @@ def remove_transaction(tx_id):
     """
     if not db.delete_transaction(tx_id):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
+    app.logger.info(
+        "event=transaction_deleted request_id=%s tx_id=%d", g.request_id, tx_id
+    )
     # 204 No Content: success with nothing to say — the row is just gone.
     return "", 204
 
@@ -2523,7 +2692,9 @@ def remove_ticker_transactions(symbol):
         # TIER 1 at INFO: expected client behavior (stale UI, typo, double
         # click) — no traceback; the ticker string IS the story.
         app.logger.info(
-            "ticker delete rejected: no transactions for %s", ticker
+            "event=ticker_delete_rejected request_id=%s ticker=%r "
+            "reason=no_transactions",
+            g.request_id, ticker,
         )
         return jsonify(
             {"error": f"no transactions for ticker {ticker}"}
@@ -2532,7 +2703,9 @@ def remove_ticker_transactions(symbol):
     # TIER 1 at INFO: an audit trail for a bulk destructive action — the
     # one line that says how many immutable facts this request erased.
     app.logger.info(
-        "deleted %d transaction(s) for ticker %s", deleted, ticker
+        "event=ticker_transactions_deleted request_id=%s ticker=%r "
+        "deleted_count=%d",
+        g.request_id, ticker, deleted,
     )
     return "", 204
 
@@ -2686,7 +2859,7 @@ def _import_text_or_error():
     return text, None
 
 
-def _quote_unique_tickers(rows):
+def _quote_unique_tickers(rows, include_failures=False):
     """One get_quote per UNIQUE ticker among the parseable rows.
 
     Same dedup idea as list_transactions: a batch of 30 CM trades pays for
@@ -2695,16 +2868,18 @@ def _quote_unique_tickers(rows):
     row can't be stored, because currency comes FROM the quote).
     """
     quotes = {}
+    failures = []
     for row in rows:
         if row["error"] is not None or row["ticker"] in quotes:
             continue
         try:
             quotes[row["ticker"]] = get_quote(row["ticker"])
-        except Exception:
+        except Exception as exc:
             # Wide catch on purpose: yfinance fails in many ways, and a
             # dead ticker is data (a report line), not a crash.
             quotes[row["ticker"]] = None
-    return quotes
+            failures.append((row["ticker"], type(exc).__name__))
+    return (quotes, failures) if include_failures else quotes
 
 
 @app.route("/api/transactions/import/preview", methods=["POST"])
@@ -2723,7 +2898,11 @@ def import_preview():
         return error
 
     rows = parse_import_text(text)
-    quotes = _quote_unique_tickers(rows)
+    quotes, quote_failures = _quote_unique_tickers(rows, include_failures=True)
+    _log_aggregate_degradation(
+        "market_quotes_degraded", "import_preview", len(quotes),
+        len(quotes) - len(quote_failures), quote_failures,
+    )
 
     for row in rows:
         if row["error"] is not None:
@@ -2767,7 +2946,11 @@ def import_commit():
         return error
 
     rows = parse_import_text(text)
-    quotes = _quote_unique_tickers(rows)
+    quotes, quote_failures = _quote_unique_tickers(rows, include_failures=True)
+    _log_aggregate_degradation(
+        "market_quotes_degraded", "import_commit", len(quotes),
+        len(quotes) - len(quote_failures), quote_failures,
+    )
 
     # Derive every valid row's conversion fact up front (memoized per
     # currency+date) — the commit-side twin of preview's decoration.
@@ -2805,7 +2988,8 @@ def import_commit():
             )
         except Exception:
             app.logger.warning(
-                "import database write failed for line %s", row["line"],
+                "event=import_database_write_failed request_id=%s line=%s",
+                g.request_id, row["line"],
                 exc_info=True,
             )
             row["error"] = "database write failed"
@@ -2817,7 +3001,9 @@ def import_commit():
     # paste with typos), fully visible in the response — this line is the
     # audit trail, not a cry for help.
     app.logger.info(
-        "import committed: %d imported, %d failed", imported_count, len(failed)
+        "event=transaction_import_completed request_id=%s imported_count=%d "
+        "failed_count=%d",
+        g.request_id, imported_count, len(failed),
     )
     return jsonify({"imported": imported_count, "failed": failed})
 
@@ -2883,13 +3069,14 @@ def ticker_search():
 
     try:
         results = search_tickers(query)
-    except Exception:
+    except Exception as exc:
         # Wide catch on purpose: yfinance fails in many ways. TIER 1 at
         # warning WITH the traceback — a dead search is a degraded app
         # (everything else still works), and the cause is not knowable
         # from the outside.
         app.logger.warning(
-            "ticker search failed for %r — serving 503", query, exc_info=True,
+            "event=search_failed request_id=%s query_length=%d error_type=%s",
+            g.request_id, len(query), type(exc).__name__,
         )
         return jsonify({"error": "search service unavailable"}), 503
 
@@ -2912,11 +3099,14 @@ def volume_leaders():
     """
     try:
         leaders = get_volume_leaders()
-    except Exception:
+    except Exception as exc:
         # Wide catch on purpose: volume leaders are a convenience feature,
         # not core data. A total failure degrades to an empty list — the
         # tab shows "No data available" rather than breaking the page.
-        app.logger.warning("volume leaders fetch failed", exc_info=True)
+        app.logger.warning(
+            "event=volume_leaders_failed request_id=%s error_type=%s",
+            g.request_id, type(exc).__name__,
+        )
         leaders = []
 
     return jsonify({"leaders": leaders})
@@ -2965,7 +3155,11 @@ def quote(symbol):
         except Exception:
             # TIER 1 at INFO — a date before the symbol existed needs no
             # stack trace; the form just leaves the price empty.
-            app.logger.info("price lookup failed for %s on %s — serving 404", symbol, date_iso)
+            app.logger.info(
+                "event=historical_price_unavailable request_id=%s symbol=%r "
+                "date=%r",
+                g.request_id, symbol, date_iso,
+            )
             return jsonify({"error": f"no price for {symbol} on {date_iso}"}), 404
 
         return jsonify({"symbol": symbol, "price": price, "date": date_iso})
@@ -2977,7 +3171,10 @@ def quote(symbol):
     except Exception:
         # TIER 1 at INFO — same expected-client-behavior rule as stock_quote:
         # an unquotable symbol is usually a typo, not a malfunction.
-        app.logger.info("quote failed for %s — serving 404", symbol)
+        app.logger.info(
+            "event=quote_unavailable request_id=%s operation=quote symbol=%r",
+            g.request_id, symbol,
+        )
         return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
 
 
@@ -3003,17 +3200,22 @@ def stock_quote(symbol):
         # TIER 1 at INFO, no traceback: an unquotable symbol on a page the
         # user navigated to is usually a typo or a delisted ticker —
         # expected client behavior; the symbol string IS the story.
-        app.logger.info("stock quote failed for %s — serving 404", symbol)
+        app.logger.info(
+            "event=quote_unavailable request_id=%s operation=stock_quote "
+            "symbol=%r",
+            g.request_id, symbol,
+        )
         return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
 
     try:
         quote["name"] = get_name(symbol)
-    except Exception:
+    except Exception as exc:
         # A missing name must not sink the quote — TIER 1 at DEBUG, same
         # rule as the watchlist route (this endpoint is the flaky one).
         app.logger.debug(
-            "no name available for %s — header shows symbol only", symbol,
-            exc_info=True,
+            "event=market_name_unavailable request_id=%s operation=stock_quote "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, type(exc).__name__,
         )
         quote["name"] = None
 
@@ -3029,12 +3231,14 @@ def stock_stats(symbol):
 
     try:
         return jsonify(get_stats(symbol))
-    except Exception:
+    except Exception as exc:
         # The quote worked (the page rendered) but stats didn't — degraded,
         # not dead. TIER 1 at warning with traceback: on screen the grid
         # just gap-fills to "—" and this log line is the reason.
         app.logger.warning(
-            "stats fetch failed for %s — serving 404", symbol, exc_info=True,
+            "event=stock_data_degraded request_id=%s operation=stats "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, type(exc).__name__,
         )
         return jsonify({"error": f"no stats available for {symbol}"}), 404
 
@@ -3079,23 +3283,26 @@ def stock_history(symbol):
 
     def fetch_one(history_symbol):
         try:
-            return history_symbol, get_history(history_symbol, period)
-        except Exception:
-            app.logger.warning(
-                "stock history fetch failed for %s",
-                history_symbol,
-                exc_info=True,
-            )
-            return history_symbol, None
+            return history_symbol, get_history(history_symbol, period), None
+        except Exception as exc:
+            return history_symbol, None, type(exc).__name__
 
+    failures = []
     with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
-        for history_symbol, history in pool.map(fetch_one, symbols):
+        for history_symbol, history, error_type in pool.map(fetch_one, symbols):
             if history is None or (history_symbol != symbol and not history):
                 errors[history_symbol] = (
                     f"no history available for {history_symbol}"
                 )
+                if error_type is not None:
+                    failures.append((history_symbol, error_type))
             else:
                 results[history_symbol] = history
+
+    _log_aggregate_degradation(
+        "market_history_degraded", "stock_history", len(symbols),
+        len(symbols) - len(failures), failures, period=period,
+    )
 
     if symbol in errors:
         return jsonify({"error": f"no history available for {symbol}"}), 404

@@ -337,9 +337,13 @@ def test_indices_partial_failure_logs_category_and_symbol(client, fake_market, c
     with caplog.at_level(logging.WARNING):
         res = client.get("/api/indices?category=europe")
     assert res.status_code == 200
-    text = "\n".join(r.getMessage() for r in caplog.records)
+    records = [r for r in caplog.records
+               if r.getMessage().startswith("event=market_quotes_degraded ")]
+    assert len(records) == 1
+    text = records[0].getMessage()
     assert "europe" in text
     assert any(symbol in text for symbol in europe[1:])
+    assert records[0].exc_info is None
 
 
 def test_indices_all_fail_logs_category_and_count(client, fake_market, caplog):
@@ -349,9 +353,13 @@ def test_indices_all_fail_logs_category_and_count(client, fake_market, caplog):
     with caplog.at_level(logging.WARNING):
         res = client.get("/api/indices?category=crypto")
     assert res.status_code == 503
-    text = "\n".join(r.getMessage() for r in caplog.records)
+    records = [r for r in caplog.records
+               if r.getMessage().startswith("event=market_quotes_degraded ")]
+    assert len(records) == 1
+    text = records[0].getMessage()
     assert "crypto" in text
     assert str(len(category_symbols("crypto"))) in text
+    assert "succeeded=0" in text
 
 
 # ── Dashboard page (the market strip's rendered links) ────────────────
