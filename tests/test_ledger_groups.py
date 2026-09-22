@@ -6,10 +6,10 @@
 #
 # WHY THESE LIVE ON EVERY ROW: the reply is a JSON array of transactions
 # (the frontend's render contract), so each row carries its TICKER's
-# group fields: group_value, group_cost_basis, group_total_gain,
-# group_total_gain_pct, group_day_gain, group_day_gain_pct. Every row of
-# one ticker carries the SAME values — the frontend reads them off the
-# group's first row.
+# group fields: group_avg_cost, group_value, group_cost_basis,
+# group_total_gain, group_total_gain_pct, group_day_gain,
+# group_day_gain_pct. Every row of one ticker carries the SAME values —
+# the frontend reads them off the group's first row.
 #
 # THE CONTRACTS UNDER TEST HERE:
 #   - the math mirrors /api/portfolio/summary exactly (one holdings
@@ -21,6 +21,14 @@
 #       group_total_gain_pct = gain ÷ cost, NULL when cost ≤ 0
 #       group_day_gain   = net_qty × quote.change × value-rate
 #       group_day_gain_pct   = the ticker's daily move (price-level)
+#   - group_avg_cost = the CURRENT open position's average acquisition
+#     price: an oldest-first average-cost replay of stored facts. A
+#     partial close removes shares at the pool's existing average (sale
+#     proceeds never reprice remaining shares); crossing through flat
+#     opens the opposite side at the crossing transaction's price; a
+#     flat position is NULL. Quote-independent — attached even when the
+#     live quote failed. Distinct from group_cost_basis / net_qty, which
+#     is net cash flow and diverges after sales.
 #   - SELLS NET OUT: the bug this feature fixes — group rows used to sum
 #     BUY rows only, so logging a SELL changed nothing but Qty
 #   - oversold positions (net qty < 0, incl. SELL-only groups) display
@@ -92,7 +100,9 @@ def rows_of(client, ticker):
 
 
 def assert_group_fields(row, value, cost, gain, pct, day_gain, day_pct):
-    """One assertion block for the six group fields on one row."""
+    """One assertion block for the six quote-derived group fields on one
+    row. group_avg_cost is a stored-facts field with its own assertions
+    (it survives quote failure, so it is not part of this live block)."""
     assert row["group_value"] == pytest.approx(value)
     assert row["group_cost_basis"] == pytest.approx(cost)
     assert row["group_total_gain"] == pytest.approx(gain)
@@ -237,10 +247,12 @@ def test_native_mode_group_fields_are_native(client, fake_market):
 
 # ── Resilience & scoping ──────────────────────────────────────────────
 
-def test_unquoted_ticker_has_no_group_fields(client, fake_market):
-    """A dead ticker's rows stay FACTS ONLY — no group_* keys at all (the
+def test_unquoted_ticker_has_no_quote_derived_group_fields(client, fake_market):
+    """A dead ticker's rows carry NO quote-derived group_* keys (the
     frontend's hasLive / "—" gap-fill keys on their absence), exactly
-    like the per-row live fields today."""
+    like the per-row live fields today. The one exception is
+    group_avg_cost: a stored-facts replay that needs no quote, so the
+    parent Price cell still shows the open position's average."""
     seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
     # fake_market.quotes stays empty → get_quote("AAPL") raises KeyError.
 
@@ -253,6 +265,8 @@ def test_unquoted_ticker_has_no_group_fields(client, fake_market):
     assert "group_total_gain_pct" not in row
     assert "group_day_gain" not in row
     assert "group_day_gain_pct" not in row
+    # The fact-derived average survives the quote failure.
+    assert row["group_avg_cost"] == pytest.approx(100.0)
     # Facts survive untouched.
     assert row["price"] == 100.0 and row["qty"] == 10
 
@@ -272,9 +286,11 @@ def test_group_fields_are_per_ticker(client, fake_market):
     buys, _ = rows_of(client, "AAPL")
     assert_group_fields(buys[0], value=1050.0, cost=1000.0, gain=50.0,
                         pct=5.0, day_gain=50.0, day_pct=5.0)
+    assert buys[0]["group_avg_cost"] == pytest.approx(100.0)
     msft_rows, _ = rows_of(client, "MSFT")
     assert_group_fields(msft_rows[0], value=420.0, cost=400.0, gain=20.0,
                         pct=5.0, day_gain=20.0, day_pct=5.0)
+    assert msft_rows[0]["group_avg_cost"] == pytest.approx(200.0)
 
 
 def test_group_day_pct_is_ticker_move(client, fake_market):
@@ -291,3 +307,281 @@ def test_group_day_pct_is_ticker_move(client, fake_market):
     for row in (buys[0], sells[0]):
         assert row["group_day_gain_pct"] == pytest.approx(2.0)
         assert row["day_gain_pct"] == pytest.approx(2.0)
+
+
+# ── Average price on ticker parent rows (group_avg_cost) ─────────────
+#
+# group_avg_cost is the CURRENT open position's average acquisition
+# price: an oldest-first average-cost replay of stored facts. It is NOT
+# group_cost_basis / net_qty (net cash flow), which diverges from the
+# remaining shares' average after any sale. Quote-independent: every
+# test below seeds a quote for the other group fields unless it is
+# explicitly exercising quote failure.
+
+def test_group_avg_cost_for_one_buy(client, fake_market):
+    """One BUY: the average is that purchase price."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, _ = rows_of(client, "AAPL")
+    assert buys[0]["group_avg_cost"] == pytest.approx(100.0)
+
+
+def test_group_avg_cost_weights_multiple_buys(client, fake_market):
+    """Two BUYs average by share weight, and every row of the ticker
+    carries the SAME value (group fields describe the ticker)."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=130.0, qty=5,
+                     tx_type="BUY")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, _ = rows_of(client, "AAPL")
+    assert len(buys) == 2
+    for row in buys:
+        assert row["group_avg_cost"] == pytest.approx(110.0)
+
+
+def test_partial_sell_preserves_long_average_cost(client, fake_market):
+    """THE product decision: a sale removes shares at the pool's existing
+    average, so the remaining 6 shares still average 100 — NOT the net
+    cash-flow figure (1000 − 440) / 6 = 93.33..."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=110.0, qty=4,
+                     tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] == pytest.approx(100.0)
+
+
+def test_later_buy_reweights_remaining_long_pool(client, fake_market):
+    """BUY 10@100, SELL 4@110 (pool stays 6@100), BUY 4@120 →
+    (600 + 480) / 10 = 108."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=110.0, qty=4,
+                     tx_type="SELL")
+    seed_transaction(ticker="AAPL", date="2026-08-03", price=120.0, qty=4,
+                     tx_type="BUY")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    rows = [r for r in client.get("/api/transactions").get_json()
+            if r["ticker"] == "AAPL"]
+    assert len(rows) == 3
+    for row in rows:
+        assert row["group_avg_cost"] == pytest.approx(108.0)
+
+
+def test_fully_closed_group_has_null_average_cost(client, fake_market):
+    """Flat position: no open shares, so no average. NULL (frontend
+    renders "—"), never 0 and never a division artifact."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=110.0, qty=10,
+                     tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] is None
+
+
+def test_long_to_short_crossing_starts_new_pool_at_sell_price(client,
+                                                              fake_market):
+    """BUY 5@100 then SELL 8@120: five shares close the long; the excess
+    three open a short at the SELL's own price → average 120."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=5, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=120.0, qty=8,
+                     tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] == pytest.approx(120.0)
+
+
+def test_short_sales_have_weighted_average_open_price(client, fake_market):
+    """A sell-only group is a short: its average is the weighted average
+    of the SELL opening prices, (4×120 + 2×90) / 6 = 110."""
+    seed_transaction(ticker="AAPL", date="2026-08-01", price=120.0, qty=4,
+                     tx_type="SELL")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=90.0, qty=2,
+                     tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    _, sells = rows_of(client, "AAPL")
+    assert len(sells) == 2
+    for row in sells:
+        assert row["group_avg_cost"] == pytest.approx(110.0)
+
+
+def test_partial_short_cover_preserves_average_open_price(client,
+                                                          fake_market):
+    """SELL 4@120 then BUY 1@80: the cover removes shares at the short's
+    existing average, so the remaining short still opens at 120."""
+    seed_transaction(ticker="AAPL", date="2026-08-01", price=120.0, qty=4,
+                     tx_type="SELL")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=80.0, qty=1,
+                     tx_type="BUY")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] == pytest.approx(120.0)
+
+
+def test_short_to_long_crossing_starts_new_pool_at_buy_price(client,
+                                                             fake_market):
+    """SELL 3@120 then BUY 5@90: three shares cover the short; the excess
+    two open a long at the BUY's own price → average 90."""
+    seed_transaction(ticker="AAPL", date="2026-08-01", price=120.0, qty=3,
+                     tx_type="SELL")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=90.0, qty=5,
+                     tx_type="BUY")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] == pytest.approx(90.0)
+
+
+def test_near_zero_position_has_null_average_cost(client, fake_market):
+    """A remainder inside the established 1e-9 flat tolerance is FLAT:
+    NULL, never a huge average from dividing by floating-point dust."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=1.0, tx_type="BUY")
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=110.0,
+                     qty=0.99999999995, tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] is None
+
+
+def test_group_avg_cost_uses_stored_fx_in_cad_mode(client, fake_market):
+    """Default CAD mode: each USD BUY contributes price × ITS stored
+    historical rate — (10×100×1.40 + 10×120×1.30) / 20 = 148 — and the
+    different live rate (1.25) must not replace valid stored rates on the
+    cost side."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=120.0, qty=10,
+                     currency="USD", fx_rate=1.30)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0,
+                                            currency="USD")
+    fake_market.fx_rates["USDCAD"] = 1.25
+
+    buys, _ = rows_of(client, "AAPL")
+    for row in buys:
+        assert row["display_currency"] == "CAD"
+        assert row["group_avg_cost"] == pytest.approx(148.0)
+
+
+def test_group_avg_cost_is_native_in_native_mode(client, fake_market):
+    """?currency=NATIVE pins the average to native prices — same USD
+    buys, average 110 USD, no FX anywhere."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=120.0, qty=10,
+                     currency="USD", fx_rate=1.30)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0,
+                                            currency="USD")
+    fake_market.fx_rates["USDCAD"] = 1.25
+
+    res = client.get("/api/transactions?currency=NATIVE")
+    assert res.status_code == 200
+    rows = [r for r in res.get_json() if r["ticker"] == "AAPL"]
+    for row in rows:
+        assert row["display_currency"] == "USD"
+        assert row["group_avg_cost"] == pytest.approx(110.0)
+
+
+def test_partial_sell_preserves_cad_pool_average(client, fake_market):
+    """USD BUY 10@100 fx 1.40 → CAD pool 1400 (140/share). The partial
+    SELL's own price and rate (110 @ 1.30) never reprice the remaining
+    shares: the CAD average stays 140."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=110.0, qty=4,
+                     tx_type="SELL", currency="USD", fx_rate=1.30)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0,
+                                            currency="USD")
+    fake_market.fx_rates["USDCAD"] = 1.25
+
+    buys, sells = rows_of(client, "AAPL")
+    for row in (buys[0], sells[0]):
+        assert row["group_avg_cost"] == pytest.approx(140.0)
+
+
+def test_unquoted_usd_group_uses_stored_fx_for_cad_average(client,
+                                                           fake_market):
+    """No quote, but the USD BUY carries a stored rate: the row already
+    degrades its live cells while price_display stays CAD (stored fx), so
+    the parent average is CAD 140 — no live rate needed."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    # fake_market.quotes stays empty → quote failure.
+
+    res = client.get("/api/transactions")
+    assert res.status_code == 200
+    row = res.get_json()[0]
+    assert row["display_currency"] == "CAD"
+    assert row["group_avg_cost"] == pytest.approx(140.0)
+    assert "group_value" not in row
+
+
+def test_unquoted_usd_group_without_fx_degrades_to_native_average(
+        client, fake_market):
+    """Legacy USD row with fx_rate NULL and no quote: CAD conversion is
+    unknowable, so display stays native USD and the average is the native
+    purchase price — never a fabricated 1:1 CAD number."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=None)
+    # fake_market.quotes stays empty → quote failure.
+
+    res = client.get("/api/transactions")
+    assert res.status_code == 200
+    row = res.get_json()[0]
+    assert row["display_currency"] == "USD"
+    assert row["group_avg_cost"] == pytest.approx(100.0)
+    assert "group_value" not in row
+
+
+def test_unquoted_usd_group_with_mixed_fx_has_null_average(client,
+                                                           fake_market):
+    """One stored-rate row and one legacy fx_rate=None row in the same
+    unquoted USD ticker: the rows display in different currencies (CAD vs
+    USD), so folding both prices into one pool would invent a blended
+    number. group_avg_cost must be NULL (parent Price shows "—"); each
+    detail row keeps its own honest price_display."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10, currency="USD",
+                     fx_rate=1.40)
+    seed_transaction(ticker="AAPL", date="2026-08-02", price=100.0, qty=10,
+                     currency="USD", fx_rate=None)
+    # fake_market.quotes stays empty → quote failure (the reachable path
+    # for mixed converts: unquoted rows key off their own stored rate).
+
+    res = client.get("/api/transactions")
+    assert res.status_code == 200
+    rows = [r for r in res.get_json() if r["ticker"] == "AAPL"]
+    assert len(rows) == 2
+    # The mixed situation is real: one row CAD, one row native USD.
+    assert {r["display_currency"] for r in rows} == {"CAD", "USD"}
+    for row in rows:
+        assert row["group_avg_cost"] is None
+    # Detail facts survive untouched.
+    by_date = {r["transaction_date"]: r for r in rows}
+    assert by_date["2026-08-01"]["price_display"] == pytest.approx(140.0)
+    assert by_date["2026-08-02"]["price_display"] == pytest.approx(100.0)

@@ -7,10 +7,16 @@ Organized by priority tier. Effort is in working days (solo dev, includes tests)
 ## Tier 1 — Quick Wins (1–2 days each)
 
 ### 1. Average Cost per Position
-The ledger group row's Price column currently shows "—". Compute and display the average cost basis per holding (total cost ÷ net shares held). The math is already computed in `group_*` fields on every row — this is a display-only change in `main.js`'s `buildGroupRow()`.
+The ledger group row's Price column currently shows "—". Compute and display
+the current open position's average acquisition price with an oldest-first
+average-cost replay. Partial closes preserve the remaining position's average;
+crossing through flat starts a new opposite-side pool at the crossing
+transaction's price. The value follows the ledger's CAD/native display mode
+and remains available when a live quote fails.
 
-**Files:** `static/js/main.js`, `app.py` (add `group_avg_cost` to ledger response)
+**Files:** `app.py`, `static/js/ledger.js`, `tests/test_ledger_groups.py`, `tests/test_ledger_average_price.py`
 **Depends on:** Nothing
+**Status:** shipped 2026-09-22 (PR #68)
 
 ---
 

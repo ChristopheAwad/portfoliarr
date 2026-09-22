@@ -35,6 +35,13 @@ from market_data import (
 )
 import db
 
+# One flat-position tolerance for every cost-pool replay in this file:
+# fractional quantities (the importer's 6-decimal input) leave binary
+# residue — 0.1 + 0.2 − 0.3 is 5.55e-17 — so "flat" is abs(qty) within
+# this epsilon, never == 0. The frontend mirrors the same 1e-9 for its
+# net-qty checks (static/js/ledger.js).
+FLAT_QTY_TOL = 1e-9
+
 # datetime's date/datetime classes know how to both VALIDATE and NORMALIZE
 # dates: date.fromisoformat("2026-08-31") raises ValueError on garbage, and
 # its .isoformat() hands back the same canonical "YYYY-MM-DD" text we store.
@@ -1341,7 +1348,7 @@ def portfolio_realized():
         # is 5.55e-17 — and an exact check would glue an unrated ancestry
         # to the ticker forever, poisoning every later row and the total
         # (regression locked by test_fractional_positions_still_go_flat).
-        if abs(pos["qty"]) < 1e-9:
+        if abs(pos["qty"]) < FLAT_QTY_TOL:
             pos["cost_native"] = 0.0
             pos["cost_cad"] = 0.0
             pos["rated"] = True
@@ -2184,8 +2191,22 @@ def list_transactions():
     # and cost basis all shrink by the shares sold — which is what makes
     # the ledger's ticker rows agree with the portfolio header.
     #
+    # SEPARATE FROM THOSE LIVE FIELDS: group_avg_cost is the CURRENT open
+    # position's average acquisition price — an oldest-first average-cost
+    # replay of stored facts (price_display, so it follows the CAD/native
+    # toggle and each row's stored FX). It answers a different question
+    # than group_cost_basis / net_qty: a partial sale removes shares at
+    # the pool's EXISTING average, so sale proceeds never reprice the
+    # shares that remain (BUY 10@100, SELL 4@110 → still 100, not
+    # 560/6 = 93.33). Crossing through flat opens the opposite side at
+    # the crossing transaction's price; a flat position is NULL. Because
+    # it needs no quote, it is attached even when the live quote failed —
+    # the parent Price cell stays honest while Value/Gain show "—".
+    #
     # Oversold positions (net qty < 0, e.g. a SELL-only group) display
     # honestly negative — the summary route does the same; no clamping.
+    # Their group_avg_cost is the short's weighted average OPENING price
+    # (positive — a price, not a signed quantity).
     #
     # WHY EVERY ROW CARRIES THEM: the reply is a JSON array of
     # transactions (the frontend's render contract — see the tests in
@@ -2198,11 +2219,78 @@ def list_transactions():
         groups.setdefault(tx["ticker"], []).append(tx)
 
     for ticker, rows in groups.items():
+        # --- Average-cost replay (stored facts; quote-independent). ---
+        # rows arrive newest-first (db.get_transactions order); the pool
+        # must fold oldest-first, so walk reversed(rows).
+        # Flat checks use the module-level FLAT_QTY_TOL (same epsilon as
+        # the realized-gain fold): a remainder inside it is a closed
+        # position, never a huge average from dividing by dust.
+        pos_qty = 0.0
+        pos_cost = 0.0
+        for tx in reversed(rows):
+            signed = (
+                tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
+            )
+            px = tx["price_display"]
+
+            if abs(pos_qty) <= FLAT_QTY_TOL:
+                # Flat (or dust): this transaction opens the pool at its
+                # own price — long for BUY, short for SELL.
+                pos_qty = signed
+                pos_cost = abs(signed) * px
+                continue
+
+            if (pos_qty > 0) == (signed > 0):
+                # Same side: grow the pool; the weighted average follows.
+                pos_qty += signed
+                pos_cost += abs(signed) * px
+                continue
+
+            # Opposite side: close at the pool's CURRENT average first.
+            # The closing transaction's price must not reprice the shares
+            # it covers — that is the whole product rule.
+            pool_avg = pos_cost / abs(pos_qty)
+            if abs(signed) <= abs(pos_qty):
+                pos_qty += signed
+                pos_cost = abs(pos_qty) * pool_avg
+                if abs(pos_qty) <= FLAT_QTY_TOL:
+                    pos_qty = 0.0
+                    pos_cost = 0.0
+            else:
+                # Crosses through flat: only the EXCESS opens the
+                # opposite-side pool, at this transaction's own price.
+                excess = abs(signed) - abs(pos_qty)
+                if excess <= FLAT_QTY_TOL:
+                    pos_qty = 0.0
+                    pos_cost = 0.0
+                else:
+                    pos_qty = excess if signed > 0 else -excess
+                    pos_cost = excess * px
+
+        avg_cost = (
+            pos_cost / abs(pos_qty)
+            if abs(pos_qty) > FLAT_QTY_TOL
+            else None
+        )
+        # Mixed display currencies inside ONE ticker (an unquoted USD
+        # group where a stored-rate row converts to CAD but a legacy
+        # fx_rate=None row stays native): folding both price scales into
+        # one pool would invent a blended number with no real currency.
+        # Unavailable → NULL → the parent Price renders "—"; each detail
+        # row keeps its own honest price_display / display_currency.
+        if len({tx["display_currency"] for tx in rows}) > 1:
+            avg_cost = None
+        # Attach BEFORE the quote guard below: average price is facts-
+        # only, so a dead ticker still shows its parent-row Price.
+        for tx in rows:
+            tx["group_avg_cost"] = avg_cost
+
         quote = quotes[ticker]
         if quote is None:
-            # Unquoted ticker: attach NOTHING. The rows stay facts-only,
-            # and the frontend's existing hasLive / "—" gap-fill (which
-            # keys on the fields' absence) renders the group degraded.
+            # Unquoted ticker: attach NOTHING MORE. The rows keep their
+            # fact-derived group_avg_cost, and the frontend's existing
+            # hasLive / "—" gap-fill (which keys on the live fields'
+            # absence) renders the live cells degraded.
             continue
 
         # The group's conversion decision — the SAME expression the

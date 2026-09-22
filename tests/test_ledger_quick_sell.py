@@ -123,8 +123,9 @@ def test_group_sell_reuses_group_net_quantity(js):
     """The row's displayed quantity and its Sell eligibility must come from
     the SAME groupSortKeys net quantity — no second arithmetic path."""
     block = function_block(js, "buildGroupRow")
-    assert block.count("const { netQty } = groupSortKeys(txs);") == 1, (
-        "the group's exact net quantity must be read exactly once"
+    assert block.count("const { netQty, avgCost } = groupSortKeys(txs);") == 1, (
+        "the group's exact net quantity (and average price) must be read "
+        "exactly once from groupSortKeys"
     )
     assert re.search(r"netQty > 1e-9", block), (
         "Sell eligibility must reuse that same netQty value"
