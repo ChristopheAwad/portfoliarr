@@ -2,15 +2,15 @@
 
 ## Status
 
-IMPLEMENTED 2026-09-22. Roadmap item #1 is in progress. Tests were written
-first (focused red run: 21 failed with `KeyError: group_avg_cost` / missing
-frontend wiring), then production code in `app.py` and `static/js/ledger.js`.
-Focused tests, the neighboring ledger suites, and the full `python -m pytest`
-run pass (782 passed). Waiting on browser GUI approval before any commit or
-push. One planned test file note: the quick-sell meta-test's locked
-`groupSortKeys` destructure line was updated to
-`const { netQty, avgCost } = groupSortKeys(txs);` because the plan reads both
-values from that single call.
+SHIPPED pending merge 2026-09-22 (PR #68). Roadmap item #1 shipped with this
+PR. Tests were written first (focused red run: 21 failed with
+`KeyError: group_avg_cost` / missing frontend wiring), then production code in
+`app.py` and `static/js/ledger.js`. Focused tests, the neighboring ledger
+suites, and the full `python -m pytest` run pass (782 passed). The user
+approved the browser behavior before the PR was opened. One planned test file
+note: the quick-sell meta-test's locked `groupSortKeys` destructure line was
+updated to `const { netQty, avgCost } = groupSortKeys(txs);` because the plan
+reads both values from that single call.
 
 ## Problem
 

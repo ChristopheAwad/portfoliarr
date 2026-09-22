@@ -16,7 +16,7 @@ and remains available when a live quote fails.
 
 **Files:** `app.py`, `static/js/ledger.js`, `tests/test_ledger_groups.py`, `tests/test_ledger_average_price.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #68)
 
 ---
 
