@@ -32,10 +32,15 @@ def test_configured_formatter_is_stable_and_targets_stderr():
         if isinstance(handler, logging.StreamHandler)
         and getattr(handler, "stream", None) is __import__("sys").stderr
     )
-    assert handler.formatter._fmt == (
-        "%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
     assert handler.formatter.datefmt == "%Y-%m-%dT%H:%M:%S%z"
+    rendered = handler.formatter.format(logging.LogRecord(
+        "app", logging.INFO, __file__, 1, "event=test", (), None
+    ))
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4} "
+        r"INFO app event=test$",
+        rendered,
+    )
 
 
 def test_every_response_gets_a_new_server_request_id(client):
@@ -205,6 +210,35 @@ def test_transaction_list_logs_previously_silent_quote_degradation(
     (record,) = messages(caplog, "market_quotes_degraded")
     assert response.status_code == 200
     assert "operation=transaction_list" in record.getMessage()
+    assert "attempted=1 succeeded=0 failed=1" in record.getMessage()
+    assert "symbols=['DEAD']" in record.getMessage()
+    assert record.exc_info is None
+
+
+def test_portfolio_summary_uses_shared_aggregate_warning(
+        client, fake_market, caplog):
+    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0)
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/portfolio/summary")
+
+    (record,) = messages(caplog, "market_quotes_degraded")
+    assert response.status_code == 200
+    assert "operation=portfolio_summary" in record.getMessage()
+    assert "attempted=1 succeeded=0 failed=1" in record.getMessage()
+    assert "symbols=['DEAD']" in record.getMessage()
+    assert record.exc_info is None
+
+
+def test_portfolio_history_uses_shared_aggregate_warning(
+        client, fake_market, caplog):
+    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0)
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/portfolio/history?period=1M")
+
+    (record,) = messages(caplog, "market_history_degraded")
+    assert response.status_code == 200
+    assert "operation=portfolio_history" in record.getMessage()
+    assert "period='1M'" in record.getMessage()
     assert "attempted=1 succeeded=0 failed=1" in record.getMessage()
     assert "symbols=['DEAD']" in record.getMessage()
     assert record.exc_info is None

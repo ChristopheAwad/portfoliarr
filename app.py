@@ -1,9 +1,9 @@
-# time gives us perf_counter(), a monotonic high-resolution clock — used
-# by the request-timing hook in the LOGGING section below.
 import logging
 import math
 import os
 import sqlite3
+# time gives us perf_counter(), a monotonic high-resolution clock — used
+# by the request-timing hook in the LOGGING section below.
 import time
 import uuid
 from logging.config import dictConfig
@@ -244,15 +244,14 @@ def handle_unexpected_error(error):
         return error
     app.logger.error(
         "event=unhandled_error request_id=%s method=%s path=%r",
-        g.request_id, request.method, request.path,
+        _request_id(), request.method, request.path,
         exc_info=True,
     )
     return jsonify({"error": "internal server error"}), 500
 
 
-# TIER 3 — one timing line per request, at debug level. Werkzeug's dev
-# server already prints each request's method/path/status; the one thing
-# its line lacks is DURATION, so that's all we add.
+# TIER 3 — one timing line per request. Normal requests stay at DEBUG and
+# appear when LOG_LEVEL=DEBUG; requests over the threshold become WARNING.
 #
 # g is Flask's per-request scratch storage: every concurrent request gets
 # its own `g`, so stashing the start time here needs no locks or shared
@@ -293,6 +292,13 @@ def _log_aggregate_degradation(event, operation, attempted, succeeded,
     context_text = "".join(
         f" {key}={value!r}" for key, value in context.items()
     )
+    app.logger.warning(
+        "event=%s request_id=%s operation=%s%s attempted=%d succeeded=%d "
+        "failed=%d symbols=%r error_types=%r",
+        event, _request_id(), operation, context_text, attempted, succeeded,
+        len(failures), [symbol for symbol, _ in failures],
+        sorted({error_type for _, error_type in failures}),
+    )
 
 
 def _request_id():
@@ -300,13 +306,6 @@ def _request_id():
     if has_request_context():
         return getattr(g, "request_id", "none")
     return "none"
-    app.logger.warning(
-        "event=%s request_id=%s operation=%s%s attempted=%d succeeded=%d "
-        "failed=%d symbols=%r error_types=%r",
-        event, g.request_id, operation, context_text, attempted, succeeded,
-        len(failures), [symbol for symbol, _ in failures],
-        sorted({error_type for _, error_type in failures}),
-    )
 
 
 # The @app.route decorator registers this function as the handler for the
@@ -384,13 +383,9 @@ def index_quotes():
                 failures.append((symbol, error_type))
 
     if failures:
-        app.logger.warning(
-            "event=market_quotes_degraded request_id=%s operation=indices "
-            "category=%r attempted=%d succeeded=%d failed=%d symbols=%r "
-            "error_types=%r",
-            g.request_id, category, len(symbols), len(quotes_map), len(failures),
-            [symbol for symbol, _ in failures],
-            sorted({error_type for _, error_type in failures}),
+        _log_aggregate_degradation(
+            "market_quotes_degraded", "indices", len(symbols),
+            len(quotes_map), failures, category=category,
         )
 
     # Only when EVERY symbol in this category fails is the endpoint sick:
@@ -2311,14 +2306,10 @@ def list_transactions():
                     quote_failures.append((symbol, error_type))
 
     if quote_failures:
-        app.logger.warning(
-            "event=market_quotes_degraded request_id=%s "
-            "operation=transaction_list attempted=%d succeeded=%d failed=%d "
-            "symbols=%r error_types=%r",
-            g.request_id, len(unique_symbols),
-            len(unique_symbols) - len(quote_failures), len(quote_failures),
-            [symbol for symbol, _ in quote_failures],
-            sorted({error_type for _, error_type in quote_failures}),
+        _log_aggregate_degradation(
+            "market_quotes_degraded", "transaction_list",
+            len(unique_symbols), len(unique_symbols) - len(quote_failures),
+            quote_failures,
         )
 
     # ONE live USDCAD rate per response, fetched only in CAD mode AND only
@@ -3294,14 +3285,13 @@ def stock_history(symbol):
                 errors[history_symbol] = (
                     f"no history available for {history_symbol}"
                 )
-                if error_type is not None:
-                    failures.append((history_symbol, error_type))
+                failures.append((history_symbol, error_type or "EmptyHistory"))
             else:
                 results[history_symbol] = history
 
     _log_aggregate_degradation(
         "market_history_degraded", "stock_history", len(symbols),
-        len(symbols) - len(failures), failures, period=period,
+        len(results), failures, period=period,
     )
 
     if symbol in errors:
