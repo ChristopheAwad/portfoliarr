@@ -252,11 +252,6 @@ const expandedTickers = new Set();
 // data-col values the sortable <th>s carry and dir is "asc"|"desc".
 let ledgerSort = null;
 
-// Persistent default sort — loaded from localStorage at boot. Preferences
-// owns this value; header clicks change only ledgerSort for the current page
-// session. {col, dir} or null.
-let defaultSort = null;
-
 // Which data-col values identity keys off. The sortable columns (matching
 // the data-col attrs in index.html) map to the matching key of the object
 // groupSortKeys returns — so sorting by a column reads the VERY value the
@@ -272,14 +267,19 @@ const SORT_COLS = {
 };
 
 // Load default sort from localStorage (must come after SORT_COLS so we
-// can validate the saved column key).
-try {
-    const saved = JSON.parse(localStorage.getItem("ledgerDefaultSort"));
-    if (saved && SORT_COLS[saved.col] &&
-        (saved.dir === "asc" || saved.dir === "desc")) {
-        defaultSort = saved;
-    }
-} catch { /* first visit or corrupt — keep null */ }
+// can validate the saved column key). Preferences owns this value —
+// loaded once at boot, then read-only; header clicks change only
+// ledgerSort for the current page session. {col, dir} or null.
+const defaultSort = (() => {
+    try {
+        const saved = JSON.parse(localStorage.getItem("ledgerDefaultSort"));
+        if (saved && SORT_COLS[saved.col] &&
+            (saved.dir === "asc" || saved.dir === "desc")) {
+            return saved;
+        }
+    } catch { /* first visit or corrupt — fall through to null */ }
+    return null;
+})();
 
 // Paint (or clear) the ▲/▼ indicator + aria-sort on the sortable <th>s.
 // ▲ = ascending, ▼ = descending — a plain, honest statement of the current

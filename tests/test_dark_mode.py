@@ -81,6 +81,8 @@ def test_ledger_header_sort_does_not_overwrite_default_preference():
     preferences_js = (PROJECT_ROOT / "static/js/preferences.js").read_text()
     assert 'localStorage.setItem("ledgerDefaultSort"' in preferences_js, \
         "Preferences must remain the owner of the persistent default sort"
+    assert 'localStorage.removeItem("ledgerDefaultSort"' in preferences_js, \
+        "Preferences must also own clearing the default sort"
 
 
 def test_profile_btn_is_button_element(client):
