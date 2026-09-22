@@ -504,63 +504,219 @@ a.logo { text-decoration: none; }
     padding: 0 16px;
 }
 
-/* Index Chips Header. Each chip is an <a> to the stock detail page — the
-   browser's default anchor look (blue text, underline) is stripped so the
-   card keeps its shape, then "clickable" is re-signalled on hover/focus
-   with a border accent + a 1px lift, the same quiet affordance the
-   sortable ledger headers use. Chips are the one "interactive card" on
-   the dashboard, so they're the one card that gets hover elevation. */
-.indices-bar {
-    display: flex;
-    gap: 12px;
+/* MARKET OVERVIEW — the tabbed strip that opens the dashboard, above the
+   whole portfolio. The section holds the heading + a quiet "Live" badge, a
+   row of category tabs, then ONE bordered card panel per category. The
+   panel IS the card: the instruments inside are cells of that card,
+   divided by hairline gaps, not separate SaaS cards — so a cell never gets
+   a shadow of its own. Each cell is an <a> to its stock page, so the
+   browser's default blue/underline is stripped here and "clickable" is
+   re-signalled on hover/focus with an accent fill, the same quiet
+   affordance the sortable ledger headers use. Every declaration reads a
+   theme token, so dark mode recolors the whole strip for free. */
+.market-overview {
     margin-bottom: 20px;
-    overflow-x: auto;
 }
 
-.chip {
+.market-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.market-header h2 {
+    margin: 0;
+    font-size: 22px;
+}
+
+/* Status, not a control: mirrors the badge tokens so "Live" sits beside the
+   heading exactly like the "Main" badge sits beside "Your Portfolio". */
+.market-live {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* Tab row. Wraps onto more lines while there is room, and stops wrapping
+   (then scrolls sideways) once the viewport is narrow — the phone override
+   lives in the ≤600px block. `scrollbar-width: none` lives here so the
+   FIRST .market-tabs rule carries the whole "hidden but scrollable"
+   contract the tests pin; the webkit half sits just below. */
+.market-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.market-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+/* One tab = a small pill. main.js keeps `aria-selected` and the .active
+   class in lockstep, so the painted state can never drift from what
+   assistive technology is told. Inactive pills are outlined; the active one
+   fills with the accent — the same "selected key" idea as the chart's
+   timeframe buttons, so both trays read as one control family. */
+.market-tab {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 150ms ease, border-color 150ms ease,
+                color 150ms ease;
+}
+
+.market-tab:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.market-tab:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.market-tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--btn-text);
+    font-weight: 600;
+}
+
+/* ONE card per category. Deliberately no `display` declaration: the
+   inactive panels ship with the HTML `hidden` attribute, and an author
+   `display` would beat the browser's `[hidden] { display: none }` and leave
+   all six panels stacked on top of each other. The rule below only
+   restates what the attribute already does. Padding insets the grid so a
+   cell's hover/focus fill never overruns the rounded corners. */
+.market-panel {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
-    padding: 10px 14px;
     border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    padding: 8px;
+}
+
+.market-panel[hidden] {
+    display: none;
+}
+
+/* Only the currencies panel explains its quote direction: every pair there
+   is CAD-based, so "0.7340" means 1 CAD buys 0.7340 of that currency. */
+.market-caption {
+    margin: 4px 6px 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Equal tracks for THIS panel's own instrument count. `--market-cols` is set
+   inline by the template (4 or 5), so a hard-coded repeat(4, ...) can never
+   strand Asia-Pacific's fifth instrument; minmax(0, 1fr) lets a long label
+   shrink its track instead of widening the page. The 1px gap exposes this
+   grid's background colour, which is how the hairline dividers between
+   cells are drawn — no borders to double up at the seams. */
+.market-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--market-cols, 4), minmax(0, 1fr));
+    gap: 1px;
+    background: var(--border-color);
+}
+
+/* A cell is a cell of one strip, not a card: no radius, no shadow, no
+   margin. min-width: 0 releases it from the flex min-content floor so a
+   long label truncates rather than pushing the strip past the viewport.
+   Hover/focus change the FILL only — translating the cell would shift the
+   whole strip under the pointer. */
+.market-item {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: 13px;
-    align-items: flex-start;
-    white-space: nowrap;     /* price/change never wrap to a second line */
-    color: inherit;          /* anchor blue would tint the name span */
-    text-decoration: none;   /* the card IS the link, no underline */
-    box-shadow: var(--shadow-sm);
-    transition: border-color 150ms ease, box-shadow 150ms ease,
-                transform 150ms ease;
+    padding: 10px 12px;
+    min-width: 0;
+    background: var(--card-bg);
+    color: inherit;
+    text-decoration: none;
+    transition: background-color 150ms ease;
 }
 
-.chip:hover,
-.chip:focus-visible {
-    border-color: var(--accent);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
-    outline: none; /* we supply our own focus cue via the border */
+.market-item:hover {
+    background: var(--accent-bg);
 }
 
-.chip-top {
+/* Inset halo rather than a default outline: it is painted inside the cell,
+   so it stays inside the panel's padding instead of being clipped. */
+.market-item:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Label left, live level pushed to the right edge with margin-left: auto —
+   both rows then share one right edge down the cell. */
+.market-item-top {
     display: flex;
-    gap: 8px;
     align-items: center;
+    gap: 8px;
+    min-width: 0;
 }
 
-.index-name { font-weight: 600; }
+/* Long labels ("Shanghai Composite", "STOXX Europe 600") must truncate, not
+   widen the page: min-width: 0 lets the flex item shrink below its content
+   width, ellipsis does the cutting. */
+.market-item-label {
+    font-weight: 600;
+    font-size: 13px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
-/* tabular-nums: every digit occupies the same width, so live-updating
-   numbers don't jiggle sideways as digits change. Applied to every cell
-   that shows a quote. */
-.index-price {
+/* tabular-nums: every digit occupies the same width, so a live-updating
+   number never jiggles sideways as digits change. Applied to every figure
+   in the strip. The level reads as secondary ink — the day's move is the
+   headline here, not the price. */
+.market-item-price {
+    margin-left: auto;
     color: var(--text-secondary);
+    font-size: 13px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-    flex: 1;
 }
-.index-change { font-size: 12px; white-space: nowrap; }
+
+/* Two child spans, not one run of text: the PERCENTAGE must outweigh the
+   absolute move (percentages compare across instruments, point moves do
+   not), and CSS cannot weigh half of a single text node — see the pair of
+   rules below. */
+.market-item-change {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    align-self: flex-end;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.market-item-move {
+    font-weight: 400;
+}
+
+.market-item-pct {
+    font-weight: 700;
+}
 
 /* Main Grid Structure */
 .dashboard-grid {
@@ -2221,7 +2377,8 @@ input[type="date"]::-moz-placeholder {
 }
 
 .current-price:empty::before,
-.chip .index-price:empty::before,
+.market-item-price:empty::before,
+.market-item-change:empty::before,
 .watchlist .watch-price:empty::before,
 .stats-grid .stat dd:empty::before {
     content: "";
@@ -2232,15 +2389,16 @@ input[type="date"]::-moz-placeholder {
     animation: shimmer 1.4s ease-in-out infinite;
 }
 
-/* The big portfolio/stock price gets a proportionally big box; the chip
-   and watchlist prices get small ones; stat values get a short bar. */
+/* The big portfolio/stock price gets a proportionally big box; the market
+   levels and watchlist prices get small ones; stat values get a short bar. */
 .current-price:empty::before {
     width: 200px;
     height: 34px;
     vertical-align: middle;
 }
 
-.chip .index-price:empty::before,
+.market-item-price:empty::before,
+.market-item-change:empty::before,
 .watchlist .watch-price:empty::before {
     width: 70px;
     height: 16px;
@@ -2453,15 +2611,29 @@ input[type="date"]::-moz-placeholder {
         flex: 0 0 auto;
     }
 
-    /* Tighter chips + cards: desktop paddings eat a 375px screen. */
-    .chip {
-        padding: 8px 10px;
-        font-size: 12px;
-        gap: 2px;
+    /* Market strip on phones. Two decisions, both pinned by contract:
+       (1) the category tab row becomes a PLAIN horizontal overflow tray —
+       no scroll-snap and no legacy -webkit-overflow-scrolling, either of
+       which made the fixed bottom tab bar jitter/vanish on Android;
+       (2) the instrument panel drops to exactly TWO columns and nothing
+       spans, so Asia-Pacific's odd fifth cell stays one normal cell.
+       Cells keep a thumb-sized padding so both tabs and links stay tappable. */
+    .market-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
     }
 
-    .chip-top {
-        gap: 6px;
+    .market-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .market-item {
+        padding: 9px 8px;
+    }
+
+    .market-tab {
+        padding: 8px 12px;
     }
 
     .card {
@@ -2755,7 +2927,8 @@ input[type="date"]::-moz-placeholder {
    which is exactly what the media query promises. */
 @media (prefers-reduced-motion: reduce) {
     .current-price:empty::before,
-    .chip .index-price:empty::before,
+    .market-item-price:empty::before,
+    .market-item-change:empty::before,
     .watchlist .watch-price:empty::before,
     .stats-grid .stat dd:empty::before {
         animation: none;
@@ -2769,7 +2942,8 @@ input[type="date"]::-moz-placeholder {
         transition: none;
     }
 
-    .chip,
+    .market-item,
+    .market-tab,
     .time-btn,
     .btn,
     .btn-action,
@@ -2853,19 +3027,19 @@ input[type="date"]::-moz-placeholder {
 }
 
 /* ── Hidden scrollbars on the two horizontal trays ────────────────────
-   The dashboard index chips and the chart timeframe buttons both scroll
+   The market category tabs and the chart timeframe buttons both scroll
    sideways. Both still respond to touch, trackpad, and drag; a painted
    bar on a phone just adds a stray line under the cards. "Hidden" is a
    different decision from the thin-scrollbar group far above, so it
    lives apart. Kept at the very end of the file so the phone tray media
    query stays the SECOND .chart-timeframe-selectors rule that
    tests/test_ui_redesign.py identifies. */
-.indices-bar,
+.market-tabs,
 .chart-timeframe-selectors {
     scrollbar-width: none;
 }
 
-.indices-bar::-webkit-scrollbar,
+.market-tabs::-webkit-scrollbar,
 .chart-timeframe-selectors::-webkit-scrollbar {
     display: none;
 }

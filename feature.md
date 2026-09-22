@@ -1,412 +1,555 @@
-# Feature #1: Average Price on Ledger Ticker Rows
+# Feature #20: Dashboard Market Overview Tabs
 
 ## Status
 
-SHIPPED pending merge 2026-09-22 (PR #68). Roadmap item #1 shipped with this
-PR. Tests were written first (focused red run: 21 failed with
-`KeyError: group_avg_cost` / missing frontend wiring), then production code in
-`app.py` and `static/js/ledger.js`. Focused tests, the neighboring ledger
-suites, and the full `python -m pytest` run pass (783 passed after the PR #68
-review fix: a mixed-currency unquoted group now sends a null average instead
-of blending CAD and USD prices). The user approved the browser behavior before
-the PR was opened. One planned test file note: the quick-sell meta-test's
-locked `groupSortKeys` destructure line was
-updated to `const { netQty, avgCost } = groupSortKeys(txs);` because the plan
-reads both values from that single call.
+PLANNED - awaiting implementation. The product direction and this test-first
+plan were approved on 2026-09-22. Roadmap item #20 is in progress.
+
+Do not implement a different instrument set, add a market breadth roll-up, or
+replace the requested `Live` label without new user approval.
 
 ## Problem
 
-The ledger groups transactions by ticker. Each collapsed ticker parent row
-shows the net quantity, current value, gains, and actions, but its Price cell
-always shows `—`.
+The dashboard currently renders four independent market chips after the
+portfolio headline and before the portfolio chart. This placement makes the
+chips look like portfolio or chart metadata. They are intended to answer a
+broader question first: "What do the markets look like today?"
 
-The parent row must instead show the average acquisition price of the shares
-that remain in that ticker's current position. This is a cost-pool average,
-not net cash flow divided by shares.
-
-Example:
-
-1. BUY 10 shares at 100.
-2. SELL 4 shares at 110.
-3. The remaining 6 shares still have an average acquisition price of 100.
-4. The parent Price cell must show `100.00`, not `(1000 - 440) / 6 = 93.33`.
+The current bar is also too narrow for that job. It contains only the S&P 500,
+Nasdaq, TSX, and Bitcoin, with no way to inspect Europe, Asia-Pacific, other
+major cryptocurrencies, commodities, or currencies.
 
 ## Goal
 
-Show the current position's average acquisition price in the Price column of
-each ledger ticker parent row.
+Turn the existing index chips into a full-width, tabbed market overview at the
+top of the dashboard, before the complete portfolio section.
 
-The calculation must:
+The overview must:
 
-1. Replay stored transactions oldest-first.
-2. Add opening or same-side quantities to a weighted cost pool.
-3. Remove closing quantities at the pool's existing average price.
-4. Keep the average unchanged after a partial close.
-5. Start a new pool at the crossing transaction's price when a transaction
-   crosses through flat from long to short or short to long.
-6. Return no average for a flat position.
-7. Follow the ledger's CAD/native display toggle and stored-FX rules.
-8. Remain available when Yahoo cannot provide a live quote because average
-   price uses stored ledger facts only.
+1. Appear before the `Your Portfolio` headline and all portfolio values.
+2. Present one cohesive market strip rather than unrelated floating cards.
+3. Offer North America, Europe, Asia-Pacific, Crypto, Commodities, and
+   Currencies tabs.
+4. Fetch only the active category on initial load, tab selection, and polling.
+5. Keep every instrument as a real link to its existing stock-detail page.
+6. Preserve per-symbol failure handling so one failed Yahoo quote cannot blank
+   its category.
+7. Work on desktop and mobile without widening the viewport.
+8. Keep the visible `Live` label requested by the user.
 
-## Locked Product Decisions
+## Approved Product Decisions
 
-1. "Average price" means the average acquisition price of the CURRENT open
-   position. Sale proceeds do not reduce the remaining shares' average.
-2. Use an average-cost pool, not FIFO or LIFO.
-3. Long positions are opened or increased by BUY transactions. Their average
-   is weighted by BUY price and quantity.
-4. SELL transactions first close an existing long at its current average.
-   A partial close does not change that average.
-5. Short positions are opened or increased by SELL transactions. Their
-   average opening price is weighted by SELL price and quantity.
-6. BUY transactions first cover an existing short at its current average.
-   A partial cover does not change that average.
-7. If one transaction crosses through flat, only its excess quantity opens
-   the opposite-side pool, at that transaction's own price.
-8. A position is flat when `abs(qty) <= 1e-9`, matching the repository's
-   established position tolerance. Flat positions have `group_avg_cost =
-   null` and display `—`.
-9. In `currency=NATIVE` mode, calculate the pool from each transaction's
-   native `price`.
-10. In default CAD mode, calculate the pool from each transaction's existing
-    `price_display`. This preserves the ledger's established cost-side rule:
-    each USD transaction uses its stored historical FX rate when available,
-    with the route's existing live-rate fallback for quoted legacy rows.
-11. The displayed currency comes from the group's existing
-    `display_currency`. Do not add a new currency field.
-12. The average price is a stored-facts calculation. It does not depend on
-    `price_now`, `group_value`, or any successful live quote.
-13. A missing quote must not suppress `group_avg_cost` when the stored facts
-    can still produce it.
-14. If the existing row-decoration rules degrade a USD row to native display,
-    calculate the group average from those native `price_display` values and
-    label it with that existing native `display_currency`. Never fabricate an
-    FX rate.
-15. Backend responses contain raw floats or `null`. JavaScript owns decimal
-    formatting and the currency suffix.
-16. Keep Price non-sortable. This feature changes display only; it does not
-    add parent-row price sorting.
-17. Do not add columns. The ledger remains an 11-column table.
-18. Do not change transaction storage, validation, realized gains, portfolio
-    summary math, quick sell, import, polling, or Android code.
+1. The section heading is `Markets today`.
+2. A small visible `Live` label sits with the section heading.
+3. Do not add a sentence such as `3 of 4 higher`. These instruments overlap,
+   so that count would not be honest market-breadth data.
+4. The category order is fixed:
+   - North America
+   - Europe
+   - Asia-Pacific
+   - Crypto
+   - Commodities
+   - Currencies
+5. North America is the default category on every fresh dashboard load.
+6. Do not persist the selected tab in localStorage or sessionStorage in this
+   feature.
+7. The approved market configuration is:
+
+| Category key | Label | Yahoo symbol | Display label |
+|---|---|---|---|
+| `north-america` | North America | `^GSPC` | S&P 500 |
+| `north-america` | North America | `^IXIC` | Nasdaq |
+| `north-america` | North America | `^GSPTSE` | TSX |
+| `north-america` | North America | `^RUT` | Russell 2000 |
+| `europe` | Europe | `^STOXX` | STOXX Europe 600 |
+| `europe` | Europe | `^FTSE` | FTSE 100 |
+| `europe` | Europe | `^GDAXI` | DAX |
+| `europe` | Europe | `^FCHI` | CAC 40 |
+| `asia-pacific` | Asia-Pacific | `^N225` | Nikkei 225 |
+| `asia-pacific` | Asia-Pacific | `^HSI` | Hang Seng |
+| `asia-pacific` | Asia-Pacific | `000001.SS` | Shanghai Composite |
+| `asia-pacific` | Asia-Pacific | `^NSEI` | Nifty 50 |
+| `asia-pacific` | Asia-Pacific | `^AXJO` | ASX 200 |
+| `crypto` | Crypto | `BTC-USD` | Bitcoin |
+| `crypto` | Crypto | `ETH-USD` | Ethereum |
+| `crypto` | Crypto | `SOL-USD` | Solana |
+| `crypto` | Crypto | `XRP-USD` | XRP |
+| `commodities` | Commodities | `GC=F` | Gold |
+| `commodities` | Commodities | `CL=F` | WTI Oil |
+| `commodities` | Commodities | `HG=F` | Copper |
+| `commodities` | Commodities | `NG=F` | Natural Gas |
+| `currencies` | Currencies | `CADUSD=X` | CAD/USD |
+| `currencies` | Currencies | `CADEUR=X` | CAD/EUR |
+| `currencies` | Currencies | `CADGBP=X` | CAD/GBP |
+| `currencies` | Currencies | `CADJPY=X` | CAD/JPY |
+
+8. Currency pairs all use CAD as the base. The Currencies panel includes the
+   short explanatory caption `1 CAD buys`.
+9. Positive currency movement therefore consistently means that CAD
+   strengthened against the displayed quote currency.
+10. Keep Natural Gas in Commodities. Do not substitute Wheat in this feature.
+11. Daily percentage movement is visually more prominent than absolute point
+    movement because percentages are comparable across instruments.
+12. Continue to show the current level, absolute daily move, percentage daily
+    move, and Yahoo-provided native currency. Do not invent conversions.
+13. Currency levels need adaptive precision. Values with an absolute value
+    below 1 use four decimal places; all other market levels keep the existing
+    two-decimal presentation. Do not globally change `formatPrice`, because
+    portfolio and stock-page money formatting remains two decimals.
+14. On desktop, the active category is one bordered strip divided into equal
+    instrument cells. Individual cells do not get separate card shadows.
+15. The five-instrument Asia-Pacific category must fit the same strip without
+    hard-coding a four-column layout.
+16. On phones, category tabs may scroll horizontally, but the instrument panel
+    uses a two-column grid. Do not create nested horizontal scrolling for both
+    tabs and instruments.
+17. An odd fifth instrument stays one normal-width grid cell. It must not
+    stretch across both phone columns.
+18. Each instrument cell remains a plain anchor with native Enter,
+    open-in-new-tab, and middle-click behavior.
+19. The existing green/red semantics remain: zero counts as positive, matching
+    the current chip behavior.
+20. Failed symbols display `—` and no stale change. Successful siblings remain
+    visible.
+21. If every symbol in the active category fails, all cells in that panel show
+    `—`; no global modal or toast is added.
+22. This feature does not add market-open detection, timestamps, breadth,
+    interest rates, bonds, market signals, sectors, Latin America, Africa, or
+    Middle East categories.
+
+## Backend Contract
+
+### Market Configuration
+
+Replace the single flat product configuration with one ordered market-category
+configuration in `app.py`. Use insertion order as the category and instrument
+display order. Each category stores its human label and ordered instruments;
+each instrument stores its Yahoo symbol and display label.
+
+Keep `INDEX_SYMBOLS` available as an ordered flat list derived from the market
+configuration, not as a second manually maintained source. Existing comparison
+recommendation tests use it to confirm that supported benchmark symbols exist.
+
+The `/` route passes the category configuration to `templates/index.html` so
+Jinja renders tabs, panels, labels, symbols, and stock-detail links from the
+same backend source used by the API. Do not duplicate all symbols in template
+markup or JavaScript.
+
+### `GET /api/indices`
+
+1. Accept an optional `category` query parameter.
+2. Missing or empty `category` selects `north-america`, preserving the current
+   no-query smoke-check URL.
+3. A recognized category fetches only that category's symbols.
+4. An unknown category returns HTTP 400 with
+   `{ "error": "invalid market category" }` before any quote call.
+5. Keep parallel quote fetching, but size the worker pool from the selected
+   category only, capped at eight workers.
+6. Keep wide exception handling and warning logging at the route boundary for
+   each failed symbol.
+7. Return successful quote objects only, in the configured category order.
+8. If some symbols fail, return HTTP 200 with successful siblings only.
+9. If every selected symbol fails, return the existing HTTP 503 payload
+   `{ "error": "quote service unavailable" }`.
+10. Logging must identify the selected category and relevant symbol/count so a
+    failure can be diagnosed from server output.
+11. Do not fetch or return symbols from inactive categories.
+12. Do not change `market_data.get_quote`, its cache, or its native quote
+    payload.
+
+## Template And Accessibility Contract
+
+Move the market section to the first dashboard content inside `<main>`, before
+`.stock-header-card`.
+
+Render:
+
+1. One semantic `<section>` labelled by the `Markets today` heading.
+2. The visible `Live` label beside the heading.
+3. One tab list with six real `<button type="button">` controls.
+4. Stable ids that connect each tab's `aria-controls` to its panel and each
+   panel's `aria-labelledby` back to its tab.
+5. `role="tablist"`, `role="tab"`, and `role="tabpanel"` semantics.
+6. North America with `aria-selected="true"` and `tabindex="0"`.
+7. All inactive tabs with `aria-selected="false"` and `tabindex="-1"`.
+8. North America visible initially; every inactive panel has `hidden`.
+9. Every instrument anchor with `class="market-item"`, `data-symbol`, and a
+   `url_for('stock_page', symbol=...)` href generated from the same configured
+   symbol.
+10. Empty level and change spans so CSS loading skeletons cannot be mistaken
+    for market data.
+11. The `1 CAD buys` caption only in the Currencies panel.
+
+Keyboard tab behavior follows the WAI-ARIA tabs pattern:
+
+1. Click activates the selected tab.
+2. Left and Right arrows move focus and selection, wrapping at both ends.
+3. Home selects the first tab.
+4. End selects the last tab.
+5. Activation updates `aria-selected`, roving `tabindex`, and panel `hidden`
+   states together.
+6. The newly active category fetch starts immediately after activation.
+
+## Frontend Data Contract
+
+Refactor the top market code in `static/js/main.js` around the active panel:
+
+1. Track the active category from the selected tab's `data-category`.
+2. Scope managed instruments to the requested panel. Never reset or gap-fill
+   hidden panels while processing another category's response.
+3. Build the request with `URLSearchParams` or equivalent safe encoding:
+   `/api/indices?category=<active-key>`.
+4. Set an unrequested panel's values to empty so its skeleton is visible on
+   first activation.
+5. Set only the requested panel to loading before its fetch.
+6. Paint each response by `data-symbol`, not DOM position.
+7. Gap-fill unanswered symbols in that panel with `—` and clear their changes.
+8. On HTTP, JSON, or network failure, mark only that requested panel
+   unavailable.
+9. Protect rapid tab switching and overlapping poll/tab requests with a
+   monotonically increasing request token per category. An older response must
+   not overwrite a newer response for that same category.
+10. A response for a panel that became inactive may populate that hidden panel,
+    but it must not switch tabs or alter the active panel.
+11. Keep user-entered category choice during ordinary polling; polling refreshes
+    the active category only.
+12. The one existing `setupAutoRefresh` callback calls the active-category
+    market refresh. Do not add `setInterval`.
+13. Use a market-specific formatter for levels. Currency pairs below 1 get
+    four decimals; other levels get two. Absolute change uses the same
+    precision decision as its level. Percentage change remains two decimals.
+14. Do not change shared portfolio, ledger, watchlist, stock-page, or chart
+    formatters.
+
+## Visual Contract
+
+Preserve the current printed-money identity: Fraunces display headings,
+Instrument Sans data, paper-like cards, ink navy/gold accents, and existing
+positive/negative colors.
+
+Desktop and tablet:
+
+1. The heading row and category tabs read as one section above the portfolio.
+2. The panel is one bordered, rounded, card-background strip with the existing
+   small shadow.
+3. Instruments use equal grid tracks based on that panel's actual item count.
+4. Hairline dividers separate instruments; cells do not look like six SaaS
+   cards.
+5. Hover and `:focus-visible` identify the complete cell as a link without
+   shifting the whole strip.
+6. Long labels such as `Shanghai Composite` and `STOXX Europe 600` do not force
+   page overflow.
+7. Figures use tabular numerals.
+8. The daily percentage has stronger weight than the absolute daily move.
+
+Phone, at the existing 600px breakpoint:
+
+1. The category tab list scrolls horizontally with its scrollbar hidden, using
+   the repository's plain-overflow rule. Do not add scroll snap or legacy
+   `-webkit-overflow-scrolling`.
+2. The active market panel becomes a two-column grid.
+3. Borders adapt so cells retain clear separation without double-thick lines.
+4. The page viewport does not grow wider than the device.
+5. Each tab and linked market cell keeps a practical touch target.
+6. The existing bottom tab bar must remain stable while category tabs scroll.
+
+Reduced motion:
+
+1. Loading shimmer follows the existing reduced-motion rule.
+2. Do not add automatic carousel movement, sliding panels, or decorative entry
+   animation.
 
 ## Existing Contracts To Preserve
 
-1. `GET /api/transactions` remains a JSON array of transaction rows.
-2. Every transaction builder retains all 11 cell keys, and actions remain the
-   last persisted column.
-3. Backend group values are attached to every row for that ticker; the
-   frontend reads the first row as the group's representative.
-4. Unavailable live fields still render `—` and sort last.
-5. Parent quantity remains fact-computed in `groupSortKeys` and is available
-   during quote failure.
-6. Individual transaction Price cells continue to show their own stored
-   `price_display`; this feature changes only the ticker parent row.
-7. Parent quick sell still uses exact native `price_now`, never the displayed
-   average price.
-8. The privacy toggle continues to mask Qty, Value, Total Gain, and Day Gain.
-   Price is not newly masked.
-9. Backend floats remain unformatted. Use the existing `formatNumber` helper
-   in JavaScript.
-10. The default display remains CAD, and `?currency=NATIVE` still affects only
-    the ledger.
-11. Missing or unsupported FX must degrade honestly rather than use 1:1.
-12. Page polling continues through `setupAutoRefresh`; add no interval.
+1. `/api/indices` remains the live-smoke endpoint and works without a query.
+2. Quote responses contain raw finite floats from `market_data.get_quote`.
+3. Market instruments stay in native quote currency.
+4. One failed symbol does not remove successful siblings.
+5. HTTP 503 occurs only when all requested symbols fail.
+6. Stock links percent-encode symbols such as `^GSPC`, `GC=F`, and `CADUSD=X`
+   through `url_for` and round-trip through `/stock/<symbol>`.
+7. Comparison recommendations for S&P 500, Nasdaq, and TSX remain supported by
+   `INDEX_SYMBOLS`.
+8. Dashboard portfolio summary, history chart, comparison overlays,
+   watchlist, volume leaders, allocation carousel, privacy state, and polling
+   cadence do not change.
+9. `setupAutoRefresh` remains the sole dashboard polling owner.
+10. No database, transaction, FX conversion, Android, Docker, dependency, or
+    market-data-cache change is part of this feature.
+11. Backend data stays unformatted; frontend code owns number text and
+    positive/negative classes.
+12. Failed and unrequested data never masquerades as a live value.
 
 ## Files
 
 Production:
 
-- `app.py` - calculate and attach `group_avg_cost` during ledger decoration.
-- `static/js/ledger.js` - read and render the group average in the parent
-  Price cell.
+- `app.py` - ordered market configuration, dashboard template context, and
+  category-aware `/api/indices` validation/fetching.
+- `templates/index.html` - move the market overview above the portfolio and
+  render accessible tabs/panels from backend configuration.
+- `static/js/main.js` - tab behavior, active-panel quote fetching, adaptive
+  market precision, race protection, and active-category polling.
+- `static/style.css` - cohesive market strip, tabs, loading/failure states,
+  desktop item-count layout, phone two-column layout, focus, and dark mode.
+- `project-brief.md` - replace the old fixed four-chip wording with the durable
+  tabbed-market contract after implementation is complete.
 
 Tests:
 
-- `tests/test_ledger_groups.py` - route-level average-cost replay contracts.
-- `tests/test_ledger_average_price.py` - focused frontend source/meta-tests.
+- `tests/test_routes.py` - category API behavior, configuration order, partial
+  and total failures, default behavior, validation, and rendered links.
+- `tests/test_market_tabs.py` - focused template, JavaScript source/meta, CSS,
+  accessibility, responsive, precision, and polling contracts.
+- `tests/test_compare_ui.py` - adjust the flat-symbol compatibility assertion
+  only if the configuration refactor requires it; preserve recommendation
+  coverage.
 
 Planning:
 
 - `feature.md`
 - `roadmap.md`
 
-No template, CSS, database, market-data, dependency, Docker, deployment, or
-Android edit is expected.
-
 ## Test-First Plan
 
-Write all tests in this section before changing `app.py` or
-`static/js/ledger.js`. Run the focused tests and confirm that they fail for the
-intended reason: `group_avg_cost` does not exist and the parent Price cell is
-hard-coded to `—`.
+Write all tests in sections A-E before production edits. Run the focused tests
+and confirm they fail because the category configuration, query validation,
+tabbed markup, scoped fetching, and new layout do not exist. Do not weaken
+existing index failure tests to make the new tests pass.
 
-### A. Backend Route Tests - `tests/test_ledger_groups.py`
+### A. Backend Configuration And Route Tests - `tests/test_routes.py`
 
-Update the file's contract comments and helpers so `group_avg_cost` is one of
-the documented group fields. Do not weaken any existing group aggregate
-assertions.
+1. Replace assumptions that `INDEX_SYMBOLS` is manually declared with a test
+   that the flattened list exactly equals the symbols from all ordered market
+   categories, with no duplicates.
+2. Assert the six category keys and labels exactly match the approved order.
+3. Assert every category's exact ordered `(symbol, display label)` pairs,
+   including all five Asia-Pacific instruments and all CAD-base currency pairs.
+4. Update the no-query success test to seed North America only and assert the
+   response contains exactly North America in configured order.
+5. Add a test that an empty `?category=` also defaults to North America.
+6. Parameterize all six valid category keys. For each key, seed only that
+   category and assert HTTP 200 and exact configured response order.
+7. Add a category-isolation test that records calls to `get_quote`; request
+   Europe and assert no North America, Asia-Pacific, Crypto, Commodities, or
+   Currencies symbol was called.
+8. Add an invalid-category test. Assert HTTP 400, exact error payload, and zero
+   quote calls.
+9. Adapt the existing partial-failure test to a non-default category. Seed two
+   Europe symbols, leave the others failed, and assert HTTP 200 with only the
+   successful symbols in configured order.
+10. Parameterize total failure for a four-symbol category and the five-symbol
+    Asia-Pacific boundary. Assert HTTP 503 and the existing error payload.
+11. Assert a zero change quote remains a successful object; failure handling
+    must not confuse a zero with missing data.
+12. Capture logs for one partial failure and assert the category and failed
+    symbol are identifiable.
+13. Capture logs for all-failed and assert the selected category and selected
+    symbol count are identifiable.
+14. Preserve the existing stock-detail encoded-symbol round-trip test and add
+    representative `=` and dot symbols: `GC=F`, `CADUSD=X`, and `000001.SS`.
+15. Keep `test_compare_ui.py` proving S&P 500, Nasdaq, and TSX remain in the
+    flattened supported-symbol list.
 
-Add these tests:
+### B. Rendered Template And Accessibility Tests - `tests/test_market_tabs.py`
 
-1. `test_group_avg_cost_for_one_buy`
-   - Seed BUY 10 at 100 in CAD.
-   - Return a valid quote.
-   - Assert `group_avg_cost == 100.0`.
+1. Request `/` and assert the `Markets today` heading and visible `Live` text
+   occur before `Your Portfolio` and `portfolio-value` in rendered HTML.
+2. Assert one tablist and exactly six tab buttons in approved order.
+3. Assert North America is selected/focusable and all other tabs are
+   unselected with `tabindex="-1"`.
+4. Assert every tab and panel has a unique, reciprocal
+   `aria-controls`/`aria-labelledby` id pair.
+5. Assert North America is initially visible and all other panels are hidden.
+6. Assert every configured symbol appears exactly once as a market-item
+   `data-symbol` and has the correctly URL-encoded stock-detail href.
+7. Assert rendered item labels come from the approved configuration.
+8. Assert each market level and change span ships empty, with no hard-coded
+   quote-like number.
+9. Assert only the Currencies panel contains `1 CAD buys`.
+10. Assert no market breadth phrase such as `higher`, `lower`, or `of 4`
+    appears in the market section.
+11. Assert market cells are anchors rather than buttons or JavaScript-only
+    clickable wrappers.
+12. Assert tab controls are `type="button"` so they cannot submit a future
+    surrounding form.
 
-2. `test_group_avg_cost_weights_multiple_buys`
-   - Seed BUY 10 at 100 and BUY 5 at 130.
-   - Assert `(10 * 100 + 5 * 130) / 15 == 110.0`.
-   - Assert every row in the ticker group carries the same value.
+### C. Frontend Behavior Source/Meta Tests - `tests/test_market_tabs.py`
 
-3. `test_partial_sell_preserves_long_average_cost`
-   - Seed BUY 10 at 100 and SELL 4 at 110.
-   - Assert the six remaining shares have `group_avg_cost == 100.0`.
-   - This test must explicitly reject the old roadmap interpretation of
-     `group_cost_basis / net_qty == 93.333...`.
+1. Extract the market-overview JavaScript block and assert it reads the active
+   tab's category rather than using a constant flat chip list.
+2. Assert the API request includes the selected `category` query parameter.
+3. Assert managed market items are queried within a category panel, not across
+   the whole document.
+4. Assert response painting still finds instruments by `data-symbol` rather
+   than array index.
+5. Assert unanswered symbols receive `—` and have stale change text cleared.
+6. Assert fetch/HTTP/JSON failures update only the requested panel.
+7. Assert a per-category request token is incremented and checked before a
+   response paints, protecting newer same-category data.
+8. Assert activation synchronizes `aria-selected`, roving `tabindex`, and
+   panel `hidden` state.
+9. Assert click, ArrowLeft, ArrowRight, Home, and End are handled.
+10. Assert arrow navigation wraps first-to-last and last-to-first.
+11. Assert selecting a tab triggers an immediate refresh for that category.
+12. Assert the dashboard boot performs one North America market request, not
+    eager requests for all six categories.
+13. Assert the existing `setupAutoRefresh` callback refreshes the active
+    category only.
+14. Assert no new `setInterval` exists in `main.js`.
+15. Assert no localStorage or sessionStorage key is introduced for market tabs.
+16. Assert market formatting uses four decimals below absolute value 1 and two
+    otherwise, for both level and absolute move.
+17. Assert percentage formatting remains two decimals.
+18. Assert `formatPrice` in `common.js` is not modified to four decimals.
+19. Assert zero change gets the positive class and explicit plus/neutral text
+    according to the current behavior rather than becoming unavailable.
+20. Assert switching tabs does not call history, portfolio-summary,
+    allocation, watchlist, or volume-leader refresh functions.
 
-4. `test_later_buy_reweights_remaining_long_pool`
-   - Seed BUY 10 at 100, SELL 4 at 110, then BUY 4 at 120.
-   - The pool before the final buy is 6 shares at 100.
-   - Assert the final 10-share average is 108.
+### D. CSS And Responsive Contract Tests - `tests/test_market_tabs.py`
 
-5. `test_fully_closed_group_has_null_average_cost`
-   - Seed BUY 10 at 100 and SELL 10 at 110.
-   - Assert `group_avg_cost is None` on both rows.
+1. Assert the active panel uses CSS Grid with dynamic equal-width tracks, not
+   a fixed four-column declaration.
+2. Assert the panel has one outer border/background/radius/shadow treatment.
+3. Assert market items do not get individual box shadows.
+4. Assert market levels and changes use tabular numerals.
+5. Assert positive and negative values continue to use existing theme tokens.
+6. Assert linked cells have a visible `:focus-visible` rule.
+7. Assert long labels can shrink or wrap without forcing horizontal page
+   overflow (`min-width: 0` and suitable overflow/wrap behavior).
+8. Assert the phone media query makes the panel exactly two columns.
+9. Assert the phone rule does not make the last odd item span two columns.
+10. Assert the phone category tablist has plain horizontal overflow.
+11. Assert the phone tablist rule contains neither scroll snap nor legacy
+    `-webkit-overflow-scrolling`.
+12. Assert market panel items do not use horizontal overflow on phones.
+13. Assert market tab scrollbars are visually hidden while scrolling remains
+    enabled.
+14. Assert loading skeleton animation is disabled by the existing
+    `prefers-reduced-motion` handling.
+15. Preserve the existing chart-timeframe and dashboard-grid overflow tests.
 
-6. `test_long_to_short_crossing_starts_new_pool_at_sell_price`
-   - Seed BUY 5 at 100 and SELL 8 at 120.
-   - Five shares close the long; three shares open a short at 120.
-   - Assert `group_avg_cost == 120.0`.
+### E. Regression Tests
 
-7. `test_short_sales_have_weighted_average_open_price`
-   - Seed SELL 4 at 120 and SELL 2 at 90.
-   - Assert the six-share short average is 110.
+1. Keep existing `/api/indices` no-query smoke behavior green.
+2. Run all current `tests/test_routes.py` index partial/all-failure tests after
+   adapting their fixture data to North America defaults.
+3. Run `tests/test_compare_ui.py` to protect benchmark recommendations.
+4. Run `tests/test_ui_redesign.py` to protect dashboard ordering, phone chart
+   overflow, fonts, portfolio summary, and allocation rendering.
+5. Run `tests/test_dark_mode.py` because the market strip must remain legible
+   under both token sets.
+6. Run `tests/test_polling.py` or the repository's equivalent polling contract
+   tests to confirm `setupAutoRefresh` remains the only timer owner.
 
-8. `test_partial_short_cover_preserves_average_open_price`
-   - Seed SELL 4 at 120 and BUY 1 at 80.
-   - Assert the remaining short average is 120.
+### F. Focused Red Run
 
-9. `test_short_to_long_crossing_starts_new_pool_at_buy_price`
-   - Seed SELL 3 at 120 and BUY 5 at 90.
-   - Three shares close the short; two shares open a long at 90.
-   - Assert `group_avg_cost == 90.0`.
-
-10. `test_near_zero_position_has_null_average_cost`
-    - Seed quantities whose mathematical remainder is within `1e-9`.
-    - Assert `group_avg_cost is None`, locking the flat tolerance and
-      preventing a huge average caused by division by floating-point dust.
-
-11. `test_group_avg_cost_uses_stored_fx_in_cad_mode`
-    - Seed USD BUY 10 at 100 with stored FX 1.40 and USD BUY 10 at 120 with
-      stored FX 1.30.
-    - Provide a different live FX rate to prove it does not replace valid
-      historical rates on the cost side.
-    - Assert the CAD average is
-      `(10 * 100 * 1.40 + 10 * 120 * 1.30) / 20 == 148.0`.
-
-12. `test_group_avg_cost_is_native_in_native_mode`
-    - Use the same USD buys and request `?currency=NATIVE`.
-    - Assert `group_avg_cost == 110.0` and `display_currency == "USD"`.
-
-13. `test_partial_sell_preserves_cad_pool_average`
-    - Seed a USD BUY with a stored FX rate, then a partial SELL with a
-      different stored rate and price.
-    - Assert the remaining average stays at the BUY's CAD acquisition cost;
-      sale proceeds and the sale's FX rate do not reprice remaining shares.
-
-14. `test_unquoted_group_still_has_average_cost`
-    - Seed a CAD BUY and leave the fake quote absent.
-    - Assert existing live `group_*` keys remain absent as currently required.
-    - Assert `group_avg_cost == 100.0` is present because it needs no quote.
-
-15. `test_unquoted_usd_group_uses_stored_fx_for_cad_average`
-    - Seed a USD BUY with a valid stored FX rate and no quote.
-    - Assert the row keeps the existing CAD `price_display` behavior and its
-      `group_avg_cost` uses that stored rate.
-
-16. `test_unquoted_usd_group_without_fx_degrades_to_native_average`
-    - Seed a legacy USD BUY with `fx_rate=None` and no quote.
-    - Assert the route does not invent CAD conversion.
-    - Assert `display_currency == "USD"` and the native average is returned.
-
-17. Extend `test_group_fields_are_per_ticker`
-    - Give the two tickers different average prices.
-    - Assert each ticker's rows contain only that ticker's average.
-
-18. Extend the response-shape comments and the unquoted-group test so they
-    distinguish fact-derived `group_avg_cost` from quote-derived group fields.
-
-### B. Frontend Meta-Tests - `tests/test_ledger_average_price.py`
-
-Follow the repository's existing JavaScript source/meta-test style. Add a
-small function-block extractor local to the test file if needed; do not add a
-production helper only to satisfy tests.
-
-Add these tests:
-
-1. `test_group_sort_keys_reads_backend_average_cost`
-   - Assert `groupSortKeys` returns the first row's `group_avg_cost` as a
-     nullable `avgCost` value.
-   - This keeps one frontend reading point for group data.
-
-2. `test_group_row_renders_average_cost_in_price_cell`
-   - Inspect `buildGroupRow`.
-   - Assert the Price cell uses the group average rather than hard-coding `—`.
-   - Assert it formats through `formatNumber` and appends the group's existing
-     display currency.
-
-3. `test_group_row_uses_dash_when_average_cost_is_null`
-   - Assert an explicit null/unavailable branch writes `—`.
-   - Zero must not be treated as unavailable through a truthiness check; test
-     for an explicit null condition.
-
-4. `test_group_average_price_does_not_require_live_quote`
-   - Assert Price rendering occurs independently of the `hasLive` branch.
-   - This prevents a Yahoo failure from hiding a stored-facts average.
-
-5. `test_group_average_price_does_not_replace_quick_sell_price`
-   - Inspect `buildGroupRow` and assert quick sell still reads
-     `txs[0].price_now` into `priceNow`.
-   - Assert the sell form is not filled from `avgCost`.
-
-6. Keep `tests/test_ledger_col_count.py` green to prove the parent and detail
-   builders still have exactly 11 matching cell keys.
-
-7. Keep privacy tests green to prove Price is not accidentally added to the
-   masking set.
-
-## Implementation Plan
-
-Start only after the new tests fail for the intended missing behavior.
-
-### 1. Calculate the Open Cost Pool in `app.py`
-
-Modify the group-aggregate section of `list_transactions` after every row has
-received `price_display` and `display_currency`.
-
-For each ticker group:
-
-1. Initialize `position_qty = 0.0` and `position_cost = 0.0`.
-2. Replay `reversed(rows)` because `db.get_transactions()` returns rows
-   newest-first and cost pools must be chronological.
-3. For each row, read positive `qty`, `price_display`, and BUY/SELL type.
-4. Convert type to a signed quantity: BUY positive, SELL negative.
-5. If the pool is flat within `1e-9`, open a new pool with the transaction's
-   signed quantity and `abs(signed_qty) * price_display` cost magnitude.
-6. If the transaction has the same sign as the pool, add its quantity and
-   cost to form a weighted average.
-7. If it has the opposite sign, close up to the current absolute quantity at
-   the current average:
-   - Reduce pool cost in direct proportion to the quantity closed.
-   - Do not use the closing transaction's price for the shares that close.
-8. If the transaction exactly closes the pool within `1e-9`, set both pool
-   quantity and cost to zero.
-9. If the transaction crosses through flat, use the excess quantity to open
-   the opposite-side pool at that transaction's `price_display`.
-10. After replay, calculate `avg_cost = position_cost / abs(position_qty)` only
-    when `abs(position_qty) > 1e-9`; otherwise use `None`.
-11. Attach `group_avg_cost` to every row in the ticker group before any early
-    `quote is None` continuation.
-12. Keep the existing quote-derived aggregate calculations unchanged.
-
-Use positive cost magnitude for both long and short pools. The quantity sign
-identifies direction; the average itself remains a positive display price.
-
-Do not call market data, do not store the result, and do not change
-`group_cost_basis`. That field intentionally remains net cash flow for the
-portfolio gain formula, while `group_avg_cost` is the open-position cost pool.
-They answer different questions.
-
-### 2. Render the Average in `static/js/ledger.js`
-
-1. Update the parent-row comments to state that Price is the backend's open
-   position average and that it survives quote failure.
-2. Extend `groupSortKeys(txs)` with
-   `avgCost: first.group_avg_cost ?? null`.
-3. In `buildGroupRow`, read `avgCost` with `netQty` from `groupSortKeys(txs)`.
-4. Build the Price cell before the live-only cells, as today.
-5. If `avgCost === null`, set `priceCell.textContent = "—"`.
-6. Otherwise, use the first row's existing display currency and render
-   ```${formatNumber(avgCost)} ${currency}```.
-7. Do not put this logic inside `if (hasLive)`. Average cost is historical and
-   must render without `price_now`.
-8. Keep `priceNow = txs[0].price_now` and every quick-sell eligibility and form
-   assignment unchanged.
-9. Keep the cells object and `ledgerColOrder` behavior unchanged.
-
-### 3. Update Durable Comments
-
-1. Update the `app.py` group aggregate comment to document
-   `group_avg_cost` as a chronological open-position cost-pool average.
-2. Explain briefly why `group_avg_cost` differs from `group_cost_basis /
-   net_qty` after sales.
-3. Update the `ledger.js` group comments to remove the obsolete statement
-   that average cost is a future step.
-4. Do not copy this entire plan into code comments. Document only the
-   non-obvious distinction and quote-independent behavior.
-
-## Focused Verification
-
-After the intended red test run and implementation, run:
+After writing tests and before production edits, run:
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_ledger_groups.py tests/test_ledger_average_price.py
-python -m pytest tests/test_ledger_col_count.py tests/test_ledger_quick_sell.py tests/test_privacy_toggles.py
+python -m pytest tests/test_routes.py tests/test_market_tabs.py tests/test_compare_ui.py
 ```
 
-Then the lead agent must run the full suite:
+Expected failure reasons include missing `MARKET_CATEGORIES`, missing category
+validation, missing tab/panel markup, old global chip queries, no tab keyboard
+handler, and the old standalone-card CSS. Fix test syntax or fixture mistakes,
+but do not change production code until failures prove the intended gaps.
+
+## Implementation Sequence
+
+1. Add the ordered market configuration to `app.py` with the exact approved
+   keys, labels, symbols, and display names.
+2. Derive `INDEX_SYMBOLS` from that configuration.
+3. Pass the configuration from `/` to `templates/index.html`.
+4. Add optional category parsing and validation to `/api/indices`.
+5. Scope parallel fetches, ordered success output, all-failed behavior, and
+   logging to the selected category.
+6. Run backend-focused tests and make them green before touching frontend
+   behavior.
+7. Replace the old four-chip markup with the configuration-driven market
+   section before the portfolio hero.
+8. Add complete tabs/panels/links/accessibility markup and currency caption.
+9. Refactor market JavaScript to use active-panel state, scoped loading,
+   category requests, gap filling, and per-category race tokens.
+10. Add click and keyboard tab activation without persistence.
+11. Change boot and the shared polling callback to fetch only the active tab.
+12. Add the market-only adaptive precision formatter.
+13. Replace standalone chip CSS with the cohesive strip, divided cells,
+    heading row, tab controls, focus treatment, skeleton, and dark-mode-safe
+    token usage.
+14. Add the phone two-column panel and horizontal tab tray.
+15. Run the complete focused set and correct failures without weakening tests.
+16. Update durable comments in `app.py`, `index.html`, `main.js`, and
+    `style.css`; remove comments that still describe a fixed four-chip bar.
+17. Update `project-brief.md` Design Rules and dashboard description with the
+    final market-category contract. Do not leave durable rationale only here.
+
+## Verification Gates
+
+### Automated
+
+Run focused suites during implementation:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_routes.py tests/test_market_tabs.py tests/test_compare_ui.py tests/test_ui_redesign.py tests/test_dark_mode.py
+```
+
+Then the lead agent must run the complete suite:
 
 ```bash
 source .venv/bin/activate
 python -m pytest
 ```
 
-No implementation is complete until the full suite passes.
+Do not report completion unless the full suite passes. The first run may spend
+about 90 seconds warming pandas/numpy.
 
-## Browser GUI Approval Checklist
+### Live Smoke
 
-After pytest passes, stop and ask the user to inspect the browser before any
-commit or push.
+With the development server running and Yahoo reachable:
 
-1. A ticker with one BUY shows that purchase price in the parent Price cell.
-2. Multiple BUYs show the quantity-weighted average.
-3. Expanding the group still shows each transaction's individual price.
-4. A partial SELL leaves the remaining position's average unchanged.
-5. A fully closed ticker shows `—` in the parent Price cell.
-6. A short position shows its average opening sale price.
-7. Default CAD mode shows the CAD average and `CAD` suffix.
-8. “Show USD in USD” changes a USD ticker's parent average and suffix to its
-   native USD values.
-9. A ticker whose live quote fails still shows its parent average while live
-   Value/Gain cells show `—`.
-10. Quick Sell still fills today's exact native live price, not average cost.
-11. Parent-row expansion, sorting, column order, privacy masking, editing,
-    deletion, import, and polling still work.
-12. Desktop and narrow mobile/card layouts remain aligned with 11 columns.
+1. Request `/api/indices` and confirm it returns North America only.
+2. Request each valid category and confirm at least one real quote when Yahoo
+   supports the configured symbols.
+3. Request an invalid category and confirm HTTP 400 without a server error.
+4. If a configured Yahoo symbol proves permanently invalid during this smoke
+   test, stop and report it. Do not silently substitute a different product
+   instrument without user approval.
 
-## Completion Gates
+### Browser GUI Approval
 
-1. Plan in `feature.md` and roadmap item #1 marked `in progress`.
-2. User approves this plan before implementation.
-3. Write failing backend and frontend tests first.
-4. Confirm focused tests fail for the intended missing behavior.
-5. Implement the backend cost-pool replay.
-6. Implement parent-row rendering.
-7. Pass focused tests.
-8. Pass full `python -m pytest`.
-9. Obtain browser GUI approval.
-10. Only then ask whether to commit and push.
-11. Mark roadmap item #1 shipped only in the approved commit, with PR number
-    and date, or date only for a direct-main commit.
+After automated tests pass, wait for the user's browser approval. Ask the user
+to verify:
 
-## Definition Of Done
+1. Markets appear above the whole portfolio.
+2. The section reads as one coherent overview rather than separate cards.
+3. All six tabs show the approved instruments and retain the visible `Live`
+   label.
+4. Clicking every instrument opens the correct stock-detail page.
+5. Rapid tab changes never paint data into the wrong visible panel.
+6. Failed quotes show `—` without blanking healthy instruments.
+7. Currency values below 1 retain useful precision and `1 CAD buys` is clear.
+8. Desktop, narrow browser, and Android WebView layouts do not overflow.
+9. Phone tabs scroll smoothly and the instrument panel remains a two-column
+   grid.
+10. Light and dark themes both have readable borders, focus, green, and red.
 
-Each ledger ticker parent row shows the average acquisition price of its
-current open long or short position in the selected ledger display currency.
-Partial closes do not alter the average, crossings start a new opposite-side
-pool at the crossing transaction's price, flat groups show `—`, and quote
-failure does not hide the stored-facts average. All tests pass and the user
-approves the browser behavior.
+Do not commit or push before this GUI approval. After approval, ask whether to
+commit/push. Mark roadmap item #20 shipped only in that approved commit or PR.
+
+## Out Of Scope
+
+- Market-open/closed state and exchange-local timestamps.
+- Replacing the user-requested `Live` label.
+- Market breadth or a generated market-sentiment sentence.
+- User-customizable categories, symbols, or ordering.
+- Persisting the selected market tab.
+- Additional regions or categories beyond the approved six.
+- Interest rates, bond yields, VIX, DXY, sector indices, agriculture, or wheat.
+- Historical mini charts or sparklines inside market cells.
+- Changing quote/history cache policy.
+- Changing dashboard polling cadence.
+- Database, ledger, portfolio math, or Android-native changes.

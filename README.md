@@ -6,10 +6,11 @@ Prices and data come from [Yahoo Finance](https://finance.yahoo.com/) through th
 
 ## Dashboard
 
+- Markets today: six category tabs (North America, Europe, Asia-Pacific, Crypto, Commodities, Currencies) over one divided strip of live instruments
 - Value summary strip: total value, day change, total return, cost basis
 - Portfolio-value-over-time line chart, with a time-weighted Performance (TWR) view
 - Allocation donut carousel by ticker, sector, country, type, cap bucket, and currency
-- Index chips, watchlist and volume-leaders sidebar, and ticker search bar
+- Watchlist and volume-leaders sidebar, and ticker search bar
 - Privacy eye toggle to hide the amounts
 
 ![Dashboard in light theme](portfoliarr-dashboard.png)

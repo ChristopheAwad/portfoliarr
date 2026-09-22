@@ -166,71 +166,234 @@ def test_watchlist_delete_204_then_404(client, fake_market):
     assert client.delete("/api/watchlist/aapl").status_code == 404
 
 
-# ── Indices bar ───────────────────────────────────────────────────────
+# ── Market overview (the tabbed strip above the portfolio) ────────────
+# /api/indices takes an optional ?category= and fetches ONLY that
+# category's symbols; no query = North America (the live-smoke URL).
+# INDEX_SYMBOLS is a DERIVED flat list so comparison tests can still
+# prove benchmark symbols are supported.
+
+# The approved product configuration, locked here so a symbol/label/order
+# edit in app.py fails loudly. Insertion order in app.py is the order.
+APPROVED_CATEGORIES = [
+    ("north-america", "North America", [
+        ("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"),
+        ("^GSPTSE", "TSX"), ("^RUT", "Russell 2000"),
+    ]),
+    ("europe", "Europe", [
+        ("^STOXX", "STOXX Europe 600"), ("^FTSE", "FTSE 100"),
+        ("^GDAXI", "DAX"), ("^FCHI", "CAC 40"),
+    ]),
+    ("asia-pacific", "Asia-Pacific", [
+        ("^N225", "Nikkei 225"), ("^HSI", "Hang Seng"),
+        ("000001.SS", "Shanghai Composite"), ("^NSEI", "Nifty 50"),
+        ("^AXJO", "ASX 200"),
+    ]),
+    ("crypto", "Crypto", [
+        ("BTC-USD", "Bitcoin"), ("ETH-USD", "Ethereum"),
+        ("SOL-USD", "Solana"), ("XRP-USD", "XRP"),
+    ]),
+    ("commodities", "Commodities", [
+        ("GC=F", "Gold"), ("CL=F", "WTI Oil"),
+        ("HG=F", "Copper"), ("NG=F", "Natural Gas"),
+    ]),
+    ("currencies", "Currencies", [
+        ("CADUSD=X", "CAD/USD"), ("CADEUR=X", "CAD/EUR"),
+        ("CADGBP=X", "CAD/GBP"), ("CADJPY=X", "CAD/JPY"),
+    ]),
+]
+
+
+def category_symbols(key):
+    """The ordered Yahoo symbols configured for one category key."""
+    return [i["symbol"] for i in app_module.MARKET_CATEGORIES[key]["instruments"]]
+
+
+def seed_category(fake_market, key):
+    """Seed a valid quote for every instrument in one category."""
+    for inst in app_module.MARKET_CATEGORIES[key]["instruments"]:
+        fake_market.quotes[inst["symbol"]] = make_quote(
+            inst["symbol"], 100.0, 95.0
+        )
+
+
+def test_market_categories_match_approved_configuration():
+    """The six approved categories, in order, with exact instruments.
+    app.py is the product source of truth; this locks it so a silent
+    symbol/label/order edit cannot slip through."""
+    assert list(app_module.MARKET_CATEGORIES) == [k for k, _, _ in APPROVED_CATEGORIES]
+    for key, label, instruments in APPROVED_CATEGORIES:
+        cat = app_module.MARKET_CATEGORIES[key]
+        assert cat["label"] == label
+        assert [(i["symbol"], i["label"]) for i in cat["instruments"]] == instruments
+
+
+def test_index_symbols_is_derived_flattened_and_unique():
+    """INDEX_SYMBOLS stays as a flat compatibility list — every configured
+    symbol exactly once, in category order. The comparison tests use it to
+    prove S&P 500 / Nasdaq / TSX remain supported benchmarks."""
+    expected = [
+        symbol
+        for _, _, instruments in APPROVED_CATEGORIES
+        for symbol, _ in instruments
+    ]
+    assert INDEX_SYMBOLS == expected
+    assert len(INDEX_SYMBOLS) == len(set(INDEX_SYMBOLS))
+
+
+def test_indices_defaults_to_north_america(client, fake_market):
+    """No query param = the live-smoke URL, and it means North America."""
+    seed_category(fake_market, "north-america")
+    res = client.get("/api/indices")
+    assert res.status_code == 200
+    assert [q["symbol"] for q in res.get_json()] == category_symbols("north-america")
+
+
+def test_indices_empty_category_defaults_to_north_america(client, fake_market):
+    """?category= (empty) behaves like no category at all."""
+    seed_category(fake_market, "north-america")
+    res = client.get("/api/indices?category=")
+    assert res.status_code == 200
+    assert [q["symbol"] for q in res.get_json()] == category_symbols("north-america")
+
+
+@pytest.mark.parametrize("key", [k for k, _, _ in APPROVED_CATEGORIES])
+def test_indices_each_valid_category_returns_only_that_category(client, fake_market, key):
+    """Every approved category is fetchable and returns exactly its own
+    instruments, in configured order, when all quote successfully."""
+    seed_category(fake_market, key)
+    res = client.get(f"/api/indices?category={key}")
+    assert res.status_code == 200
+    assert [q["symbol"] for q in res.get_json()] == category_symbols(key)
+
+
+def test_indices_category_isolation_no_other_symbols_fetched(client, fake_market, monkeypatch):
+    """Requesting Europe must not touch any other category's symbols —
+    active-tab-only fetching keeps Yahoo traffic to what's on screen."""
+    calls = []
+    original = app_module.get_quote
+    monkeypatch.setattr(
+        app_module, "get_quote",
+        lambda symbol: (calls.append(symbol), original(symbol))[1],
+    )
+    seed_category(fake_market, "europe")
+    res = client.get("/api/indices?category=europe")
+    assert res.status_code == 200
+    assert set(calls) == set(category_symbols("europe"))
+
+
+def test_indices_invalid_category_returns_400_without_fetching(client, fake_market, monkeypatch):
+    """An unknown category is a client error, rejected BEFORE any quote
+    call — no Yahoo traffic for a request the server will refuse."""
+    calls = []
+    monkeypatch.setattr(app_module, "get_quote", lambda symbol: calls.append(symbol))
+    res = client.get("/api/indices?category=nope")
+    assert res.status_code == 400
+    assert res.get_json() == {"error": "invalid market category"}
+    assert calls == []
+
 
 def test_indices_partial_failure_returns_successes_only(client, fake_market):
-    """Per-symbol resilience: two dead symbols must NOT blank the bar —
-    the live two come back, the dead two are simply ABSENT (the frontend
-    infers which chips show "—")."""
-    for symbol in INDEX_SYMBOLS[:2]:
+    """Per-symbol resilience on a NON-default category: two dead Europe
+    symbols must not blank the strip — the live two come back, in order."""
+    europe = category_symbols("europe")
+    for symbol in europe[:2]:
         fake_market.quotes[symbol] = make_quote(symbol, 100.0, 95.0)
-
-    res = client.get("/api/indices")
-    quotes = res.get_json()
+    res = client.get("/api/indices?category=europe")
     assert res.status_code == 200
-    assert [q["symbol"] for q in quotes] == INDEX_SYMBOLS[:2]
+    assert [q["symbol"] for q in res.get_json()] == europe[:2]
 
 
-def test_indices_all_fail_returns_503(client, fake_market):
-    """ONLY when every symbol fails is the endpoint considered sick:
-    503 = 'it's me, not you, try again later'."""
-    res = client.get("/api/indices")
+@pytest.mark.parametrize(
+    "query",
+    ["", "?category=north-america", "?category=crypto", "?category=asia-pacific"],
+)
+def test_indices_all_fail_returns_503(client, fake_market, query):
+    """ONLY when every symbol in the SELECTED category fails is the
+    endpoint sick: 503. Covers no-query, two 4-symbol categories, and the
+    5-symbol Asia-Pacific boundary."""
+    res = client.get(f"/api/indices{query}")
     assert res.status_code == 503
+    assert res.get_json() == {"error": "quote service unavailable"}
 
 
-def test_indices_all_succeed_returns_full_list(client, fake_market):
-    for symbol in INDEX_SYMBOLS:
-        fake_market.quotes[symbol] = make_quote(symbol, 100.0, 95.0)
+def test_indices_zero_change_quote_is_a_success(client, fake_market):
+    """A flat market (price == previous close) is a perfectly good quote:
+    change 0 must never be mistaken for missing data."""
+    fake_market.quotes["^GSPC"] = make_quote("^GSPC", 100.0, 100.0)
     res = client.get("/api/indices")
     assert res.status_code == 200
-    assert len(res.get_json()) == len(INDEX_SYMBOLS)
+    body = res.get_json()
+    assert len(body) == 1
+    assert body[0]["symbol"] == "^GSPC"
+    assert body[0]["change"] == 0.0
 
 
-# ── Dashboard page (the indices chips) ────────────────────────────────
-
-def dashboard_chip_tags(html):
-    """Pull each chip's opening tag out of the rendered dashboard HTML,
-    keyed by its data-symbol — the same hook main.js fills live quotes
-    by. (The chips are static template HTML, so this is a pure string
-    check: no fixtures, no fakes, no network.)"""
-    tags = re.findall(r'<a class="chip"[^>]*>', html)
-    return {re.search(r'data-symbol="([^"]+)"', tag).group(1): tag
-            for tag in tags}
-
-
-def test_dashboard_chips_are_links_to_detail_pages(client):
-    """Every managed chip is a real <a> to the detail page, carrying BOTH
-    hooks: data-symbol (main.js fills the live quote by it) and href (the
-    browser navigates by it). Expected hrefs derive from the app's own
-    INDEX_SYMBOLS — one source of truth — with ^ percent-encoded exactly
-    as Flask's url_for emits it (^GSPC → /stock/%5EGSPC; the route
-    decodes it back). A future chip added without a link fails here,
-    keeping the AGENTS.md 'two edits per chip' contract honest."""
-    expected = {s: f"/stock/{quote(s, safe='')}" for s in INDEX_SYMBOLS}
-    chips = dashboard_chip_tags(client.get("/").get_data(as_text=True))
-    assert set(chips) == set(expected)   # exactly the managed chips
-    for symbol, href in expected.items():
-        assert f'href="{href}"' in chips[symbol]
-
-
-def test_encoded_index_symbol_url_round_trips(client):
-    """The chip hrefs ship ^ percent-encoded (raw ^ is illegal in a URL
-    path) — Flask must decode %5E back so the detail page's identity hook
-    stamps the raw symbol, exactly how the search dropdown's
-    encodeURIComponent links have always worked."""
-    res = client.get("/stock/%5EGSPC")
+def test_indices_partial_failure_logs_category_and_symbol(client, fake_market, caplog):
+    """A single failed symbol logs WHICH category and WHICH symbol — the
+    only on-screen evidence is a bare em dash, so the log is the diagnosis."""
+    import logging
+    europe = category_symbols("europe")
+    fake_market.quotes[europe[0]] = make_quote(europe[0], 100.0, 95.0)
+    with caplog.at_level(logging.WARNING):
+        res = client.get("/api/indices?category=europe")
     assert res.status_code == 200
-    assert 'data-symbol="^GSPC"' in res.get_data(as_text=True)
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "europe" in text
+    assert any(symbol in text for symbol in europe[1:])
+
+
+def test_indices_all_fail_logs_category_and_count(client, fake_market, caplog):
+    """Total failure logs the selected category AND how many symbols were
+    attempted — 'all N failed (crypto)' tells Yahoo-down from one bad symbol."""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        res = client.get("/api/indices?category=crypto")
+    assert res.status_code == 503
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "crypto" in text
+    assert str(len(category_symbols("crypto"))) in text
+
+
+# ── Dashboard page (the market strip's rendered links) ────────────────
+
+def market_item_tags(html):
+    """Pull each market item's opening <a> tag out of the rendered
+    dashboard HTML, keyed by data-symbol — the hook main.js fills live
+    quotes by. HTML comments are stripped first so a teaching comment
+    that mentions a tag cannot be mistaken for real markup."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    tags = [t for t in re.findall(r"<a\s[^>]*>", html) if "market-item" in t]
+    return {
+        re.search(r'data-symbol="([^"]+)"', tag).group(1): tag
+        for tag in tags
+    }
+
+
+def test_dashboard_market_items_are_links_to_detail_pages(client):
+    """Every configured instrument is a real <a> to its detail page,
+    carrying BOTH hooks: data-symbol (main.js fills the quote by it) and
+    href (the browser navigates by it). Expected hrefs come from url_for
+    itself — the same builder templates/index.html uses — so encoding of
+    ^, = and . can never drift between test and app."""
+    html = client.get("/").get_data(as_text=True)
+    items = market_item_tags(html)
+    assert set(items) == set(INDEX_SYMBOLS)   # every configured symbol
+    with app_module.app.test_request_context():
+        from flask import url_for
+        for symbol in INDEX_SYMBOLS:
+            expected = url_for("stock_page", symbol=symbol)
+            assert f'href="{expected}"' in items[symbol]
+
+
+@pytest.mark.parametrize("symbol", ["^GSPC", "GC=F", "CADUSD=X", "000001.SS"])
+def test_encoded_market_symbol_url_round_trips(client, symbol):
+    """Market hrefs ship symbols percent-encoded where the URL requires
+    it (raw ^ is illegal in a path; = and . are legal). Flask must decode
+    the path back so the detail page's identity hook stamps the raw
+    symbol — how the search dropdown's encodeURIComponent links work too."""
+    res = client.get(f"/stock/{quote(symbol, safe='')}")
+    assert res.status_code == 200
+    assert f'data-symbol="{symbol}"' in res.get_data(as_text=True)
 
 
 # ── Ledger header (column order / reorderable columns) ────────────────

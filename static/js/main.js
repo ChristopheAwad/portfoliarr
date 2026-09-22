@@ -1,5 +1,5 @@
-// Frontend logic for the DASHBOARD page: the live indices bar, the live
-// watchlist, and the transaction ledger.
+// Frontend logic for the DASHBOARD page: the tabbed market overview, the
+// live watchlist, and the transaction ledger.
 //
 // Talks to the Flask backend over HTTP only (fetch -> JSON -> DOM).
 // Knows nothing about yfinance, Flask, or Python.
@@ -10,79 +10,194 @@
 // which base.html loads BEFORE this file. They are plain globals here;
 // defining them again would just shadow the shared ones.
 
-// Chips managed by JS = those carrying a data-symbol attribute.
-// Chips without one (the static placeholders) are invisible to this code.
-function managedChips() {
-    return document.querySelectorAll(".chip[data-symbol]");
+// MARKET OVERVIEW BEGIN
+// The tabbed market strip above the portfolio. ONE category is active at a
+// time, and only that category is fetched — on initial load, on tab click,
+// and on each poll. Items live inside their category's panel and are found
+// by data-symbol (never DOM position), so one category's response can never
+// touch another panel's cells.
+
+// Which category tab is shown. North America is the default and matches the
+// template's initially-selected tab. Not persisted: a fresh load always
+// starts on the default.
+let activeMarketCategory = "north-america";
+
+// Per-category request tokens. A slow response that finishes after a NEWER
+// request for the same category must not overwrite it — the token is checked
+// before every paint, so only the latest request for a category wins.
+const marketRequestTokens = {};
+
+// The panel element that holds one category's market items.
+function marketPanel(category) {
+    return document.querySelector(`.market-panel[data-category="${category}"]`);
 }
 
-// Set every managed chip to a placeholder:
-// EMPTY while waiting for data (the CSS :empty skeleton shimmer shows),
-// "—" when the backend is unreachable.
-function setChipState(text) {
-    managedChips().forEach((chip) => {
-        chip.querySelector(".index-price").textContent = text;
-        chip.querySelector(".index-change").textContent = "";
+// Managed items = the data-symbol anchors inside ONE panel. Scoping the
+// query to a panel is what keeps a Europe response from touching North
+// America's (or any hidden panel's) cells.
+function managedMarketItems(panel) {
+    return panel.querySelectorAll(".market-item[data-symbol]");
+}
+
+// Blank one panel's cells:
+// EMPTY while waiting (the CSS :empty shimmer shows),
+// "—" when the backend is unreachable for the whole category.
+function setMarketPanelValues(panel, text) {
+    managedMarketItems(panel).forEach((item) => {
+        item.querySelector(".market-item-price").textContent = text;
+        item.querySelector(".market-item-change").textContent = "";
     });
 }
 
-// Fill one chip from one quote object (a parsed piece of the JSON list).
-function updateChip(quote) {
-    // Find the chip by its data-symbol hook — by meaning, not position.
-    const chip = document.querySelector(`.chip[data-symbol="${quote.symbol}"]`);
-    if (!chip) return; // backend knows a symbol our HTML doesn't show yet
+// Adaptive precision for MARKET levels (index points, FX rates). A value
+// below 1 in absolute terms (CAD/USD ≈ 0.73) needs four decimals to be
+// readable; everything else keeps two. Deliberately NOT formatPrice — that
+// shared helper stays two-decimal for portfolio/ledger/stock money.
+function formatMarketLevel(value) {
+    const digits = Math.abs(value) < 1 ? 4 : 2;
+    return new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+    }).format(value);
+}
 
-    const priceEl = chip.querySelector(".index-price");
-    const changeEl = chip.querySelector(".index-change");
+// One text node with a className, built through createElement + textContent
+// (never innerHTML) so a quote string can never be parsed as markup.
+function marketTextSpan(className, text) {
+    const span = document.createElement("span");
+    span.className = className;
+    span.textContent = text;
+    return span;
+}
 
+// Fill one market item from one quote object (a parsed JSON piece).
+function updateMarketItem(panel, quote) {
+    // Find the item by its data-symbol hook — by meaning, not position.
+    const item = panel.querySelector(`.market-item[data-symbol="${quote.symbol}"]`);
+    if (!item) return; // backend knows a symbol our panel doesn't show yet
+
+    const priceEl = item.querySelector(".market-item-price");
+    const changeEl = item.querySelector(".market-item-change");
+
+    // Zero counts as positive, matching the app's existing chip behavior.
     const positive = quote.change >= 0;
     const sign = positive ? "+" : "";
 
-    // textContent (never innerHTML): writes plain text, immune to HTML
-    // injection. innerHTML would interpret strings as markup.
-    // Every price carries its native currency code ("USD", "CAD", ...) —
-    // per the brief: native currency display, no FX conversion.
-    priceEl.textContent = `${formatPrice(quote.price)} ${quote.currency}`;
-    changeEl.textContent =
-        `${sign}${formatPrice(quote.change)} (${sign}${quote.change_pct.toFixed(2)}%)`;
+    // textContent (never innerHTML): plain text, immune to HTML injection.
+    // Every price carries its native currency code — native display, no FX.
+    priceEl.textContent = `${formatMarketLevel(quote.price)} ${quote.currency}`;
 
-    // One call each: set green (pos) or red (neg), replacing the other.
+    // Absolute move and percentage are SEPARATE spans, not one string:
+    // the percentage must carry the stronger weight (percentages compare
+    // across instruments, point moves do not), and CSS cannot weigh half
+    // of a single text node. Both still ship from one quote, in one paint.
+    changeEl.replaceChildren(
+        marketTextSpan("market-item-move", `${sign}${formatMarketLevel(quote.change)}`),
+        marketTextSpan("market-item-pct", `(${sign}${quote.change_pct.toFixed(2)}%)`)
+    );
+
+    // One call each: green (pos) or red (neg), replacing the other.
     changeEl.classList.toggle("pos", positive);
     changeEl.classList.toggle("neg", !positive);
 }
 
-// One refresh cycle: HTTP GET -> check status -> parse JSON -> paint DOM.
-async function refreshIndices() {
+// One refresh cycle for ONE category: claim token -> clear -> fetch -> paint.
+async function refreshMarketOverview(category = activeMarketCategory) {
+    const panel = marketPanel(category);
+    if (!panel) return;
+
+    // Claim this request's token BEFORE the await; a response that finishes
+    // after a newer request for the same category is discarded below.
+    marketRequestTokens[category] = (marketRequestTokens[category] || 0) + 1;
+    const requestToken = marketRequestTokens[category];
+
+    setMarketPanelValues(panel, ""); // shimmer while loading
+
     try {
-        const response = await fetch("/api/indices");
+        const response = await fetch(
+            `/api/indices?category=${encodeURIComponent(category)}`
+        );
         // fetch does NOT throw on 4xx/5xx — only on network failure.
-        // A 503 arrives as a "successful" fetch with ok === false.
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const quotes = await response.json(); // raw bytes -> JS objects
-        for (const quote of quotes) updateChip(quote);
 
-        // Gap-fill: the backend returns successes only, so any managed chip
-        // whose symbol did NOT arrive just failed while its siblings lived.
-        // Set = O(1) membership test for "did this symbol answer?".
+        if (marketRequestTokens[category] !== requestToken) return; // stale
+
+        for (const quote of quotes) updateMarketItem(panel, quote);
+
+        // Gap-fill: the backend returns successes only, so any item whose
+        // symbol did NOT arrive just failed while its siblings lived.
         const answered = new Set(quotes.map((q) => q.symbol));
-        managedChips().forEach((chip) => {
-            if (!answered.has(chip.dataset.symbol)) {
-                chip.querySelector(".index-price").textContent = "—";
-                chip.querySelector(".index-change").textContent = "";
+        managedMarketItems(panel).forEach((item) => {
+            if (!answered.has(item.dataset.symbol)) {
+                item.querySelector(".market-item-price").textContent = "—";
+                item.querySelector(".market-item-change").textContent = "";
             }
         });
     } catch (err) {
-        console.error("indices refresh failed:", err);
-        setChipState("—");
+        if (marketRequestTokens[category] !== requestToken) return; // stale
+        console.error(`market refresh failed for ${category}:`, err);
+        setMarketPanelValues(panel, "—");
     }
 }
+
+// Activate a category tab: sync ARIA + roving tabindex, show its panel, hide
+// the others, focus the tab, and fetch that category's quotes. Switching
+// does NOT touch the portfolio/watchlist/chart — those have their own
+// refresh cycles.
+function activateMarketTab(tab) {
+    const category = tab.dataset.category;
+    if (category === activeMarketCategory) return;
+    activeMarketCategory = category;
+
+    document.querySelectorAll(".market-tab").forEach((t) => {
+        const selected = t === tab;
+        t.classList.toggle("active", selected);
+        t.setAttribute("aria-selected", selected ? "true" : "false");
+        t.tabIndex = selected ? 0 : -1;
+    });
+    document.querySelectorAll(".market-panel").forEach((p) => {
+        p.hidden = p.dataset.category !== category;
+    });
+
+    tab.focus();
+    refreshMarketOverview(category);
+}
+
+// Wire the six tabs: click to select, plus the WAI-ARIA keyboard model
+// (ArrowLeft/ArrowRight move with wrap, Home/End jump to the ends).
+function setupMarketTabs() {
+    const tabs = Array.from(document.querySelectorAll(".market-tab"));
+    tabs.forEach((tab) => {
+        tab.addEventListener("click", () => activateMarketTab(tab));
+    });
+
+    const tabBar = document.querySelector(".market-tabs");
+    if (!tabBar) return;
+    tabBar.addEventListener("keydown", (event) => {
+        const current = tabs.indexOf(document.activeElement);
+        if (current === -1) return;
+
+        let next = current;
+        if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+        else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = tabs.length - 1;
+        else return;
+
+        event.preventDefault();
+        activateMarketTab(tabs[next]);
+    });
+}
+// MARKET OVERVIEW END
 
 // Boot sequence moved to the bottom of the file — every function above must
 // be defined before it runs.
 
 // ---------------------------------------------------------------------------
-// WATCHLIST — same refresh rhythm as the indices bar, but the rows are
-// dynamic. The chips are fixed HTML the backend merely fills; watchlist rows
+// WATCHLIST — same refresh rhythm as the market overview, but the rows are
+// dynamic. The market items are fixed HTML the backend merely fills;
+// watchlist rows
 // exist only because the backend's symbol list says so, so JS builds (and
 // rebuilds) the <li> elements itself every cycle.
 // ---------------------------------------------------------------------------
@@ -215,9 +330,9 @@ async function refreshWatchlist() {
         renderWatchlistRows(payload.symbols);
         for (const quote of payload.quotes) updateWatchRow(quote);
 
-        // Gap-fill, same Set-membership test as the indices bar: any stored
-        // symbol whose quote didn't answer just failed while its siblings
-        // lived.
+        // Gap-fill, same Set-membership test as the market overview: any
+        // stored symbol whose quote didn't answer just failed while its
+        // siblings lived.
         const answered = new Set(payload.quotes.map((q) => q.symbol));
         watchlistEl.querySelectorAll(".watchlist-item").forEach((row) => {
             if (!answered.has(row.dataset.symbol)) {
@@ -352,7 +467,7 @@ if (hidePortfolioToggle) {
 // and paints them.
 //
 // The spans ship blank in index.html so the old mockup numbers can never
-// masquerade as live data — same rule as the indices chips.
+// masquerade as live data — same rule as the market overview.
 // ---------------------------------------------------------------------------
 
 // Grab the pieces this section manages, once, at load time.
@@ -1416,16 +1531,15 @@ volumeLeadersEl.addEventListener("click", (event) => {
 // the browser reaches it, and only now are all the functions above defined.
 // ---------------------------------------------------------------------------
 
-// 1. Blank both managed sections so the outdated mockup numbers can never
-//    masquerade as live data. The indices chips ship EMPTY — the CSS
-//    :empty skeleton shimmer stands in until real data lands — and the
-//    watchlist starts truly empty, painted by refreshWatchlist within the
-//    second.
-setChipState("");
-
-// 2. Fetch all quote-driven sections immediately — no waiting for the
-//    first interval. (The ledger lives on /ledger with its own timer.)
-refreshIndices();
+// 1. Wire the market tabs (click + keyboard) and fetch every quote-driven
+//    section immediately — no waiting for the first interval. (The ledger
+//    lives on /ledger with its own timer.) The market overview ships EMPTY
+//    from the template — the CSS :empty shimmer stands in until real data
+//    lands — and refreshMarketOverview fetches ONLY the active category
+//    (North America by default), never all six. The watchlist starts
+//    truly empty, painted by refreshWatchlist within the second.
+setupMarketTabs();
+refreshMarketOverview();
 refreshWatchlist();
 refreshVolumeLeaders();
 refreshPortfolioSummary();
@@ -1456,13 +1570,15 @@ chartReady?.then?.(() => {
     }
 });
 
-// 3. Poll. ONE timer drives all quote-driven cycles: indices, watchlist,
-//    volume leaders, portfolio summary, and the active allocation dimension
-//    all change at the same rate. setupAutoRefresh owns the interval and
-//    wires visibility/online events so the page refreshes instantly when
-//    the user returns (see common.js).
+// 2. Poll. ONE timer drives all quote-driven cycles: the ACTIVE market
+//    category, watchlist, volume leaders, portfolio summary, and the
+//    active allocation dimension all change at the same rate.
+//    setupAutoRefresh owns the interval and wires visibility/online events
+//    so the page refreshes instantly when the user returns (see common.js).
+//    Only the selected market category is polled — inactive tabs stay
+//    unfetched until the user opens them.
 setupAutoRefresh(() => {
-    refreshIndices();
+    refreshMarketOverview();
     refreshWatchlist();
     refreshVolumeLeaders();
     refreshPortfolioSummary();

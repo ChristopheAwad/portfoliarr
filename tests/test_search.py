@@ -87,7 +87,7 @@ def test_search_empty_results_are_a_normal_200(client, fake_search):
 
 def test_search_failure_returns_503(client, fake_search):
     """A raised exception (any yfinance failure) becomes 503 Service
-    Unavailable — the same all-failed convention as the indices bar."""
+    Unavailable — the same all-failed convention as the market overview."""
     fake_search["error"] = ConnectionError("yahoo down")
     res = client.get("/api/search?q=apple")
     assert res.status_code == 503

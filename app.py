@@ -59,11 +59,83 @@ app = Flask(__name__)
 # time is safe on every startup.
 db.init()
 
-# The symbols shown in the dashboard's indices bar. This is a product
-# decision (which markets the bar tracks), so it lives in the route layer,
-# not in the generic data module. Adding a chip = adding a string here AND
-# a matching data-symbol attribute on the chip in templates/index.html.
-INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^GSPTSE", "BTC-USD"]
+# The dashboard's market overview is TABBED: one category on screen at a
+# time, so /api/indices fetches only that category. This is a product
+# decision (which markets each tab tracks), so it lives in the route
+# layer, not in the generic data module. Insertion order here IS the
+# display order of tabs and instruments. The template renders tabs,
+# panels, labels and links straight from this dict (one source of truth);
+# INDEX_SYMBOLS below is a DERIVED flat list kept only for code that
+# needs "every supported symbol" (the comparison tests).
+MARKET_CATEGORIES = {
+    "north-america": {
+        "label": "North America",
+        "instruments": [
+            {"symbol": "^GSPC", "label": "S&P 500"},
+            {"symbol": "^IXIC", "label": "Nasdaq"},
+            {"symbol": "^GSPTSE", "label": "TSX"},
+            {"symbol": "^RUT", "label": "Russell 2000"},
+        ],
+    },
+    "europe": {
+        "label": "Europe",
+        "instruments": [
+            {"symbol": "^STOXX", "label": "STOXX Europe 600"},
+            {"symbol": "^FTSE", "label": "FTSE 100"},
+            {"symbol": "^GDAXI", "label": "DAX"},
+            {"symbol": "^FCHI", "label": "CAC 40"},
+        ],
+    },
+    "asia-pacific": {
+        "label": "Asia-Pacific",
+        "instruments": [
+            {"symbol": "^N225", "label": "Nikkei 225"},
+            {"symbol": "^HSI", "label": "Hang Seng"},
+            {"symbol": "000001.SS", "label": "Shanghai Composite"},
+            {"symbol": "^NSEI", "label": "Nifty 50"},
+            {"symbol": "^AXJO", "label": "ASX 200"},
+        ],
+    },
+    "crypto": {
+        "label": "Crypto",
+        "instruments": [
+            {"symbol": "BTC-USD", "label": "Bitcoin"},
+            {"symbol": "ETH-USD", "label": "Ethereum"},
+            {"symbol": "SOL-USD", "label": "Solana"},
+            {"symbol": "XRP-USD", "label": "XRP"},
+        ],
+    },
+    "commodities": {
+        "label": "Commodities",
+        "instruments": [
+            {"symbol": "GC=F", "label": "Gold"},
+            {"symbol": "CL=F", "label": "WTI Oil"},
+            {"symbol": "HG=F", "label": "Copper"},
+            {"symbol": "NG=F", "label": "Natural Gas"},
+        ],
+    },
+    "currencies": {
+        "label": "Currencies",
+        "instruments": [
+            {"symbol": "CADUSD=X", "label": "CAD/USD"},
+            {"symbol": "CADEUR=X", "label": "CAD/EUR"},
+            {"symbol": "CADGBP=X", "label": "CAD/GBP"},
+            {"symbol": "CADJPY=X", "label": "CAD/JPY"},
+        ],
+    },
+}
+
+# Flat, ordered list of every configured symbol (category order preserved).
+# DERIVED — never edit this by hand; add symbols in MARKET_CATEGORIES above.
+INDEX_SYMBOLS = [
+    inst["symbol"]
+    for cat in MARKET_CATEGORIES.values()
+    for inst in cat["instruments"]
+]
+
+# The category served when ?category= is missing or empty: the live-smoke
+# URL /api/indices (no query) must keep returning a real payload.
+DEFAULT_MARKET_CATEGORY = "north-america"
 
 # Product decision: which allocation dimensions the donut carousel offers.
 # Each key maps to a human-readable label (frontend reads, never re-derives)
@@ -156,7 +228,10 @@ def log_request_duration(response):
 # root URL "/" (e.g. http://localhost:5000/).
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # The dashboard renders the market overview's tabs/panels/links from
+    # MARKET_CATEGORIES, so the config rides into the template — the same
+    # dict /api/indices validates against (one source of truth).
+    return render_template("index.html", market_categories=MARKET_CATEGORIES)
 
 
 @app.route("/preferences")
@@ -179,13 +254,28 @@ def ledger_page():
     return render_template("ledger.html")
 
 
-# JSON endpoint that powers the live indices bar. The browser's JavaScript
-# fetches this URL. Returns a JSON *list* of quote dicts.
+# JSON endpoint that powers the dashboard's tabbed market overview. The
+# browser's JavaScript fetches this URL for the ACTIVE category only.
+# Returns a JSON *list* of quote dicts (successes only).
 @app.route("/api/indices")
 def index_quotes():
-    # Per-symbol resilience: each chip is fetched independently, so one
-    # dead symbol cannot blank the whole bar. Failures are skipped.
-    # Fetch all index quotes in parallel — each is an independent
+    """Return live quotes for ONE market category (the active tab).
+
+    ?category= selects the tab; missing/empty = North America, so the
+    no-query live-smoke URL keeps returning a real payload. An unknown
+    category is a 400 BEFORE any quote call. Per-symbol resilience: one
+    dead symbol is skipped (its cell shows "—") and only an ALL-dead
+    category earns a 503.
+    """
+    category = request.args.get("category", "").strip() or DEFAULT_MARKET_CATEGORY
+    if category not in MARKET_CATEGORIES:
+        # Client error before any quote call — no Yahoo traffic for a
+        # request the server will refuse.
+        return jsonify({"error": "invalid market category"}), 400
+
+    symbols = [inst["symbol"] for inst in MARKET_CATEGORIES[category]["instruments"]]
+
+    # Fetch the category's quotes in parallel — each is an independent
     # yfinance call, so threading cuts wall time from N×sequential to
     # ~1×slowest. Same pattern as portfolio_history's history fetch.
     def fetch_index_quote(symbol):
@@ -194,38 +284,33 @@ def index_quotes():
         except Exception:
             # Boundary rule: catch WIDE at the edge of the system (yfinance
             # can fail in many ways) and degrade gracefully, per symbol.
-            # TIER 1: on screen the chip just shows "—" with no reason —
-            # this log line IS the reason. exc_info=True attaches the full
-            # traceback, which is exactly what a WIDE catch needs: the
-            # actual cause is the thing we don't know.
+            # On screen the cell just shows "—" — this log line IS the
+            # reason, and it names the CATEGORY so a panel-wide blank is
+            # diagnosable from server output alone.
             app.logger.warning(
-                "index quote failed for %s — chip shows \"—\"", symbol,
-                exc_info=True,
+                "market quote failed for %s (category=%s) — cell shows \"—\"",
+                symbol, category, exc_info=True,
             )
             return symbol, None
 
     quotes_map = {}
-    with ThreadPoolExecutor(
-        max_workers=min(len(INDEX_SYMBOLS), 8)
-    ) as pool:
-        for symbol, quote in pool.map(fetch_index_quote, INDEX_SYMBOLS):
+    with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as pool:
+        for symbol, quote in pool.map(fetch_index_quote, symbols):
             if quote is not None:
                 quotes_map[symbol] = quote
 
-    # Only when EVERY symbol fails is the whole endpoint considered sick:
+    # Only when EVERY symbol in this category fails is the endpoint sick:
     # 503 = "Service Unavailable — it's me, not you, try again later."
     if len(quotes_map) == 0:
-        # TIER 1: this is the endpoint's loudest cry for help — every
-        # symbol failing at once usually means Yahoo is down or the
-        # network is gone, not four unlucky symbols.
         app.logger.warning(
-            "all %d index symbols failed — serving 503", len(INDEX_SYMBOLS)
+            "all %d market symbols failed (category=%s) — serving 503",
+            len(symbols), category,
         )
         return jsonify({"error": "quote service unavailable"}), 503
 
-    # Successes only in original order: failed symbols are absent.
-    # The frontend infers which chips to mark unavailable ("—").
-    quotes = [quotes_map[s] for s in INDEX_SYMBOLS if s in quotes_map]
+    # Successes only in configured order: failed symbols are absent. The
+    # frontend infers which cells to mark unavailable ("—").
+    quotes = [quotes_map[s] for s in symbols if s in quotes_map]
     return jsonify(quotes)
 
 
@@ -472,7 +557,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     def fetch_history(symbol):
         """One worker's job: fetch one ticker, or report it dead.
 
-        Per-ticker resilience, the same rule as the indices bar: a
+        Per-ticker resilience, the same rule as the market overview: a
         dead/delisted ticker is skipped, its contribution is 0 for the
         whole period — never a 503 for the whole chart. The try/except
         lives INSIDE the worker (not around the pool) so one ticker's
@@ -1670,10 +1755,11 @@ def portfolio_allocation():
 # JSON endpoint powering the live watchlist. One route, two payloads:
 #   "symbols" — the full stored list (source of truth for which rows exist)
 #   "quotes"  — per-symbol quote dicts, successes only
-# Why send both? The indices bar's chips are fixed in HTML, so the browser
-# already knows which symbols exist. Watchlist rows are dynamic, so the
-# browser learns the list from THIS response — including rows whose quote
-# failed this cycle (those render as "—", mirroring the chips' gap-fill).
+# Why send both? The market overview's cells are fixed in HTML, so the
+# browser already knows which symbols exist. Watchlist rows are dynamic, so
+# the browser learns the list from THIS response — including rows whose
+# quote failed this cycle (those render as "—", mirroring the market
+# overview's gap-fill).
 @app.route("/api/watchlist")
 def watchlist_quotes():
     # The DB read is the source of truth for what should be displayed.
@@ -1690,8 +1776,8 @@ def watchlist_quotes():
             # returns defensive copies; this makes ownership explicit here.
             quote = dict(get_quote(symbol))
         except Exception:
-            # Same per-symbol resilience as the indices bar: a dead symbol
-            # just won't appear in "quotes"; its row will gap-fill to "—".
+            # Same per-symbol resilience as the market overview: a dead
+            # symbol just won't appear in "quotes"; its row gap-fills to "—".
             app.logger.warning(
                 "watchlist quote failed for %s — row shows \"—\"", symbol,
                 exc_info=True,
@@ -2465,7 +2551,7 @@ def remove_ticker_transactions(symbol):
 #   commit  — re-parse the SAME text (the server trusts nothing the client
 #             could have edited between the two calls), then write.
 # Best-effort per row, matching this codebase's resilience philosophy
-# (indices bar, portfolio history): 50 rows shouldn't die because row 17
+# (market overview, portfolio history): 50 rows shouldn't die because row 17
 # has a typo — valid rows import, broken rows come back with reasons.
 # ---------------------------------------------------------------------------
 

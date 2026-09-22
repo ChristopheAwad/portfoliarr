@@ -8,7 +8,7 @@ No news, no AI, no social features.
 
 ## Data Source
 
-Prices and historical charts come from the [Yahoo Finance Python library](https://github.com/ranaroussi/yfinance). Anything Yahoo has is searchable and chartable — US/Canadian stocks, ETFs, international tickers, indices, crypto. Portfolio views (summary strip, value chart, ledger) display in CAD by default; the watchlist, index chips, and the stock detail page display in each security's native currency.
+Prices and historical charts come from the [Yahoo Finance Python library](https://github.com/ranaroussi/yfinance). Anything Yahoo has is searchable and chartable — US/Canadian stocks, ETFs, international tickers, indices, crypto. Portfolio views (summary strip, value chart, ledger) display in CAD by default; the watchlist, the market overview, and the stock detail page display in each security's native currency.
 
 ## Tech Stack
 
@@ -23,6 +23,10 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ### `/` — Portfolio Dashboard
 
+- **Markets today** — the first content on the page, above the whole
+  portfolio: six category tabs (North America, Europe, Asia-Pacific, Crypto,
+  Commodities, Currencies) over one divided strip of live instruments, each
+  cell a link to its stock detail page; only the selected category is fetched
 - Value summary strip (total value, day change, total return, cost basis)
 - Holdings table (ticker, name, qty, avg cost, current price, market value, unrealized P/L $/%, day change)
 - Portfolio-value-over-time line chart (Chart.js)
@@ -85,7 +89,7 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   Full rationale in the endpoint's comment block in `app.py`.
 - **The portfolio's display currency is CAD.** The summary strip, the
   value chart, and the ledger convert USD amounts at Yahoo's `USDCAD=X`
-  rate; the watchlist, index chips, and stock detail page stay native.
+  rate; the watchlist, the market overview, and stock detail page stay native.
   The ledger's "Show USD in USD" toggle flips ONLY the ledger back to
   native display — the total value and chart are CAD in every mode.
   Two rates by design: current values (value, day gain) use the LIVE
@@ -143,10 +147,35 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   PERIOD_MAP `label` field too: 1D "HH:MM", "YYYY-MM-DD HH:MM" whenever
   one day carries several bars (5D's 30-minute — the date keeps same-day
   bars from colliding in the {label: price} dict),
-  everything else "YYYY-MM-DD". No code sniffs interval strings. 5D's
+  everything else   "YYYY-MM-DD". No code sniffs interval strings. 5D's
   datetime labels still sort lexicographically against
   "YYYY-MM-DD" transaction dates, so their ledger math stays
   daily-shaped (a buy applies at its day's FIRST bar).
+- **The market snapshot is ONE tabbed section driven by ONE ordered
+  configuration.** `MARKET_CATEGORIES` in `app.py` is the only place a
+  category, its label, and its Yahoo symbols are declared; `INDEX_SYMBOLS` is
+  DERIVED from it (never hand-maintained next to it), and the `/` route hands
+  the same dict to the template — so tabs, panel labels, each cell's
+  `data-symbol`, and its `url_for` stock link cannot disagree with the API.
+  Six categories, insertion order = display order: `north-america`, `europe`,
+  `asia-pacific`, `crypto`, `commodities`, `currencies`. Every currency pair
+  is CAD-based under a `1 CAD buys` caption (so positive movement = CAD
+  strengthened); Natural Gas stays in Commodities. `GET /api/indices` takes
+  `?category=<key>`: missing/empty means `north-america`, which is why the
+  no-query live-smoke URL still works; an unknown key is HTTP 400 BEFORE any
+  quote call; a partial failure is HTTP 200 with the successful siblings in
+  configured order; only an all-symbol failure is HTTP 503; and inactive
+  categories are never fetched. The browser fetches ONLY the active tab (on
+  load, on click, and from the one `setupAutoRefresh` poll — never a
+  page-level `setInterval`), paints only that panel's `data-symbol` cells, and
+  keeps a per-category request token so a slow response cannot overwrite a
+  newer one. Tab choice is ephemeral: no localStorage/sessionStorage. Market
+  LEVELS use adaptive precision (`Math.abs(value) < 1 ? 4 : 2`, for CAD-based
+  FX pairs) while portfolio, ledger, and stock money stay the two-decimal
+  `formatPrice`. No breadth roll-up ("3 of 4 higher") and no sentiment
+  sentence — a hand-picked instrument list cannot honestly represent the
+  market, and a generated one would read as advice. Tests:
+  `tests/test_market_tabs.py` pins the contract.
 
 ## Temporary Decisions (will need rework in the future)
 
