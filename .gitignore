@@ -33,3 +33,8 @@ AGENTS.md
 
 # Test framework
 .pytest_cache/
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/

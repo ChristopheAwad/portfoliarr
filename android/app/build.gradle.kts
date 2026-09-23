@@ -71,4 +71,7 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.process)
+    implementation(libs.androidx.biometric)
+    testImplementation(libs.junit)
 }

@@ -9,9 +9,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.appcompat.app.AppCompatActivity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppLockActivity() {
 
     private lateinit var webView: WebView
 
@@ -35,6 +34,7 @@ class MainActivity : AppCompatActivity() {
         // consistent and both WebViews get the same lifecycle calls.
         webView = createWebView()
         setContentView(webView)
+        ensureLockCover()
 
         // Load saved URL or redirect to settings
         val prefs = getSharedPreferences("portfoliarr", MODE_PRIVATE)
@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity() {
 
         webView = createWebView()
         setContentView(webView)
+        ensureLockCover()
         webView.onResume()
 
         val url = getSharedPreferences("portfoliarr", MODE_PRIVATE)

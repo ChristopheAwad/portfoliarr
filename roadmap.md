@@ -65,6 +65,7 @@ authenticate or secure the Flask server.
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, Android tests
 **Depends on:** Nothing
+**Status:** in progress
 
 ---
 

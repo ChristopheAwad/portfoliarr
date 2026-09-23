@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Portfoliarr</string>
+    <string name="lock_settings_title">App lock</string>
+    <string name="lock_settings_description">Protect this Android app with your phone's screen lock. This does not lock the server.</string>
+    <string name="lock_enable">Use app lock</string>
+    <string name="lock_timeout_label">Lock after leaving the app</string>
+    <string name="lock_immediately">Immediately</string>
+    <string name="lock_one_minute">1 minute</string>
+    <string name="lock_five_minutes">5 minutes</string>
+    <string name="lock_fifteen_minutes">15 minutes</string>
+    <string name="lock_test">Test lock</string>
+    <string name="lock_prompt_title">Unlock Portfoliarr</string>
+    <string name="lock_message">Unlock with your fingerprint, face, or device screen lock.</string>
+    <string name="lock_retry">Try again</string>
+    <string name="lock_cancelled">Still locked. Tap Try again to unlock.</string>
+    <string name="lock_no_credentials">Set up a screen lock or strong biometric in Android settings, then try again.</string>
+    <string name="lock_device_settings">Open device security settings</string>
+    <string name="lock_use_device_credential">Use device PIN or password</string>
 </resources>

@@ -62,6 +62,12 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ## Design Rules (permanent)
 
+- **The Android lock is optional and local to the APK.** It is disabled on
+  first install, with a five-minute default timeout when enabled. The native
+  cover protects the WebView and Settings; a return within the timeout keeps
+  the existing WebView and open forms. Strong biometrics or the phone's own
+  screen credential unlock it. A new app process starts locked. No phone
+  credential is stored and the Flask server has no corresponding login.
 - **The root `VERSION` file is the human-readable release source for both the
   Flask UI and Android `versionName`.** Preferences displays it in the About
   card. Android's independently increasing `VERSION_CODE` remains in

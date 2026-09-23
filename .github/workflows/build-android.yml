@@ -52,8 +52,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Test and build debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug
         working-directory: android
 
       # Unique per-run artifact name: every download self-identifies. Every

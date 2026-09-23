@@ -1,183 +1,144 @@
-# Design Fix: Phone Market Strip ("Markets today") — one scrolling row
+# Android app lock (#16) plan
 
-## Status
+## Status and approval
 
-SHIPPING 2026-09-22 (PR #73). Phone-only redesign of the market strip shipped
-in PR #70. Revision 1 stacked phone cells into three lines ("double row"). The
-user rejected revision 2 (2-column, one-line cells) too: the approved phone
-layout is ONE HORIZONTAL SCROLLING ROW of instruments per category, like the
-pre-#70 index chips. No roadmap item: it is a design correction.
+Plan approved by the user on 2026-09-23. They then said "Proceed" and
+implementation began. The user selected a five-minute default. Python tests
+are green (899 passed). Android unit tests and the APK build are not yet
+verified locally: the installed Java is 25, Gradle fails at configuration,
+and SDK 34 is not installed. Android CI now runs `testDebugUnitTest` before
+building the APK. The user explicitly authorized a branch push and PR so they
+can download the CI APK and test it. Keep the PR open pending their device
+approval; do not merge before that approval. The APK candidate bumps shared
+VERSION to 1.2 and Android VERSION_CODE to 3 so it installs over older builds.
 
-Verification: implementation complete; full `python -m pytest` is 894 passed;
-focused `python -m pytest tests/test_market_tabs.py` is 55 passed. GUI approved
-by the user (they said "Push pr"). The `static/js/main.js` currency-span revert
-(Step 2) turned out to be a no-op — main.js already matched the target.
+## Goal and limits
 
-## User Goal
+Give the Android APK an optional, phone-local lock. After the whole app has been
+in the background for the configured delay, cover its content and ask Android to
+authenticate with a strong biometric or the device PIN, pattern, or password.
+Available delays are Immediately, 1 minute, 5 minutes, and 15 minutes; the
+initial selection is 5 minutes. Disabled is the initial state. A cold start in
+a new process requires authentication when the lock is enabled, regardless of
+the last return time. A quick return within the delay must not reload the
+WebView or dismiss open web forms. The lock applies to native Settings too.
 
-The user dislikes the market strip on phones. The strip MUST stay the first thing
-on the page (pinned by `project-brief.md` and `tests/test_market_tabs.py`). Fix
-the phone presentation only. Desktop and tablet must stay byte-identical.
+This does not secure the Flask server, add login to the website, or store a
+biometric template, PIN, or password in the app. Only a boolean enabled flag and
+the selected timeout go in Android SharedPreferences. Authentication comes
+from Android's `BiometricPrompt` with `BIOMETRIC_STRONG | DEVICE_CREDENTIAL`.
 
-Approved phone layout: each category's instruments are one HORIZONTAL SCROLLING
-ROW of flat divided chips. Each chip is as wide as its content, so names are
-never truncated and nothing is hidden.
+## Step 1. Write failing tests first
 
-```
-Markets today
-[North America] Europe  Asia-Pacific  ...        <- underlined rail (scrolls)
-┌────────────────────────────────────────────────────┐
-│ S&P 500   7,650.50 USD │ Nasdaq 26,522.54 USD │ →  │
-│ +12.74 (+0.17%)        │ +104.24 (+0.39%)      │    │
-└────────────────────────────────────────────────────┘
-```
+1. Add `android/app/src/test/java/com/portfoliarr/app/AppLockPolicyTest.kt`.
+   Keep the policy independent of the Android UI. Inject the clock in elapsed
+   milliseconds and pass saved settings and process-session state explicitly.
+   Test disabled on first install, the enabled cold start, authentication
+   success, quick returns, expiry at exactly 300000 ms, and a return at
+   299999 ms. Test each selectable delay (0, 60000, 300000, 900000 ms), a
+   negative or unknown saved delay falling back to 300000 ms, repeated
+   background/foreground cycles, and monotonic elapsed time that is less than
+   a previous stamp after a reboot (fail closed). Test cancellation and failed
+   authentication do not unlock, and that success starts a fresh session.
+2. Add `tests/test_android_app_lock.py` to inspect Android source/resources for
+   wiring that Python can verify without an Android runtime: manifest permission
+   and dependency, both activities sharing a lock controller/gate, both screens
+   obscuring content while locked, Settings labels and selection values,
+   default disabled/five-minute behavior, use of `BIOMETRIC_STRONG` and
+   `DEVICE_CREDENTIAL`, no app-owned PIN or server-side auth, and no WebView
+   destruction/reload on the ordinary unlock path. Check the renderer callback
+   remains inside the WebViewClient. Keep these tests specific to meaningful
+   contracts instead of matching whole source files or implementation comments.
+3. Confirm `python -m pytest tests/test_android_app_lock.py` fails for the
+   missing lock wiring. If Gradle is available, confirm
+   `./gradlew testDebugUnitTest` fails for the missing policy. Do not accept a
+   failure caused by a broken test or missing build tool as a product failure.
 
-## Approved Decisions
+## Step 2. Implement the small, testable lock state machine
 
-1. Phone tab rail: flat underlined rail. Active tab underlines with
-   `var(--accent)` and drops the accent fill.
-2. Phone header: `.market-header h2` shrinks to 18px; `.market-live` hidden on
-   phones (stays in the HTML, so `test_market_heading_and_live_label` passes).
-3. Phone panel: no box shadow; padding 6px.
-4. Phone instrument row: `.market-grid` becomes a non-wrapping horizontal scroll
-   container (`display: flex`), each `.market-item` `flex: 0 0 auto`. Hairlines
-   are drawn per-pair (`.market-item + .market-item { border-left: 1px solid
-   var(--border-color); }`) with the base gap/background dropped — a border-
-   coloured background gap would paint a grey tail after the last chip when the
-   row is narrower than the panel.
-5. The odd-count `.market-grid-filler` is DELETED (template + CSS + tests). It
-   only plugged the empty cell of the old 2-column phone grid; a scrolling row
-   has no empty cell.
-6. The `main.js` currency-span change from revision 2 is REVERTED. Natural-width
-   chips have room, so the price goes back to one text run with its native
-   currency.
-7. `project-brief.md` gains a note that phones use a one-row scrolling strip,
-   overriding the PR #70 "two-column instrument grid on phones" language.
+1. Add `AppLockPolicy.kt` with the delay constants, supported-value validation,
+   and transitions for cold start, leave/return, success, cancellation, and
+   rebooted monotonic time. Measure app background duration with
+   `SystemClock.elapsedRealtime()`, never wall time. Treat a missing timestamp
+   on cold process start as locked if enabled. Keep the decision about when
+   authentication is required in this one policy, not in either Activity.
+2. Add a small process-session owner (`AppLockSession.kt` or equivalent) to
+   track unlock state across MainActivity/SettingsActivity transitions. Use
+   `ProcessLifecycleOwner` to stamp when the application as a whole leaves
+   the foreground. A transition from Main to Settings, a settings save, or an
+   activity configuration change is not a trip to the background. Keep session
+   state only in process memory: a restarted process authenticates again.
+   Do not reset the clock on repeated resume events while the app is locked.
+3. Share one lock gate between MainActivity and SettingsActivity, via a small
+   base Activity/controller. Put a full-screen native covering view on top of
+   each activity's content before showing a prompt, and before a background
+   snapshot can show web or Settings content. Remove it only after the policy
+   permits an unprompted return or authentication succeeds. Do not replace,
+   destroy, or reload the WebView for a normal lock/unlock. Keep the existing
+   `loadFailed` and renderer recovery paths; a renderer rebuild while locked
+   must keep the cover in front of the new WebView.
+4. Use `androidx.biometric:biometric` and the lifecycle-process dependency in
+   `android/gradle/libs.versions.toml` and `android/app/build.gradle.kts`.
+   Add Android's biometric permissions to the manifest as required by the
+   AndroidX library/API levels. Build the prompt on the active foreground
+   Activity; keep one prompt active at a time. Use an explicit Retry button
+   after cancellation or terminal errors; do not immediately re-prompt in a
+   loop. Treat an unsuccessful biometric attempt as still locked. On activity
+   recreation, rebuild the cover and restore or retry the prompt without
+   exposing content in an intermediate frame.
 
-## Implementation Steps (test-first)
+## Step 3. Add Settings controls and unavailable-device behavior
 
-### Step 1 — Update tests (write first; they must fail before code edits)
+1. Update `activity_settings.xml` and `strings.xml` with an App lock section:
+   enable/disable control, delay selector with the four exact options above,
+   Test lock button, and short text that this protects the Android app only.
+   Use resource strings for visible text and content descriptions.
+2. Read/write only `app_lock_enabled` and `app_lock_timeout_ms` in the existing
+   `portfoliarr` preferences. Initial enabled value is false and timeout is
+   300000 ms. A changed timeout takes effect on the next background trip.
+   Toggling off inside an already unlocked Settings session takes effect at
+   once. Test lock prompts without changing the saved enable flag or delay.
+3. Before enabling, call `BiometricManager.canAuthenticate` with the same
+   authenticator mask as the prompt. If no enrolled biometric or device
+   credential is available, leave the control off, explain what is needed,
+   and offer a link to Android's security setup when possible. If credentials
+   later disappear while the lock is enabled, keep content covered, explain
+   the problem, and allow the user to open device security settings or retry.
+   Do not silently turn the lock off or disclose content on error.
+4. A locked Settings screen must not expose the saved server URL or the lock
+   toggle. The system Back button may leave a locked screen but must not reveal
+   another protected screen. Changing the server URL must retain the existing
+   navigation behavior when unlocked.
 
-In `tests/test_market_tabs.py`:
+## Step 4. Verify and ask for device approval
 
-- KEEP `test_market_phone_header_is_quiet`.
-- KEEP `test_market_phone_tabs_are_underlined_not_pills`.
-- KEEP `test_market_phone_active_tab_underlines_with_accent`.
-- KEEP `test_market_phone_panel_is_flat`.
-- DELETE `test_market_phone_cells_are_single_line`.
-- DELETE `test_market_phone_labels_truncate_on_one_line`.
-- DELETE `test_market_js_wraps_currency_in_hideable_span`.
-- DELETE `test_market_phone_last_item_does_not_span_two_columns`.
-- REPLACE `test_market_phone_grid_is_two_columns` with
-  `test_market_phone_instruments_scroll_in_one_row`:
-  - `media_body("600px", ".market-grid")` is not None.
-  - It contains `display: flex` and `overflow-x: auto`.
-  - It does NOT contain `grid-template-columns`.
-  - `media_body("600px", ".market-item")` contains `flex: 0 0 auto`.
-- REPLACE `test_odd_category_ships_phone_grid_filler` with
-  `test_odd_category_has_no_grid_filler`:
-  - `"market-grid-filler"` not in `STYLE_CSS`.
-  - `"market-grid-filler"` not in `(ROOT / "templates" / "index.html").read_text()`.
+1. Run `python -m pytest tests/test_android_app_lock.py`.
+2. From `android/`, run `./gradlew testDebugUnitTest` and
+   `./gradlew assembleDebug` with JDK 17 and SDK 34. If the local Android SDK
+   is unavailable, report that explicitly; the Android CI build still must
+   pass before release.
+3. The lead agent runs the final full `python -m pytest` suite. Review the
+   source diff for lifecycle mistakes and inadvertent changes to the existing
+   WebView, signing config, and version wiring.
+4. Give the user an APK and ask for on-device checks: disabled launch; enable
+   with a credential enrolled; return before five minutes; return at or after
+   five minutes; cancel then retry; lock while Settings is visible; rotate or
+   recreate; lose and restore the server connection; and renderer recovery.
+   The user approved a branch push and PR to obtain the CI APK before the
+   device check. Do not merge until they approve the phone behavior. Android's
+   `Build Android APK` workflow must be green for any Android change.
+5. Before the candidate APK, increase both root `VERSION` and `VERSION_CODE`
+   in `android/gradle.properties`; do not change the shared signing key. Mark
+   roadmap item #16 shipped only in the shipping commit, not in the candidate
+   PR before approval.
 
-Also update the section header comment above the phone-redesign tests to say
-"one horizontal scrolling row".
+## Files expected
 
-Run `python -m pytest tests/test_market_tabs.py -k phone` and confirm the
-intended failures (old grid rule present, filler still present), not syntax
-errors.
-
-### Step 2 — `static/js/main.js`
-
-Revert the revision-2 currency span. In `updateMarketItem` replace:
-```js
-priceEl.replaceChildren(
-    document.createTextNode(formatMarketLevel(quote.price)),
-    marketTextSpan("market-item-ccy", ` ${quote.currency}`)
-);
-```
-with:
-```js
-priceEl.textContent = `${formatMarketLevel(quote.price)} ${quote.currency}`;
-```
-and restore the original teaching comment:
-```js
-// textContent (never innerHTML): plain text, immune to HTML injection.
-// Every price carries its native currency code — native display, no FX.
-```
-
-DONE status: this edit was already satisfied when the branch was created —
-`static/js/main.js:94` already used `textContent` with the original comment, so
-main.js has NO net change in this PR (kept out of the commit).
-
-### Step 3 — `templates/index.html`
-
-Remove the odd-count filler block (the `{% if cat['instruments']|length % 2 == 1 %}`
-block containing `<span class="market-grid-filler" aria-hidden="true"></span>`)
-and adjust the surrounding comment so the grid comment no longer mentions a
-phone 2-column grid.
-
-### Step 4 — `static/style.css`
-
-In the `@media (max-width: 600px)` market block:
-
-- REPLACE `.market-grid { grid-template-columns: 1fr 1fr; }` with:
-  ```css
-  .market-grid {
-      display: flex;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
-  }
-
-  .market-grid::-webkit-scrollbar {
-      display: none;
-  }
-  ```
-- REPLACE `.market-item { padding: 12px 10px; }` with:
-  ```css
-  .market-item {
-      flex: 0 0 auto;
-      padding: 10px 12px;
-  }
-  ```
-- DELETE the phone `.market-item-top`, `.market-item-label`,
-  `.market-item-price`, `.market-item-change`, `.market-item-ccy`, and
-  `.market-item-move` rules added in revision 2.
-- DELETE the phone `.market-grid-filler` rule.
-- KEEP `.market-panel`, `.market-header h2`, `.market-live`, `.market-tab`,
-  `.market-tab.active`, `.market-tabs`.
-
-In the BASE (desktop) rules, DELETE the `.market-grid-filler { display: none; }`
-rule (the class no longer exists).
-
-Update comments: the phone market block comment must describe the one-row
-scrolling strip; the base `.market-grid` comment must drop the filler mention.
-
-### Step 5 — `project-brief.md`
-
-In the `Markets today` dashboard bullet, change the phone clause from a
-two-column grid to one horizontal scrolling row of chips.
-
-### Step 6 — Verify
-
-1. `source .venv/bin/activate`
-2. `python -m pytest tests/test_market_tabs.py` (all green).
-3. `python -m pytest` (full suite green; previously 898 passed).
-4. `python -m pytest tests/test_docker.py` is unaffected but run it once if any
-   container file changed (it did not).
-5. STOP. Ask the user to open the dashboard at phone width and approve the GUI
-   before any commit.
-
-## Out Of Scope
-
-- Do not move the strip below the portfolio.
-- Do not change the desktop grid (one equal track per instrument).
-- Do not remove the "Live" text from the template; hide it with CSS only.
-- Do not add scroll fades, snap, or new motion.
-- Do not touch `app.py`.
-
-## Files
-
-`static/style.css`, `templates/index.html`, `project-brief.md`,
-`tests/test_market_tabs.py`, `feature.md`. (`static/js/main.js` has no net
-change; see Step 2.)
+`roadmap.md`, `feature.md`, `project-brief.md` (permanent lock-design rule),
+`android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`,
+`android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, new
+Android lock policy/session/gate classes, `android/app/src/main/res/layout/activity_settings.xml`,
+Android lock overlay layout or programmatic cover, `android/app/src/main/res/values/strings.xml`,
+`android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`,
+`android/app/build.gradle.kts`, `android/app/src/test/java/com/portfoliarr/app/AppLockPolicyTest.kt`,
+and `tests/test_android_app_lock.py`.
