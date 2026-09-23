@@ -22,8 +22,11 @@ class AppLockPolicyTest {
         policy.backgrounded(1000)
         assertFalse(policy.requiresAuthentication(300_999, true, 300_000))
         assertFalse(policy.requiresAuthentication(300_999, true, 300_000))
-        assertTrue(policy.requiresAuthentication(301_000, true, 300_000))
-        assertTrue(policy.requiresAuthentication(301_001, true, 300_000))
+        // Once back in the foreground, the old deadline no longer applies.
+        assertFalse(policy.requiresAuthentication(301_000, true, 300_000))
+        policy.backgrounded(400_000)
+        assertTrue(policy.requiresAuthentication(700_000, true, 300_000))
+        assertTrue(policy.requiresAuthentication(700_001, true, 300_000))
     }
 
     @Test fun everySelectableDelayHasAnExactBoundary() {
@@ -32,7 +35,12 @@ class AppLockPolicyTest {
             policy.authenticated()
             policy.backgrounded(500)
             if (delay > 0) assertFalse(policy.requiresAuthentication(500 + delay - 1, true, delay))
-            assertTrue(policy.requiresAuthentication(500 + delay, true, delay))
+            // The exact-boundary case is a separate trip; the early return
+            // above ended the first background trip.
+            val boundary = AppLockPolicy()
+            boundary.authenticated()
+            boundary.backgrounded(500)
+            assertTrue(boundary.requiresAuthentication(500 + delay, true, delay))
         }
     }
 
@@ -42,7 +50,10 @@ class AppLockPolicyTest {
             policy.authenticated()
             policy.backgrounded(100)
             assertFalse(policy.requiresAuthentication(300_099, true, delay))
-            assertTrue(policy.requiresAuthentication(300_100, true, delay))
+            val boundary = AppLockPolicy()
+            boundary.authenticated()
+            boundary.backgrounded(100)
+            assertTrue(boundary.requiresAuthentication(300_100, true, delay))
         }
     }
 
@@ -74,6 +85,7 @@ class AppLockPolicyTest {
         assertFalse(policy.requiresAuthentication(59_999, true, 60_000))
         policy.backgrounded(60_000)
         assertFalse(policy.requiresAuthentication(119_999, true, 60_000))
-        assertTrue(policy.requiresAuthentication(120_000, true, 60_000))
+        policy.backgrounded(120_000)
+        assertTrue(policy.requiresAuthentication(180_000, true, 60_000))
     }
 }
