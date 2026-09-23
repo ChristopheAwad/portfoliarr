@@ -95,3 +95,11 @@ def test_click_does_not_claim_the_period_before_fetch_success():
     assert "refresh(period);" in body
     assert "classList.remove" not in body
     assert "classList.add" not in body
+
+
+def test_silent_prefetch_does_not_reset_a_visible_ruler():
+    body = refresh_body()
+    reset = body.index("clearMeasurement();")
+    visible = body.index("if (!silent) {")
+    fetch_start = body.index("try {")
+    assert visible < reset < fetch_start

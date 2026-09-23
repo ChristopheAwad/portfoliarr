@@ -945,9 +945,9 @@ function getCompareColors() {
 const crosshairPlugin = {
     id: "crosshair",
     afterDatasetsDraw(chart) {
-        // Skip the crosshair while a price-diff measurement is active —
-        // the vertical line would clash with the measurement overlay.
-        if (chart._priceDiffMeasuring) return;
+        // Hide the crosshair while the ruler is moving or pinned; otherwise
+        // its vertical line would compete with the measurement guides.
+        if (chart._priceDiffMeasuring || chart._priceDiffPinned) return;
         const active = chart.tooltip?.getActiveElements();
         if (!active || active.length === 0) return;
         const x = active[0].element.x;
@@ -1351,6 +1351,12 @@ function setupTimeframeChart(
     let measureStart = null;
     let measureEnd = null;
     let measuring = false;
+    let mousePress = null;
+    const MOUSE_DRAG_THRESHOLD = 5;
+
+    function canMeasurePrice() {
+        return mode === "value" && !chartNormalized;
+    }
 
     // Chart.js paints onto the canvas's "2D context" — the object whose
     // methods actually put pixels on it.
@@ -1518,18 +1524,17 @@ function setupTimeframeChart(
                 ctx.fillText(pctText, clampedX + boxW / 2, clampedY + 27);
                 ctx.restore();
             },
-            // Suppress the Chart.js tooltip while measuring — the
-            // date/price readout would flicker over the measurement label.
+            // Suppress the Chart.js tooltip while a ruler is moving or
+            // pinned: its date/price card would cover the measurement.
             // Must RETURN false (not args.cancel) — Chart.js checks the
             // hook's return value, not args.cancel, for this hook.
             beforeTooltipDraw(chart) {
-                if (chart._priceDiffMeasuring) return false;
+                if (chart._priceDiffMeasuring || chart._priceDiffPinned) return false;
             },
-            // Block Chart.js from processing pointer events during
-            // measurement — prevents the hover tooltip and crosshair from
-            // activating while the user is dragging or two-finger touching.
+            // Block Chart.js hover while the ruler is moving or pinned.
+            // A click or tap can still clear it through the native listeners.
             beforeEvent(chart, args) {
-                if (!chart._priceDiffMeasuring) return;
+                if (!chart._priceDiffMeasuring && !chart._priceDiffPinned) return;
                 // Nuke the tooltip active elements directly so the floating
                 // date/price label cannot appear, no matter how Chart.js
                 // internally resolves hover state.
@@ -1581,7 +1586,7 @@ function setupTimeframeChart(
             id: "touchGhostGuard",
             beforeEvent(chart, args) {
                 const type = args.event.native && args.event.native.type;
-                if (chart._priceDiffMeasuring) return;
+                if (chart._priceDiffMeasuring || chart._priceDiffPinned) return;
                 const isTouchMove =
                     type === "touchstart" || type === "touchmove";
                 if (isTouchMove) {
@@ -1667,7 +1672,7 @@ function setupTimeframeChart(
                 scale.max = Math.min(Math.max(scale.max, hi + pad), ceil);
             },
             afterDatasetsDraw(chart) {
-                if (chart._priceDiffMeasuring) return;
+                if (chart._priceDiffMeasuring || chart._priceDiffPinned) return;
                 if (!lastCosts || lastCosts.length === 0) return;
                 if (!COST_LINE_PERIODS.has(currentPeriod)) return;
                 const active = chart.tooltip?.getActiveElements();
@@ -1972,9 +1977,10 @@ function setupTimeframeChart(
         },
     });
 
-    // Expose measuring state on the chart instance so global plugins
-    // (crosshair) can read it without closure access.
+    // Expose gesture and pinned states so the shared crosshair plugin can
+    // suppress hover without access to this factory's closure.
     chart._priceDiffMeasuring = false;
+    chart._priceDiffPinned = false;
 
     // Ghost-event window cursor for the touchGhostGuard plugin: the
     // Date.now() timestamp until which synthetic post-touch mouse events
@@ -2006,27 +2012,58 @@ function setupTimeframeChart(
         // lookup Chart.js hover uses (mode: "index"). For a category
         // scale, getValueForPixel returns the tick index.
         const values = chart.data.datasets[0].data;
-        if (values.length === 0) {
-            return { x: px, y: py, dataY: 0, label: "", dataIndex: -1 };
-        }
+        if (values.length === 0) return null;
         let index = Math.round(chart.scales.x.getValueForPixel(px));
         // Clamp to valid range so edges don't read past the array.
         index = Math.max(0, Math.min(index, values.length - 1));
         const dataValue = values[index];
-        // Convert the actual data value back to a pixel Y so the dot
-        // lands on the line, not at the raw finger position.
+        if (!Number.isFinite(dataValue)) return null;
+        // Snap both coordinates to this bar: the guides and the value in
+        // the label must identify the same observation, even on MAX.
         const snappedY = chart.scales.y.getPixelForValue(dataValue);
         return {
-            x: px,              // raw X kept for the dashed line
-            y: snappedY,        // SNAPPED Y — dot sits on the data point
+            x: chart.scales.x.getPixelForValue(index),
+            y: snappedY,
             dataY: dataValue,   // actual price at this date
             label: chart.data.labels[index] || "",
             dataIndex: index,
         };
     }
 
+    function clearHover() {
+        if (chart.tooltip) {
+            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        }
+        chart.setActiveElements([]);
+        comparisonReadoutIndex = null;
+        renderComparisonReadout();
+    }
+
+    function clearMeasurement() {
+        mousePress = null;
+        measureStart = null;
+        measureEnd = null;
+        measuring = false;
+        chart._priceDiffMeasuring = false;
+        chart._priceDiffPinned = false;
+        chart.draw();
+    }
+
+    function finishMouseGesture() {
+        if (!mousePress && !measuring) return;
+        mousePress = null;
+        if (measuring) {
+            measuring = false;
+            chart._priceDiffMeasuring = false;
+            chart._priceDiffPinned = Boolean(measureStart && measureEnd);
+            chart.draw();
+        }
+    }
+
     canvas.addEventListener("mousedown", (e) => {
-        if (chartNormalized) return;
+        // Touch devices can emit a synthetic mousedown after touchend.
+        if (Date.now() < chart._ghostEventsUntil) return;
+        if (!canMeasurePrice()) return;
         if (e.button !== 0) return; // left button only
         const rect = canvas.getBoundingClientRect();
         const px = e.clientX - rect.left;
@@ -2034,52 +2071,40 @@ function setupTimeframeChart(
         // Only start inside the chart area.
         const { left, right, top, bottom } = chart.chartArea;
         if (px < left || px > right || py < top || py > bottom) return;
-        measureStart = pixelToData(px, py);
-        measureEnd = null;
-        measuring = true;
-        chart._priceDiffMeasuring = true;
+        if (!pixelToData(px, py)) return;
+        if (chart._priceDiffPinned) clearMeasurement();
+        mousePress = { x: px, y: py };
     });
 
     canvas.addEventListener("mousemove", (e) => {
-        if (!measuring || !measureStart) return;
+        if (!mousePress) return;
         const rect = canvas.getBoundingClientRect();
-        measureEnd = pixelToData(
-            e.clientX - rect.left,
-            e.clientY - rect.top
-        );
-        // Clear any stale hover state before redrawing — without this,
-        // chart.draw() would re-render a tooltip from pre-existing active
-        // elements that were set before measurement started.
-        if (chart.tooltip) {
-            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        if (!measuring && Math.hypot(px - mousePress.x, py - mousePress.y)
+            < MOUSE_DRAG_THRESHOLD) return;
+        const next = pixelToData(px, py);
+        if (!next) return;
+        if (!measuring) {
+            measureStart = pixelToData(mousePress.x, mousePress.y);
+            if (!measureStart) return;
+            measuring = true;
+            chart._priceDiffMeasuring = true;
         }
+        measureEnd = next;
+        clearHover();
         chart.draw();
     });
 
     canvas.addEventListener("mouseup", () => {
-        if (!measuring) return;
-        if (!measureEnd) {
-            // Click with no drag — clear any previous measurement.
-            measureStart = null;
-            measuring = false;
-            chart._priceDiffMeasuring = false;
-        } else {
-            // Finalize — keep the overlay visible until the user taps
-            // elsewhere or switches timeframes.
-            measuring = false;
-            chart._priceDiffMeasuring = false;
-        }
-        chart.draw();
+        finishMouseGesture();
     });
 
     // If the user starts a drag inside the chart but releases outside the
     // canvas, the canvas mouseup never fires. A document-level listener
     // catches that edge case and prevents the measuring state from sticking.
     document.addEventListener("mouseup", () => {
-        if (!measuring) return;
-        measuring = false;
-        chart._priceDiffMeasuring = false;
-        chart.draw();
+        finishMouseGesture();
     });
 
     // Mobile: detect two-finger touch for measurement.
@@ -2090,54 +2115,59 @@ function setupTimeframeChart(
         // exactly the distinction the touchGhostGuard plugin relies on.)
         chart._hoverDormant = false;
         if (e.touches.length >= 2) {
-            if (chartNormalized) return;
-            e.preventDefault(); // block Chart.js from processing this
+            if (!canMeasurePrice()) return;
             const t0 = e.touches[0], t1 = e.touches[1];
             const rect = canvas.getBoundingClientRect();
-            measureStart = pixelToData(
+            const start = pixelToData(
                 t0.clientX - rect.left, t0.clientY - rect.top
             );
-            measureEnd = pixelToData(
+            const end = pixelToData(
                 t1.clientX - rect.left, t1.clientY - rect.top
             );
+            if (!start || !end) return;
+            e.preventDefault(); // block Chart.js from processing this
+            measureStart = start;
+            measureEnd = end;
             measuring = true;
             chart._priceDiffMeasuring = true;
-            if (chart.tooltip) {
-                chart.tooltip.setActiveElements([], { x: 0, y: 0 });
-            }
+            chart._priceDiffPinned = false;
+            clearHover();
             chart.draw();
-        } else if (e.touches.length === 1 && measureStart) {
+        } else if (e.touches.length === 1 && chart._priceDiffPinned) {
             // Single finger tap while measurement is showing — dismiss.
-            measureStart = null;
-            measureEnd = null;
-            measuring = false;
-            chart._priceDiffMeasuring = false;
-            chart.draw();
+            clearMeasurement();
         }
     }, { passive: false });
 
     canvas.addEventListener("touchmove", (e) => {
-        if (!measuring || e.touches.length < 2) return;
+        if (!measuring) return;
+        // The ruler began with two fingers. Keep the remaining finger from
+        // turning into a page scroll (and touchcancel) after the first lifts.
         e.preventDefault();
+        if (e.touches.length < 2) return;
         const t0 = e.touches[0], t1 = e.touches[1];
         const rect = canvas.getBoundingClientRect();
-        measureStart = pixelToData(
+        const start = pixelToData(
             t0.clientX - rect.left, t0.clientY - rect.top
         );
-        measureEnd = pixelToData(
+        const end = pixelToData(
             t1.clientX - rect.left, t1.clientY - rect.top
         );
-        if (chart.tooltip) {
-            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        if (start && end) {
+            measureStart = start;
+            measureEnd = end;
         }
+        clearHover();
         chart.draw();
     }, { passive: false });
 
     canvas.addEventListener("touchend", (e) => {
-        if (e.touches.length < 2 && measuring) {
-            // Lifted a finger — finalize the measurement.
+        if (e.touches.length === 0 && measuring) {
+            // Keep hover blocked after the first finger lifts; the remaining
+            // finger must not reopen a tooltip over the frozen ruler.
             measuring = false;
             chart._priceDiffMeasuring = false;
+            chart._priceDiffPinned = Boolean(measureStart && measureEnd);
             chart.draw();
         }
         // "Hover" on a touch screen means finger-down. The LAST finger
@@ -2151,13 +2181,7 @@ function setupTimeframeChart(
         if (e.touches.length === 0) {
             chart._hoverDormant = true;
             chart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
-            if (chart.tooltip) {
-                chart.tooltip.setActiveElements([], { x: 0, y: 0 });
-            }
-            chart.setActiveElements([]);
-            // Finger lifted = hover ended for the bottom readout too.
-            comparisonReadoutIndex = null;
-            renderComparisonReadout();
+            clearHover();
             chart.draw();
         }
     });
@@ -2174,16 +2198,13 @@ function setupTimeframeChart(
         if (measuring) {
             measuring = false;
             chart._priceDiffMeasuring = false;
+            measureStart = null;
+            measureEnd = null;
+            chart._priceDiffPinned = false;
         }
         chart._hoverDormant = true;
         chart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
-        if (chart.tooltip) {
-            chart.tooltip.setActiveElements([], { x: 0, y: 0 });
-        }
-        chart.setActiveElements([]);
-        // Cancelled gesture = hover ended for the readout as well.
-        comparisonReadoutIndex = null;
-        renderComparisonReadout();
+        clearHover();
         chart.draw();
     });
 
@@ -2210,12 +2231,9 @@ function setupTimeframeChart(
             visibleGeneration = ++visibleRequestGeneration;
         }
 
-        // Clear any active price-diff measurement — stale points on a new
-        // series would be confusing and point to wrong data.
-        measureStart = null;
-        measureEnd = null;
-        measuring = false;
-        chart._priceDiffMeasuring = false;
+        // Only a visible request clears the ruler, even if it later fails.
+        // Background prefetches must not alter the current interaction.
+        if (!silent) clearMeasurement();
 
         try {
             // Check the frontend cache first — if the data is still
@@ -2556,6 +2574,7 @@ function setupTimeframeChart(
         modeBar.addEventListener("click", (event) => {
             const btn = event.target.closest("[data-chart-mode]");
             if (!btn || btn.dataset.chartMode === mode) return;
+            clearMeasurement();
             mode = btn.dataset.chartMode;
             localStorage.setItem("chartMode", mode);
             modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
@@ -2587,11 +2606,7 @@ function setupTimeframeChart(
             chart.update();
         },
         clearMeasurement() {
-            measureStart = null;
-            measureEnd = null;
-            measuring = false;
-            chart._priceDiffMeasuring = false;
-            chart.draw();
+            clearMeasurement();
         },
     };
 }

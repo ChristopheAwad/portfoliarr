@@ -376,3 +376,71 @@ def test_last_finger_lift_marks_hover_dormant():
         "the ghost-event window must be armed on last-finger lift"
     )
 
+
+# Interaction regressions: inspect the actual gesture branches, rather than
+# accepting an unrelated comment or another chart's handler as evidence.
+def _gesture_body(signature: str) -> str:
+    bodies = _hook_bodies(common_js(), signature)
+    assert len(bodies) == 1, f"expected one gesture handler: {signature}"
+    return bodies[0]
+
+
+def test_ruler_requires_raw_values_for_mouse_and_touch():
+    js = common_js()
+    assert "function canMeasurePrice()" in js
+    for signature in ('addEventListener("mousedown"',
+                      'addEventListener("touchstart"'):
+        assert "canMeasurePrice()" in _gesture_body(signature)
+    guard = _gesture_body("function canMeasurePrice()")
+    assert 'mode === "value"' in guard
+    assert "!chartNormalized" in guard
+
+
+def test_ruler_snaps_all_coordinates_to_a_finite_primary_bar():
+    body = _gesture_body("function pixelToData(")
+    assert "Number.isFinite(dataValue)" in body
+    assert "getPixelForValue(index)" in body
+    assert "x: px" not in body
+    assert "getPixelForValue(dataValue)" in body
+
+
+def test_mouse_click_and_drag_have_separate_states():
+    down = _gesture_body('addEventListener("mousedown"')
+    move = _gesture_body('addEventListener("mousemove"')
+    up = _gesture_body('canvas.addEventListener("mouseup"')
+    assert "_ghostEventsUntil" in down
+    assert "mousePress" in down and "measureStart = pixelToData" not in down
+    assert "MOUSE_DRAG_THRESHOLD" in move and "mousePress" in move
+    assert "measureStart = pixelToData" in move
+    assert "finishMouseGesture" in up
+    assert "mousePress = null" in _gesture_body("function finishMouseGesture()")
+    assert "finishMouseGesture" in _gesture_body('document.addEventListener("mouseup"')
+
+
+def test_finished_ruler_suppresses_hover_and_new_touch_can_dismiss_it():
+    js = common_js()
+    assert "_priceDiffMeasuring || chart._priceDiffPinned" in js
+    before_events = _hook_bodies(js, "beforeEvent(chart, args)")
+    assert "_priceDiffPinned" in before_events[0]
+    assert "_priceDiffPinned" in _hook_bodies(js, "beforeTooltipDraw(chart)")[0]
+    assert "_priceDiffPinned" in js.split('id: "costLine"', 1)[1].split(
+        "data: {", 1)[0]
+    assert "_priceDiffPinned" in _gesture_body('addEventListener("touchstart"')
+    assert "_priceDiffPinned" in _gesture_body('addEventListener("mousedown"')
+
+
+def test_staggered_touch_release_does_not_restart_hover():
+    end = _gesture_body('addEventListener("touchend"')
+    move = _gesture_body('addEventListener("touchmove"')
+    assert "e.touches.length === 0" in end
+    assert "_priceDiffMeasuring = false" in end
+    assert "_priceDiffMeasuring = false" not in move
+    assert move.index("e.preventDefault()") < move.index("e.touches.length < 2")
+    assert "_priceDiffPinned" in end
+
+
+def test_mode_switch_and_empty_chart_drop_old_ruler():
+    mode_body = _gesture_body('modeBar.addEventListener("click"')
+    assert "clearMeasurement" in mode_body
+    assert "if (values.length === 0) return null;" in _gesture_body(
+        "function pixelToData(")

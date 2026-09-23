@@ -1,183 +1,97 @@
-# Design Fix: Phone Market Strip ("Markets today") — one scrolling row
+# Chart hover, touch, and ruler interaction fixes
 
-## Status
+## Status and scope
 
-SHIPPING 2026-09-22 (PR #73). Phone-only redesign of the market strip shipped
-in PR #70. Revision 1 stacked phone cells into three lines ("double row"). The
-user rejected revision 2 (2-column, one-line cells) too: the approved phone
-layout is ONE HORIZONTAL SCROLLING ROW of instruments per category, like the
-pre-#70 index chips. No roadmap item: it is a design correction.
+The user approved the implementation and GUI behavior, then requested a PR.
+The full `python -m pytest` suite passed with 903 tests before the PR branch
+was created. This is interaction bug-fix work, not a new roadmap item.
+No Flask, portfolio-math, or native Android changes are needed.
 
-Verification: implementation complete; full `python -m pytest` is 894 passed;
-focused `python -m pytest tests/test_market_tabs.py` is 55 passed. GUI approved
-by the user (they said "Push pr"). The `static/js/main.js` currency-span revert
-(Step 2) turned out to be a no-op — main.js already matched the target.
+The shared line-chart factory in `static/js/common.js` controls the dashboard
+and stock charts. The allocation donut and its swipe handler live in
+`static/js/main.js`. The line canvases use `touch-action: pan-y` in
+`static/style.css` to keep page scroll while stopping pinch-zoom on the
+two-finger price-difference gesture. Pinch elsewhere on the page is unchanged.
 
-## User Goal
+## Approved behavior
 
-The user dislikes the market strip on phones. The strip MUST stay the first thing
-on the page (pinned by `project-brief.md` and `tests/test_market_tabs.py`). Fix
-the phone presentation only. Desktop and tablet must stay byte-identical.
+- Hover follows the nearest bar. A short mouse click does not start the
+  ruler. A drag starts it after a five-pixel threshold. Guides use the bars'
+  actual x and y positions, not the pointer x with an unrelated bar value.
+  A completed ruler remains visible without a competing tooltip, crosshair,
+  or cost hover line. A new click dismisses it; a new drag replaces it.
+- One-finger touch inspects the line until finger lift or cancellation.
+  Two fingers measure raw prices only. Hover stays suppressed while one
+  finger remains after the other lifts. A new one-finger tap clears the
+  pinned ruler. Synthetic mouse events after touch cannot restart it.
+- The ruler works in portfolio Value and plain stock views. Portfolio
+  Performance and normalized stock comparisons use an index axis and do
+  not offer raw-price measurement. Switching modes clears the ruler.
+- Silent timeframe prefetch does not change the visible ruler; visible
+  refresh clears it before fetching, even if the fetch fails. A missing,
+  empty, or non-finite primary bar cannot produce a false ruler value.
+- The allocation donut changes views on a one-finger, mainly horizontal
+  swipe beyond 40 pixels. Vertical scroll, diagonal movement, multiple
+  fingers, cancelled touches, and short movements leave the view alone.
+  Touch tooltips disappear on the last finger lift or cancellation.
+- The line canvases reserve two-finger gestures for the ruler but still
+  allow one-finger vertical scrolling. The allocation donut is unaffected.
 
-Approved phone layout: each category's instruments are one HORIZONTAL SCROLLING
-ROW of flat divided chips. Each chip is as wide as its content, so names are
-never truncated and nothing is hidden.
+## Test-first implementation and coverage
 
-```
-Markets today
-[North America] Europe  Asia-Pacific  ...        <- underlined rail (scrolls)
-┌────────────────────────────────────────────────────┐
-│ S&P 500   7,650.50 USD │ Nasdaq 26,522.54 USD │ →  │
-│ +12.74 (+0.17%)        │ +104.24 (+0.39%)      │    │
-└────────────────────────────────────────────────────┘
-```
+1. Add focused pytest source checks in `tests/test_price_diff.py` for both
+   mouse and touch ruler eligibility, exclusion of normalized axes, mode
+   clearing, empty/non-finite bar refusal, coordinates snapped to the same
+   primary bar, click-versus-drag threshold, release inside/outside the
+   canvas, persistent ruler hover suppression, staggered finger lifts,
+   cancelled touches, and touch ghost handling.
+2. Add a check in `tests/test_chart_refresh.py` that only a visible refresh
+   resets a ruler before fetching; a background prefetch must not reset it.
+   Preserve request-generation, cache, and selection behavior.
+3. Add checks in `tests/test_allocation_ui.py` for single-finger horizontal
+   swipe qualification, multi-touch rejection, cancelled gestures, and
+   tooltip/active-wedge cleanup even when a chart was destroyed.
+4. Run the new focused tests first and confirm failures are due to the
+   missing interaction behavior rather than a broken test or dependency.
+   Python source checks cannot simulate actual browser touch events.
 
-## Approved Decisions
+## Implementation steps
 
-1. Phone tab rail: flat underlined rail. Active tab underlines with
-   `var(--accent)` and drops the accent fill.
-2. Phone header: `.market-header h2` shrinks to 18px; `.market-live` hidden on
-   phones (stays in the HTML, so `test_market_heading_and_live_label` passes).
-3. Phone panel: no box shadow; padding 6px.
-4. Phone instrument row: `.market-grid` becomes a non-wrapping horizontal scroll
-   container (`display: flex`), each `.market-item` `flex: 0 0 auto`. Hairlines
-   are drawn per-pair (`.market-item + .market-item { border-left: 1px solid
-   var(--border-color); }`) with the base gap/background dropped — a border-
-   coloured background gap would paint a grey tail after the last chip when the
-   row is narrower than the panel.
-5. The odd-count `.market-grid-filler` is DELETED (template + CSS + tests). It
-   only plugged the empty cell of the old 2-column phone grid; a scrolling row
-   has no empty cell.
-6. The `main.js` currency-span change from revision 2 is REVERTED. Natural-width
-   chips have room, so the price goes back to one text run with its native
-   currency.
-7. `project-brief.md` gains a note that phones use a one-row scrolling strip,
-   overriding the PR #70 "two-column instrument grid on phones" language.
+1. In `static/js/common.js`, share one raw-value ruler eligibility rule
+   between mouse and touch. Resolve each endpoint against the nearest valid
+   primary bar and use that bar's x, y, and value; refuse empty/null bars.
+2. Keep a pending mouse press separate from active drag and pinned ruler.
+   Wait for the threshold; finalize on canvas or document mouseup. Suppress
+   Chart.js tooltip, crosshair, and cost hover line while dragging or pinned.
+   A click/tap dismisses a pinned ruler and a new drag replaces it.
+3. Keep two-finger measurement active until the last finger lifts; freeze
+   endpoints while only one remains and prevent that remaining finger from
+   starting a page scroll. Finish the ruler on final lift, discard an
+   interrupted measurement on cancellation, and clear the hover/ghosts.
+4. Clear the ruler on visible refresh, mode switch, or comparison reload.
+   Silent prefetch changes only its cache. Keep the existing data shapes and
+   period return/tooltip formatting.
+5. In `static/js/main.js`, record both swipe coordinates and reject
+   multi-touch, cancelled, mainly vertical, and outside-end gestures.
+   Clear the donut tooltip and active wedge on final lift/cancellation;
+   reject delayed ghost events. Preserve arrow/dot and desktop hover.
+6. In `static/style.css`, set `touch-action: pan-y` on `.chart-box > canvas`
+   only, so the browser does not claim the two-finger line-chart gesture.
 
-## Implementation Steps (test-first)
+## Verification and shipping gate
 
-### Step 1 — Update tests (write first; they must fail before code edits)
-
-In `tests/test_market_tabs.py`:
-
-- KEEP `test_market_phone_header_is_quiet`.
-- KEEP `test_market_phone_tabs_are_underlined_not_pills`.
-- KEEP `test_market_phone_active_tab_underlines_with_accent`.
-- KEEP `test_market_phone_panel_is_flat`.
-- DELETE `test_market_phone_cells_are_single_line`.
-- DELETE `test_market_phone_labels_truncate_on_one_line`.
-- DELETE `test_market_js_wraps_currency_in_hideable_span`.
-- DELETE `test_market_phone_last_item_does_not_span_two_columns`.
-- REPLACE `test_market_phone_grid_is_two_columns` with
-  `test_market_phone_instruments_scroll_in_one_row`:
-  - `media_body("600px", ".market-grid")` is not None.
-  - It contains `display: flex` and `overflow-x: auto`.
-  - It does NOT contain `grid-template-columns`.
-  - `media_body("600px", ".market-item")` contains `flex: 0 0 auto`.
-- REPLACE `test_odd_category_ships_phone_grid_filler` with
-  `test_odd_category_has_no_grid_filler`:
-  - `"market-grid-filler"` not in `STYLE_CSS`.
-  - `"market-grid-filler"` not in `(ROOT / "templates" / "index.html").read_text()`.
-
-Also update the section header comment above the phone-redesign tests to say
-"one horizontal scrolling row".
-
-Run `python -m pytest tests/test_market_tabs.py -k phone` and confirm the
-intended failures (old grid rule present, filler still present), not syntax
-errors.
-
-### Step 2 — `static/js/main.js`
-
-Revert the revision-2 currency span. In `updateMarketItem` replace:
-```js
-priceEl.replaceChildren(
-    document.createTextNode(formatMarketLevel(quote.price)),
-    marketTextSpan("market-item-ccy", ` ${quote.currency}`)
-);
-```
-with:
-```js
-priceEl.textContent = `${formatMarketLevel(quote.price)} ${quote.currency}`;
-```
-and restore the original teaching comment:
-```js
-// textContent (never innerHTML): plain text, immune to HTML injection.
-// Every price carries its native currency code — native display, no FX.
-```
-
-DONE status: this edit was already satisfied when the branch was created —
-`static/js/main.js:94` already used `textContent` with the original comment, so
-main.js has NO net change in this PR (kept out of the commit).
-
-### Step 3 — `templates/index.html`
-
-Remove the odd-count filler block (the `{% if cat['instruments']|length % 2 == 1 %}`
-block containing `<span class="market-grid-filler" aria-hidden="true"></span>`)
-and adjust the surrounding comment so the grid comment no longer mentions a
-phone 2-column grid.
-
-### Step 4 — `static/style.css`
-
-In the `@media (max-width: 600px)` market block:
-
-- REPLACE `.market-grid { grid-template-columns: 1fr 1fr; }` with:
-  ```css
-  .market-grid {
-      display: flex;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
-  }
-
-  .market-grid::-webkit-scrollbar {
-      display: none;
-  }
-  ```
-- REPLACE `.market-item { padding: 12px 10px; }` with:
-  ```css
-  .market-item {
-      flex: 0 0 auto;
-      padding: 10px 12px;
-  }
-  ```
-- DELETE the phone `.market-item-top`, `.market-item-label`,
-  `.market-item-price`, `.market-item-change`, `.market-item-ccy`, and
-  `.market-item-move` rules added in revision 2.
-- DELETE the phone `.market-grid-filler` rule.
-- KEEP `.market-panel`, `.market-header h2`, `.market-live`, `.market-tab`,
-  `.market-tab.active`, `.market-tabs`.
-
-In the BASE (desktop) rules, DELETE the `.market-grid-filler { display: none; }`
-rule (the class no longer exists).
-
-Update comments: the phone market block comment must describe the one-row
-scrolling strip; the base `.market-grid` comment must drop the filler mention.
-
-### Step 5 — `project-brief.md`
-
-In the `Markets today` dashboard bullet, change the phone clause from a
-two-column grid to one horizontal scrolling row of chips.
-
-### Step 6 — Verify
-
-1. `source .venv/bin/activate`
-2. `python -m pytest tests/test_market_tabs.py` (all green).
-3. `python -m pytest` (full suite green; previously 898 passed).
-4. `python -m pytest tests/test_docker.py` is unaffected but run it once if any
-   container file changed (it did not).
-5. STOP. Ask the user to open the dashboard at phone width and approve the GUI
-   before any commit.
-
-## Out Of Scope
-
-- Do not move the strip below the portfolio.
-- Do not change the desktop grid (one equal track per instrument).
-- Do not remove the "Live" text from the template; hide it with CSS only.
-- Do not add scroll fades, snap, or new motion.
-- Do not touch `app.py`.
+Run `python -m pytest tests/test_price_diff.py tests/test_chart_refresh.py
+tests/test_allocation_ui.py` and the final full `python -m pytest` suite.
+Review the diff for unintended market data, timeframe, comparison, and
+allocation changes. GUI checks: desktop hover, click, drag across sparse
+bars, outside release, and mode change; phone one-finger inspection and
+vertical scroll, two-finger ruler without page zoom, staggered lifts and
+cancel, donut horizontal swipe versus diagonal scroll, and empty states.
+The user approved the GUI and requested this PR. Commit/push are now
+authorized; follow PR checks and review before merge.
 
 ## Files
 
-`static/style.css`, `templates/index.html`, `project-brief.md`,
-`tests/test_market_tabs.py`, `feature.md`. (`static/js/main.js` has no net
-change; see Step 2.)
+`feature.md`, `static/js/common.js`, `static/js/main.js`,
+`static/style.css`, `tests/test_price_diff.py`,
+`tests/test_chart_refresh.py`, `tests/test_allocation_ui.py`.
