@@ -23,7 +23,8 @@ class MainActivity : AppLockActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        supportActionBar?.hide()
+        // Keep the native bar visible. Its gear opens the URL and app-lock
+        // controls even after the server URL has already been saved.
 
         // Build the WebView via the shared factory and put it on screen
         // directly — avoids inflating the XML layout's unconfigured

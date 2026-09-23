@@ -11,6 +11,13 @@ building the APK. The user explicitly authorized a branch push and PR so they
 can download the CI APK and test it. Keep the PR open pending their device
 approval; do not merge before that approval. The APK candidate bumps shared
 VERSION to 1.2 and Android VERSION_CODE to 3 so it installs over older builds.
+The first APK passed Android CI, but the user found no way to enable the lock:
+`MainActivity` hid the action bar that owns the native Settings gear. The user
+approved a visible top-bar gear for both server URL and app-lock controls.
+The fix keeps the existing Android action bar and pins its Settings item in
+the bar; wait for the new CI APK and another phone check before merging. Bump
+the candidate release to VERSION 1.3 and VERSION_CODE 4 so it installs over
+the first test APK (1.2/code 3).
 
 ## Goal and limits
 

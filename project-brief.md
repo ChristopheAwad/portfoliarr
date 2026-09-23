@@ -67,7 +67,9 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   cover protects the WebView and Settings; a return within the timeout keeps
   the existing WebView and open forms. Strong biometrics or the phone's own
   screen credential unlock it. A new app process starts locked. No phone
-  credential is stored and the Flask server has no corresponding login.
+  credential is stored and the Flask server has no corresponding login. Keep
+  the APK's native top-bar gear visible: it opens the server URL and app-lock
+  controls after initial setup, including after WebView renderer recovery.
 - **The root `VERSION` file is the human-readable release source for both the
   Flask UI and Android `versionName`.** Preferences displays it in the About
   card. Android's independently increasing `VERSION_CODE` remains in

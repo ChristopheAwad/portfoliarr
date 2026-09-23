@@ -58,3 +58,16 @@ def test_renderer_rebuild_and_unlock_keep_lock_cover():
 def test_android_ci_runs_lock_policy_tests_before_uploading_apk():
     workflow = (ROOT.parents[3] / ".github" / "workflows" / "build-android.yml").read_text()
     assert "./gradlew testDebugUnitTest assembleDebug" in workflow
+
+
+def test_native_settings_gear_is_visible_after_url_setup_and_renderer_recovery():
+    main = source("MainActivity.kt")
+    menu = (ROOT / "res" / "menu" / "main_menu.xml").read_text()
+    assert "supportActionBar?.hide()" not in main
+    assert 'app:showAsAction="always"' in menu
+    assert "R.id.action_settings" in main
+    assert "startActivity(Intent(this, SettingsActivity::class.java))" in main
+    # The renderer rebuild replaces only the page content, not the native bar.
+    rebuild = main.split("private fun rebuildWebView()", 1)[1].split("// ── Menu", 1)[0]
+    assert "setContentView(webView)" in rebuild
+    assert "supportActionBar?.hide()" not in rebuild
