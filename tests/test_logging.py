@@ -43,6 +43,16 @@ def test_configured_formatter_is_stable_and_targets_stderr():
     )
 
 
+def test_yfinance_info_chatter_is_suppressed(caplog):
+    logger = logging.getLogger("yfinance")
+    assert logger.level == logging.WARNING
+    with caplog.at_level(logging.INFO):
+        logger.info("cache diagnostic")
+        logger.warning("actionable")
+    levels = [record.levelno for record in caplog.records]
+    assert levels == [logging.WARNING]
+
+
 def test_every_response_gets_a_new_server_request_id(client):
     first = client.get("/definitely-not-a-route", headers={
         "X-Request-ID": "do-not-trust-this",
