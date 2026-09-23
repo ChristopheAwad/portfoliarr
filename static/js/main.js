@@ -1247,19 +1247,51 @@ if (allocNextBtn) {
     });
 }
 
-// Touch-swipe on the donut box for phones: swipe left = next,
-// swipe right = previous. The delta threshold prevents tiny
-// accidental swipes from flipping views.
+// Touch-swipe on the donut box for phones: only a single, mainly horizontal
+// gesture changes slides. A diagonal page scroll must leave the view alone.
 if (donutBoxEl) {
-    let touchStartX = 0;
+    let swipeStart = null;
+
+    function clearDonutTouchHover() {
+        if (!allocationChart) return;
+        allocationChart._touchHoverDormant = true;
+        allocationChart._ghostEventsUntil = Date.now() + GHOST_EVENT_WINDOW_MS;
+        if (allocationChart.tooltip) {
+            allocationChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        }
+        allocationChart.setActiveElements([]);
+        allocationChart.draw();
+    }
+
     donutBoxEl.addEventListener("touchstart", (e) => {
-        touchStartX = e.touches[0].clientX;
+        if (allocationChart) allocationChart._touchHoverDormant = false;
+        swipeStart = e.touches.length === 1
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+            : null;
     }, { passive: true });
     donutBoxEl.addEventListener("touchend", (e) => {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        if (Math.abs(dx) > 40) {
-            switchAllocView(allocViewIndex + (dx < 0 ? 1 : -1));
+        if (e.touches.length !== 0) {
+            swipeStart = null; // one finger of a multi-touch gesture lifted
+            return;
         }
+        const end = e.changedTouches[0];
+        const start = swipeStart;
+        swipeStart = null;
+        clearDonutTouchHover();
+        if (start && end) {
+            const rect = donutBoxEl.getBoundingClientRect();
+            if (end.clientX < rect.left || end.clientX > rect.right
+                || end.clientY < rect.top || end.clientY > rect.bottom) return;
+            const dx = end.clientX - start.x;
+            const dy = end.clientY - start.y;
+            if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+                switchAllocView(allocViewIndex + (dx < 0 ? 1 : -1));
+            }
+        }
+    }, { passive: true });
+    donutBoxEl.addEventListener("touchcancel", () => {
+        swipeStart = null;
+        clearDonutTouchHover();
     }, { passive: true });
 }
 
@@ -1349,6 +1381,20 @@ function paintAllocation(slices, excluded, by = null) {
     // wedge survives into dark mode).
     allocationChart = new Chart(allocationCanvas, {
         type: "doughnut",
+        // Chart.js has no touchend event in its default event list. Block a
+        // delayed touchstart or compatibility mouse event after our native
+        // finger-lift cleanup, or the tooltip would reappear on an old slice.
+        plugins: [{
+            id: "donutTouchHoverEnd",
+            beforeEvent(chart, args) {
+                const type = args.event.native?.type;
+                if (type === "touchstart" || type === "touchmove") {
+                    if (chart._touchHoverDormant) return false;
+                } else if (Date.now() < (chart._ghostEventsUntil || 0)) {
+                    return false;
+                }
+            },
+        }],
         data: {
             labels: labels,
             datasets: [{

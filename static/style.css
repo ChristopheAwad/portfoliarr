@@ -1050,6 +1050,9 @@ a.logo { text-decoration: none; }
     display: block;
     width: 100% !important;
     height: 100% !important;
+    /* Let one finger scroll vertically, but reserve two-finger movement on
+       the line chart for its price-difference ruler instead of page zoom. */
+    touch-action: pan-y;
 }
 
 /* The cost-basis caption under the hero's big number — the brief's

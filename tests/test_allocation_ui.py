@@ -270,6 +270,33 @@ def test_main_js_wires_swipe_on_donut_box():
     assert "touchend" in src
 
 
+def test_donut_swipe_is_single_finger_and_horizontal():
+    src = _read_js("static/js/main.js")
+    swipe = src.split("// Touch-swipe on the donut box", 1)[1].split(
+        "// The summary's holdings slice", 1)[0]
+    assert 'addEventListener("touchcancel"' in swipe
+    assert "e.touches.length === 1" in swipe
+    assert "e.touches.length !== 0" in swipe
+    assert "clientY" in swipe
+    assert "Math.abs(dx) > Math.abs(dy)" in swipe
+    assert "Math.abs(dx) > 40" in swipe
+
+
+def test_donut_clears_touch_hover_even_without_a_live_chart():
+    src = _read_js("static/js/main.js")
+    swipe = src.split("// Touch-swipe on the donut box", 1)[1].split(
+        "// The summary's holdings slice", 1)[0]
+    assert "allocationChart" in swipe
+    assert "tooltip.setActiveElements([]" in swipe
+    assert "setActiveElements([]" in swipe
+    assert 'addEventListener("touchcancel"' in swipe
+    plugin = src.split('id: "donutTouchHoverEnd"', 1)[1].split(
+        "data: {", 1)[0]
+    assert "_touchHoverDormant" in plugin
+    assert "_ghostEventsUntil" in plugin
+    assert "return false" in plugin
+
+
 # ---------------------------------------------------------------------------
 # JS: poll refreshes active dimension only
 # ---------------------------------------------------------------------------
