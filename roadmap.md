@@ -79,7 +79,7 @@ makes the displayed quote stale.
 **Effort:** 1 day
 **Files:** `static/js/ledger.js`, `static/style.css` if needed, `tests/test_ledger_quick_sell.py`
 **Depends on:** Nothing
-**Status:** shipped 2026-09-22 (PR #72)
+**Status:** shipped 2026-09-21 (PR #65)
 
 ---
 
@@ -123,7 +123,7 @@ or build time so the two clients cannot silently drift.
 **Effort:** less than 1 day
 **Files:** `VERSION`, `app.py`, `templates/preferences.html`, `static/style.css`, `android/app/build.gradle.kts`, `android/gradle.properties`, `project-brief.md`, `tests/test_app_version.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-22 (PR #72)
 
 ---
 
