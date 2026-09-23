@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Portfoliarr</string>
     <string name="lock_settings_title">App lock</string>
-    <string name="lock_settings_description">Protect this Android app with your phone's screen lock. This does not lock the server.</string>
+    <string name="lock_settings_description">Protect this Android app with the device screen lock. This does not lock the server.</string>
     <string name="lock_enable">Use app lock</string>
     <string name="lock_timeout_label">Lock after leaving the app</string>
     <string name="lock_immediately">Immediately</string>
