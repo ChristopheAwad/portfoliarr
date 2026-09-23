@@ -65,6 +65,14 @@ authenticate or secure the Flask server.
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, Android tests
 **Depends on:** Nothing
+**Status:** scrapped 2026-09-23. The user rejected the on-device trial.
+**Postmortem:** PR #75 added a local lock, but the first APK hid its controls
+because the native Settings gear sat in a hidden action bar. A second APK made
+that bar visible; the user rejected the resulting app and requested removal
+of both the gear and lock. PR #75 closed unmerged, so the baseline APK keeps
+its original interface and code. A replacement APK needs a higher version
+code to install over the trial build; VERSION 1.4 / VERSION_CODE 5 is that
+replacement. Revisit only if the user requests a new design.
 
 ---
 
