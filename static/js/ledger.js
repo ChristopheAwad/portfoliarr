@@ -229,8 +229,8 @@ function setLedgerMessage(text) {
     ledgerBody.textContent = "";
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 11; // one cell spanning the whole table (must match the
-                       // <th> count — 11 columns, incl. the actions column)
+    cell.colSpan = 12; // one cell spanning the whole table (must match the
+                       // <th> count, incl. the actions column)
     cell.className = "empty-state";
     cell.textContent = text;
     row.append(cell);
@@ -386,9 +386,9 @@ function stampCell(col, cells) {
     return cell;
 }
 
-// Build ONE transaction detail row — the same 10 data cells the flat table
-// always had, plus a trailing actions cell (edit/delete), extracted from
-// renderLedger so the grouped view can stamp out one per transaction under
+// Build ONE transaction detail row — 11 data cells plus a trailing actions
+// cell (edit/delete), extracted from renderLedger so the grouped view can
+// stamp out one per transaction under
 // its group's summary row. Facts are always present; live cells
 // (value/gain) exist only when the backend could quote that ticker —
 // otherwise they gap-fill to "—".
@@ -398,7 +398,7 @@ function stampCell(col, cells) {
 // (the ticker's daily move is identical on every row, and the dollar
 // amount is just that move scaled by one lot's qty). Those two belong to
 // the group summary row, which measures the NET position. The cells still
-// exist (stampCell and the 11-column contract need them) but render empty;
+// exist (stampCell and the 12-column contract need them) but render empty;
 // on phones the whole line is removed by style.css's card-mode rule.
 function buildTxRow(tx) {
     const row = document.createElement("tr");
@@ -432,6 +432,10 @@ function buildTxRow(tx) {
     priceCell.className = "num";
     priceCell.textContent =
         `${formatNumber(tx.price_display ?? tx.price)} ${displayCurrency}`;
+    const feeCell = document.createElement("td");
+    feeCell.className = "num";
+    feeCell.textContent = tx.fee === null || tx.fee === undefined
+        ? "—" : `${formatNumber(tx.fee)} ${tx.currency}`;
 
     // --- Live cells (present only when decorated) ---
     const hasLive = !ledgerStale && tx.price_now !== undefined;
@@ -442,7 +446,7 @@ function buildTxRow(tx) {
     gainCell.className = "num ledger-live";
     const gainPctCell = document.createElement("td");
     gainPctCell.className = "num ledger-live";
-    // Day gain/pct cells exist to keep the row aligned with the 11 columns
+    // Day gain/pct cells exist to keep the row aligned with the 12 columns
     // (and the group rows that DO show daily returns) but stay empty here.
     // Deliberately NO .ledger-live class: markLedgerUnavailable() stamps "—"
     // into every .ledger-live cell on a failed refresh, which would leak a
@@ -490,6 +494,7 @@ function buildTxRow(tx) {
     // Gain is not masked here: the detail row never shows it.
     if (hideLedgerToggle && hideLedgerToggle.dataset.hidden === "true") {
         qtyCell.textContent = "****";
+        if (tx.fee !== null && tx.fee !== undefined) feeCell.textContent = "****";
         valueCell.textContent = "****";
         gainCell.textContent = "****";
         // Remove pos/neg coloring from masked cells
@@ -524,13 +529,13 @@ function buildTxRow(tx) {
     // ordered by. Cells are keyed by data-col and pulled from the shared
     // array, so reordering a column stays a one-array change; no builder
     // edit. The ?? blank-cell fallback is defensive only: the template
-    // test locks the 11 data-col keys to exactly these map keys, so a
+    // test locks the 12 data-col keys to exactly these map keys, so a
     // mismatch means a template column gained/lost without its JS cell —
     // it degrades to a blank cell instead of littering the row with the
     // text "undefined" (what append() would make of a missing cell).
     const cells = {
         date: dateCell, type: typeCell, ticker: tickerCell, qty: qtyCell,
-        price: priceCell, value: valueCell, total_gain: gainCell,
+        price: priceCell, fee: feeCell, value: valueCell, total_gain: gainCell,
         total_gain_pct: gainPctCell, day_gain: dayGainCell,
         day_gain_pct: dayPctCell, actions: actionsCell,
     };
@@ -539,7 +544,7 @@ function buildTxRow(tx) {
 }
 
 // Build ONE group summary row — the collapsed face of one ticker. It
-// reuses the same 10 columns, but the numbers are GROUP-level:
+// reuses the same columns, but the numbers are GROUP-level:
 //   Qty = NET position: buys add, sells subtract (computed HERE from
 //         facts, so the Qty cell stays honest even when the group's
 //         quote failed this cycle).
@@ -668,6 +673,7 @@ function buildGroupRow(ticker, txs) {
     } else {
         priceCell.textContent = `${formatNumber(avgCost)} ${currency}`;
     }
+    const feeCell = document.createElement("td"); // no single fee for a group
 
     // --- Live cells (all-or-nothing per group, like the detail rows) ---
     const hasLive = !ledgerStale && txs[0].price_now !== undefined;
@@ -737,7 +743,7 @@ function buildGroupRow(ticker, txs) {
         dayGainCell.classList.remove("pos", "neg");
     }
 
-    // The actions column's 11th cell. A group is an aggregate, not a
+    // The actions column's last cell. A group is an aggregate, not a
     // record — editing/deleting INDIVIDUAL transactions belongs to the
     // detail rows — but the group owns two actions of its own:
     //   1. Quick Sell — prepare (never submit) a full-position SELL of this
@@ -783,7 +789,7 @@ function buildGroupRow(ticker, txs) {
     // ledgerColOrder array is what guarantees they can never drift.
     const cells = {
         date: dateCell, type: typeCell, ticker: tickerCell, qty: qtyCell,
-        price: priceCell, value: valueCell, total_gain: gainCell,
+        price: priceCell, fee: feeCell, value: valueCell, total_gain: gainCell,
         total_gain_pct: gainPctCell, day_gain: dayGainCell,
         day_gain_pct: dayPctCell, actions: actionsCell,
     };
@@ -816,6 +822,7 @@ function enterEditMode(tx) {
     priceEdited = false;
     txForm.elements.price.value = tx.price.toFixed(2);
     txForm.elements.qty.value = tx.qty;
+    txForm.elements.fee.value = tx.fee ?? "";
     txForm.elements.type.value = tx.transaction_type;
     txSubmitBtn.textContent = "Save";
     txEditingTextEl.textContent =
@@ -885,6 +892,7 @@ function prepareFullSale(ticker, txs) {
     txForm.elements.ticker.value = ticker;
     txForm.elements.date.value = todayLocalISO();
     txForm.elements.qty.value = netQty;
+    txForm.elements.fee.value = "";
     txForm.elements.type.value = "SELL";
     autofillPrice = livePrice;
     priceEdited = false;
@@ -1430,6 +1438,7 @@ txForm.addEventListener("submit", async (event) => {
         date: fields.date,
         price: price,
         qty: Number(fields.qty),
+        fee: fields.fee === "" ? null : Number(fields.fee),
         type: fields.type,
     };
 
@@ -1454,6 +1463,7 @@ txForm.addEventListener("submit", async (event) => {
                       date: body.date,
                       price: body.price,
                       qty: body.qty,
+                      fee: body.fee,
                       type: body.type,
                   }),
               });

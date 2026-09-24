@@ -135,6 +135,9 @@
                            step="any" min="0" required>
                     <input type="number" name="qty" placeholder="Qty"
                            step="any" min="0" required>
+                    <input type="number" name="fee" placeholder="Fee (optional)"
+                           aria-label="Transaction fee in the ticker's currency"
+                           step="any" min="0">
                     <select name="type">
                         <option value="BUY">Buy</option>
                         <option value="SELL">Sell</option>
@@ -186,7 +189,7 @@
                     <div id="import-report" hidden></div>
                 </div>
 
-                <!-- Responsive scroll wrapper. The ledger has 11
+                <!-- Responsive scroll wrapper. The ledger has 12
                      nowrap columns — real readable widths need ~760px,
                      which no phone has. The CSS gives this div
                      overflow-x: auto, so the overflow is confined to
@@ -228,6 +231,7 @@
                                 tabindex="0" role="button"
                                 aria-sort="none">Qty</th>
                             <th data-col="price">Price</th>
+                            <th class="num" data-col="fee">Fee</th>
                             <th class="num sortable" data-col="value"
                                 tabindex="0" role="button"
                                 aria-sort="none">Value</th>

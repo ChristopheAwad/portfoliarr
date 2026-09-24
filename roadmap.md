@@ -25,22 +25,25 @@ Import exists (`parse_import_text`), but there's no export. One new route (`GET 
 
 **Files:** `app.py` (new route), `templates/index.html` (button), `static/js/main.js` (download handler)
 **Depends on:** Nothing
+**Priority:** Back burner (user request)
 
 ---
 
 ### 3. Transaction Fees
-Currently no fee tracking. Add a nullable `fee` column to the `transactions` table. Fees roll into cost basis (buy fee increases cost, sell fee decreases proceeds). The DB migration pattern already exists (see fx_rate migration in `db.py`).
+Currently no fee tracking. Add a nullable native-currency `fee` column to the `transactions` table. Fees increase buy costs and reduce sell proceeds in ledger, portfolio, and realized-gain calculations. The DB migration pattern already exists (see fx_rate migration in `db.py`). Detailed plan in `feature.md`.
 
-**Files:** `db.py` (schema + migration), `app.py` (validator + routes), `static/js/main.js` (form field + display), `templates/index.html` (form input)
+**Files:** `db.py` (schema + migration), `app.py` (validator + accounting routes), `static/js/ledger.js` (form + display), `templates/ledger.html` (input + column), `project-brief.md`, tests
 **Depends on:** Nothing
+**Status:** shipped 2026-09-23 (PR #79)
 
 ---
 
 ### 4. Sector Breakdown Donut
-The stock page already fetches sector/industry from Yahoo stats. Aggregate holdings by sector server-side (the data is in the quote response), render a second donut chart next to the allocation one. Ghostfolio charges for this; you get it for free.
+The dashboard allocation carousel has a By Sector view. The server groups priced holdings by sector and returns their CAD values and weights. This shipped as part of the multi-dimension allocation donut, rather than as a second chart.
 
-**Files:** `app.py` (new endpoint or extend `/api/portfolio/summary`), `static/js/main.js` (new donut chart), `templates/index.html` (new canvas)
-**Depends on:** Nothing (but fees/average cost make the sector weights more meaningful)
+**Files:** `app.py`, `market_data.py`, `static/js/main.js`, `tests/test_allocation.py`
+**Depends on:** Nothing
+**Status:** shipped 2026-09-15 (PR #34)
 
 ---
 
@@ -65,6 +68,7 @@ authenticate or secure the Flask server.
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, Android tests
 **Depends on:** Nothing
+**Priority:** Back burner (user request)
 
 ---
 
@@ -268,7 +272,7 @@ Tier 1 (all independent):
   1. Average Cost ─────────────────────┐
   2. CSV Export ───────────────────────┤
   3. Transaction Fees ─────────────────┤── can be done in any order
-  4. Sector Breakdown ─────────────────┤
+  4. Sector Breakdown (shipped) ───────┤
   5. Cash Balance ─────────────────────┤
   16. Android Biometric/PIN Lock ────────┤
   18. Ledger Quick Sell ─────────────────┤
@@ -302,12 +306,10 @@ Tier 3 (all independent):
 For maximum compounding value:
 
 1. **Transaction Fees** → makes cost basis realistic
-2. **Average Cost** → displays the now-real cost basis
-3. **CSV Export** → makes data portable
-16. **Android Biometric/PIN Lock** → protects financial information on the phone
+2. **Average Cost** → displays the now-real cost basis (shipped)
 18. **Ledger Quick Sell** → prepares an exact full-position sale for review from the ledger row
 19. **Date-Aware Ledger Price Auto-Fill** → prices a logged transaction at its actual date
-4. **Sector Breakdown** → deeper allocation insight
+4. **Sector Breakdown** → deeper allocation insight (shipped)
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app
 7. **Benchmark Line** → context for performance (superseded by #17)
@@ -322,6 +324,8 @@ For maximum compounding value:
 22. **In-App Version Display** → identifies the deployed web and Android release from one shared version source
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
+
+Back burner (user request): #2 CSV Export and #16 Android Biometric/PIN Lock.
 
 ---
 

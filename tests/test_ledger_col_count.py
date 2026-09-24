@@ -1,6 +1,6 @@
 # tests/test_ledger_col_count.py
 # ==============================
-# The ledger column count (11, incl. the actions column) lives in FOUR
+# The ledger column count (12, incl. the actions column) lives in FOUR
 # places that must stay in sync:
 #   1. <th> row in templates/ledger.html (the source of truth)
 #   2. setLedgerMessage's colSpan in static/js/ledger.js
@@ -77,32 +77,32 @@ def _cell_keys_in_function(js, func_name):
 # ── Tests ─────────────────────────────────────────────────────────────
 
 def test_set_ledger_message_colspan_matches_th_count():
-    """setLedgerMessage uses colSpan = 11 (hardcoded). This is the safety
+    """setLedgerMessage uses colSpan = 12 (hardcoded). This is the safety
     net for empty-state rows — a wrong colSpan stretches or compresses
     the "no transactions" message across the wrong number of columns."""
     js = _read_js()
     html = _read_html()
     colspan = _colspan_in_set_ledger_message(js)
     th_count = len(_th_data_cols(html))
-    assert colspan == th_count == 11
+    assert colspan == th_count == 12
 
 
-def test_build_group_row_has_11_cell_keys():
-    """buildGroupRow's cells object must have exactly 11 keys — one per
+def test_build_group_row_has_12_cell_keys():
+    """buildGroupRow's cells object must have exactly 12 keys — one per
     <th> column. Fewer = missing cell; more = phantom column."""
     js = _read_js()
     keys = _cell_keys_in_function(js, 'buildGroupRow')
     assert keys is not None, "buildGroupRow not found in ledger.js"
-    assert len(keys) == 11
+    assert len(keys) == 12
 
 
-def test_build_tx_row_has_11_cell_keys():
-    """buildTxRow's cells object must have exactly 11 keys — same contract
+def test_build_tx_row_has_12_cell_keys():
+    """buildTxRow's cells object must have exactly 12 keys — same contract
     as buildGroupRow. The two builders MUST order cells identically."""
     js = _read_js()
     keys = _cell_keys_in_function(js, 'buildTxRow')
     assert keys is not None, "buildTxRow not found in ledger.js"
-    assert len(keys) == 11
+    assert len(keys) == 12
 
 
 def test_cell_keys_match_th_data_cols():

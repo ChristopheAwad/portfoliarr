@@ -83,6 +83,8 @@ def init():
         #                    and for ISO dates that IS chronological order.
         #   price / qty      REAL (floating point). REAL for qty too, so
         #                    fractional shares and crypto amounts work.
+        #   fee              Optional commission for the whole trade in its
+        #                    native currency. NULL means not recorded.
         #   currency         The security's TRADING currency ("USD", "CAD"),
         #                    auto-filled by the route layer from yfinance.
         #   fx_rate          The USD→CAD conversion rate ON THE
@@ -105,6 +107,7 @@ def init():
                 transaction_date TEXT NOT NULL,
                 price            REAL NOT NULL,
                 qty              REAL NOT NULL,
+                fee              REAL,
                 currency         TEXT NOT NULL,
                 fx_rate          REAL,
                 transaction_type TEXT NOT NULL CHECK (transaction_type IN ('BUY', 'SELL'))
@@ -129,6 +132,8 @@ def init():
             conn.execute(
                 "ALTER TABLE transactions ADD COLUMN fx_rate REAL"
             )
+        if "fee" not in columns:
+            conn.execute("ALTER TABLE transactions ADD COLUMN fee REAL")
 
         # Backfill what migration CAN know: a CAD row needs no conversion
         # (the rate is exactly 1.0 — a true fact, not a guess). USD rows
@@ -210,7 +215,7 @@ def remove_symbol(symbol):
 # ---------------------------------------------------------------------------
 
 def add_transaction(ticker, transaction_date, price, qty, currency,
-                    transaction_type, fx_rate):
+                    transaction_type, fx_rate, fee=None):
     """Insert one BUY or SELL row. Returns the new row's auto-numbered id.
 
     Validation has already happened in the route layer (fields checked,
@@ -232,11 +237,11 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
             """
             INSERT INTO transactions
                 (ticker, transaction_date, price, qty, currency, fx_rate,
-                 transaction_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 transaction_type, fee)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (ticker, transaction_date, price, qty, currency, fx_rate,
-             transaction_type),
+             transaction_type, fee),
         )
         # lastrowid: the id SQLite just assigned to THIS insert. Telling the
         # caller which row was created makes the route's 201 response more
@@ -262,7 +267,7 @@ def get_transactions():
         rows = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   fx_rate, transaction_type
+                   fx_rate, transaction_type, fee
             FROM transactions
             ORDER BY transaction_date DESC, id DESC
             """
@@ -283,7 +288,7 @@ def get_transaction(tx_id):
         row = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   fx_rate, transaction_type
+                   fx_rate, transaction_type, fee
             FROM transactions
             WHERE id = ?
             """,
@@ -293,10 +298,10 @@ def get_transaction(tx_id):
 
 
 def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
-                       fx_rate):
+                       fx_rate, fee=None):
     """Correct the user-editable facts of one transaction.
 
-    The SET list names FIVE columns — date, price, qty, type, fx_rate.
+    The SET list names SIX columns — date, price, qty, type, fx_rate, fee.
     Ticker and currency are deliberately ABSENT: the ticker is the row's
     identity, and currency is the yfinance fact derived from it at insert
     time. fx_rate IS yfinance-derived too, but it derives from the DATE —
@@ -316,10 +321,10 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
             """
             UPDATE transactions
             SET transaction_date = ?, price = ?, qty = ?, transaction_type = ?,
-                fx_rate = ?
+                fx_rate = ?, fee = ?
             WHERE id = ?
             """,
-            (transaction_date, price, qty, transaction_type, fx_rate, tx_id),
+            (transaction_date, price, qty, transaction_type, fx_rate, fee, tx_id),
         )
         return cursor.rowcount > 0
 
