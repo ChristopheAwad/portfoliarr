@@ -575,11 +575,14 @@ let lastPortfolioPaint = null;
 // no narrow intermediate frame. (paintChange only toggles pos/neg, it
 // never removes privacy-masked — that's stripped here too.)
 function clearPortfolioGeometryLocks() {
-    for (const el of [portfolioValueEl, portfolioDayChangeEl,
-                      portfolioTotalReturnEl, portfolioCostBasisEl]) {
+    for (const el of [portfolioValueEl, portfolioDayChangeEl.parentElement,
+                      portfolioTotalReturnEl.parentElement, portfolioCostBasisEl]) {
         el.style.display = "";
         el.style.minWidth = "";
         el.style.minHeight = "";
+    }
+    for (const el of [portfolioValueEl, portfolioDayChangeEl,
+                      portfolioTotalReturnEl, portfolioCostBasisEl]) {
         el.classList.remove("privacy-masked");
     }
 }
@@ -589,23 +592,15 @@ function clearPortfolioGeometryLocks() {
 // instead of real numbers. When shown, a fresh refreshPortfolioSummary
 // repaints live data.
 //
-// GEOMETRY LOCK (why the min-width/min-height dance): masked text is much
-// narrower than the real numbers, and the value row is plain wrapping
-// inline content. Real values are wide enough to push the two change
-// pills onto their own wrapped line; **** values are so small that
-// everything fits beside the value — so masking CHANGED THE WRAP POINT:
-// the pills jumped up inline with the value and everything below shifted.
-// The fix: measure each span's live box (offsetWidth/offsetHeight) and
-// re-freeze it as inline min-width/min-height BEFORE overwriting the
-// text. min-width is ignored on plain inline elements, so each span is
-// also flipped to inline-block for the mask's duration. Unmasking clears
-// every inline style so the browser reflows at natural size before the
-// fresh paint.
+// GEOMETRY LOCK: shorter masked text must not move the pills to another
+// line. Freeze the value, cost basis and each pill's outer slot before
+// changing the text. The colored inner pill stays free to shrink to its
+// percentage label. Unmasking releases the locks after restoring values.
 function applyPortfolioPrivacy() {
     if (!hidePortfolioToggle) return;
     const masked = portfolioMasked();
-    const targets = [portfolioValueEl, portfolioDayChangeEl,
-                     portfolioTotalReturnEl, portfolioCostBasisEl];
+    const targets = [portfolioValueEl, portfolioDayChangeEl.parentElement,
+                     portfolioTotalReturnEl.parentElement, portfolioCostBasisEl];
     if (masked) {
         // Snapshot the values on screen NOW, while they're still real —
         // the unmask branch repaints them from memory so the wait for the
