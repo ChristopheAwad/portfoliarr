@@ -13,9 +13,11 @@
 //     common.js).
 //   - Shared helpers (formatters, paintChange, UI kit) are globals from
 //     common.js, loaded before this file by base.html.
-// Mutating actions (log/edit/delete/import) refresh only LEDGER data:
-// there is no portfolio summary on this page to refresh. The dashboard,
-// if open in another tab, picks the change up on its own next poll.
+// Mutating actions (log/edit/delete/import) refresh BOTH this page's
+// views — the ledger and the closed-sales card, because a SELL changes
+// both. There is no portfolio summary on this page to refresh. The
+// dashboard, if open in another tab, picks the change up on its own
+// next poll.
 
 // ---------------------------------------------------------------------------
 // TRANSACTION LEDGER — the list of BUY/SELL events, plus the form that logs

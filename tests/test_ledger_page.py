@@ -222,5 +222,9 @@ def test_mutations_refresh_ledger_and_closed_sales():
     js = LEDGER_JS.read_text()
     assert "function refreshLedgerViews" in js, \
         "the ledger+closed-sales refresh pair must exist"
-    assert js.count("refreshLedgerViews();") >= 4, \
+    start = js.find("function refreshLedgerViews")
+    body = js[start:js.find("}", start)]
+    assert "refreshLedger();" in body and "refreshClosedSales();" in body, \
+        "the pair helper must refresh BOTH views"
+    assert len(re.findall(r"refreshLedgerViews\s*\(\s*\)", js)) >= 4, \
         "every mutation path must refresh the ledger AND closed sales"
