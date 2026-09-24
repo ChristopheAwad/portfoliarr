@@ -63,8 +63,8 @@
             {% for key, cat in market_categories.items() %}
             <!-- One panel per category. North America (the first) starts
                  visible; every other panel ships hidden and is revealed by
-                 main.js on activation. Only the ACTIVE panel is fetched, so
-                 inactive panels sit empty until first shown. -->
+                 main.js on activation. All panels load in parallel at page
+                 startup, even if they remain hidden until selected. -->
             <div class="market-panel"
                  role="tabpanel"
                  id="market-panel-{{ key }}"

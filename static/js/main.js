@@ -11,11 +11,10 @@
 // defining them again would just shadow the shared ones.
 
 // MARKET OVERVIEW BEGIN
-// The tabbed market strip above the portfolio. ONE category is active at a
-// time, and only that category is fetched — on initial load, on tab click,
-// and on each poll. Items live inside their category's panel and are found
-// by data-symbol (never DOM position), so one category's response can never
-// touch another panel's cells.
+// The tabbed market strip above the portfolio. All categories load in
+// parallel at startup, but only the active one is polled. Items live inside
+// their category's panel and are found by data-symbol (never DOM position),
+// so one category's response cannot touch another panel's cells.
 
 // Which category tab is shown. North America is the default and matches the
 // template's initially-selected tab. Not persisted: a fresh load always
@@ -26,6 +25,13 @@ let activeMarketCategory = "north-america";
 // request for the same category must not overwrite it — the token is checked
 // before every paint, so only the latest request for a category wins.
 const marketRequestTokens = {};
+
+// Successful panels stay fresh for the quote cache's 120-second lifetime.
+// A tab click reuses the painted cells (or its pending fetch), while the
+// active-tab poll deliberately asks for current data. Failures aren't cached.
+const MARKET_CACHE_TTL = 120_000;
+const marketFetchedAt = {};
+const marketPending = {};
 
 // The panel element that holds one category's market items.
 function marketPanel(category) {
@@ -107,10 +113,17 @@ function updateMarketItem(panel, quote) {
     changeEl.classList.toggle("neg", !positive);
 }
 
-// One refresh cycle for ONE category: claim token -> clear -> fetch -> paint.
-async function refreshMarketOverview(category = activeMarketCategory) {
+// One refresh cycle for ONE category. Tab clicks reuse a fresh or pending
+// result; a poll can force a new request even if an older one is still slow.
+function refreshMarketOverview(category = activeMarketCategory, { force = false } = {}) {
     const panel = marketPanel(category);
     if (!panel) return;
+
+    if (!force) {
+        if (marketPending[category]) return marketPending[category];
+        if (marketFetchedAt[category] !== undefined &&
+            Date.now() - marketFetchedAt[category] < MARKET_CACHE_TTL) return;
+    }
 
     // Claim this request's token BEFORE the await; a response that finishes
     // after a newer request for the same category is discarded below.
@@ -119,41 +132,60 @@ async function refreshMarketOverview(category = activeMarketCategory) {
 
     setMarketPanelValues(panel, ""); // shimmer while loading
 
-    try {
-        const response = await fetch(
-            `/api/indices?category=${encodeURIComponent(category)}`
-        );
-        // fetch does NOT throw on 4xx/5xx — only on network failure.
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const quotes = await response.json(); // raw bytes -> JS objects
+    const request = (async () => {
+        try {
+            const response = await fetch(
+                `/api/indices?category=${encodeURIComponent(category)}`
+            );
+            // fetch does NOT throw on 4xx/5xx — only on network failure.
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const quotes = await response.json(); // raw bytes -> JS objects
 
-        if (marketRequestTokens[category] !== requestToken) return; // stale
+            if (marketRequestTokens[category] !== requestToken) return; // stale
 
-        for (const quote of quotes) updateMarketItem(panel, quote);
+            for (const quote of quotes) updateMarketItem(panel, quote);
 
-        // Gap-fill: the backend returns successes only, so any item whose
-        // symbol did NOT arrive just failed while its siblings lived. BOTH
-        // rows take "—" — an EMPTY change row would re-trigger its :empty
-        // loading shimmer, i.e. the skeleton would outlive the failure —
-        // and pos/neg clear, so a degraded cell cannot paint its dash green.
-        const answered = new Set(quotes.map((q) => q.symbol));
-        managedMarketItems(panel).forEach((item) => {
-            if (!answered.has(item.dataset.symbol)) {
-                item.querySelector(".market-item-price").textContent = "—";
-                const changeEl = item.querySelector(".market-item-change");
-                changeEl.textContent = "—";
-                changeEl.classList.remove("pos", "neg");
+            // Gap-fill: the backend returns successes only, so any item whose
+            // symbol did NOT arrive just failed while its siblings lived. BOTH
+            // rows take "—" — an EMPTY change row would re-trigger its :empty
+            // loading shimmer, i.e. the skeleton would outlive the failure —
+            // and pos/neg clear, so a degraded cell cannot paint its dash green.
+            const answered = new Set(quotes.map((q) => q.symbol));
+            managedMarketItems(panel).forEach((item) => {
+                if (!answered.has(item.dataset.symbol)) {
+                    item.querySelector(".market-item-price").textContent = "—";
+                    const changeEl = item.querySelector(".market-item-change");
+                    changeEl.textContent = "—";
+                    changeEl.classList.remove("pos", "neg");
+                }
+            });
+            marketFetchedAt[category] = Date.now();
+        } catch (err) {
+            if (marketRequestTokens[category] !== requestToken) return; // stale
+            delete marketFetchedAt[category];
+            console.error(`market refresh failed for ${category}:`, err);
+            setMarketPanelValues(panel, "—");
+        } finally {
+            // A superseded request cannot clear the newer request's marker.
+            if (marketRequestTokens[category] === requestToken) {
+                delete marketPending[category];
             }
-        });
-    } catch (err) {
-        if (marketRequestTokens[category] !== requestToken) return; // stale
-        console.error(`market refresh failed for ${category}:`, err);
-        setMarketPanelValues(panel, "—");
-    }
+        }
+    })();
+    marketPending[category] = request;
+    return request;
+}
+
+// The rendered tabs are the category list. Start every request without
+// awaiting the last one, so a slow market cannot delay its siblings.
+function preloadMarketOverview() {
+    document.querySelectorAll(".market-tab").forEach((tab) => {
+        refreshMarketOverview(tab.dataset.category);
+    });
 }
 
 // Activate a category tab: sync ARIA + roving tabindex, show its panel, hide
-// the others, focus the tab, and fetch that category's quotes. Switching
+// the others, focus the tab, and reuse or fetch that category's quotes. Switching
 // does NOT touch the portfolio/watchlist/chart — those have their own
 // refresh cycles.
 function activateMarketTab(tab) {
@@ -1615,11 +1647,10 @@ volumeLeadersEl.addEventListener("click", (event) => {
 //    section immediately — no waiting for the first interval. (The ledger
 //    lives on /ledger with its own timer.) The market overview ships EMPTY
 //    from the template — the CSS :empty shimmer stands in until real data
-//    lands — and refreshMarketOverview fetches ONLY the active category
-//    (North America by default), never all six. The watchlist starts
-//    truly empty, painted by refreshWatchlist within the second.
+//    lands — and preloadMarketOverview starts every category request
+//    together. The watchlist starts empty and refreshWatchlist paints it.
 setupMarketTabs();
-refreshMarketOverview();
+preloadMarketOverview();
 refreshWatchlist();
 refreshVolumeLeaders();
 portfolioReady.then(() => refreshPortfolioSummary());
@@ -1655,10 +1686,10 @@ chartReady?.then?.(() => {
 //    active allocation dimension all change at the same rate.
 //    setupAutoRefresh owns the interval and wires visibility/online events
 //    so the page refreshes instantly when the user returns (see common.js).
-//    Only the selected market category is polled — inactive tabs stay
-//    unfetched until the user opens them.
+//    Only the selected market category is polled; other tabs retain the
+//    values fetched at startup or on their last visit.
 setupAutoRefresh(() => {
-    refreshMarketOverview();
+    refreshMarketOverview(activeMarketCategory, { force: true });
     refreshWatchlist();
     refreshVolumeLeaders();
     refreshPortfolioSummary();

@@ -358,14 +358,19 @@ def test_market_js_tab_click_triggers_immediate_refresh():
     assert "refreshMarketOverview(category)" in js or "refreshMarketOverview(" in js
 
 
-def test_market_js_boot_loads_only_active_category():
-    boot = MAIN_JS[MAIN_JS.index("// MARKET OVERVIEW END"):]
-    assert "refreshMarketOverview()" in boot, "boot must fetch the active market"
+def test_market_js_boot_preloads_all_categories_in_parallel():
+    boot = MAIN_JS[MAIN_JS.index("// BOOT — the script's entry point."):]
+    js = market_js()
+    assert "preloadMarketOverview()" in boot, "boot must start all market requests"
+    assert boot.index("preloadMarketOverview()") < boot.index("refreshWatchlist()")
+    assert "function preloadMarketOverview()" in js
+    preload = js.split("function preloadMarketOverview()", 1)[1].split(
+        "// Activate a category tab:", 1
+    )[0]
+    assert 'document.querySelectorAll(".market-tab")' in preload
+    assert "refreshMarketOverview(" in preload
+    assert "await " not in preload, "requests must start without waiting for another tab"
     assert "refreshIndices" not in MAIN_JS, "old flat indices fetch must be gone"
-    for key in ("europe", "asia-pacific", "commodities", "currencies"):
-        assert f'refreshMarketOverview("{key}")' not in boot, (
-            "boot must not eagerly fetch inactive categories"
-        )
 
 
 def test_market_js_boot_wires_tab_handlers():
@@ -378,7 +383,9 @@ def test_market_js_boot_wires_tab_handlers():
 def test_market_js_polls_active_category_only():
     start = MAIN_JS.index("setupAutoRefresh(() =>")
     callback = MAIN_JS[start:]
-    assert "refreshMarketOverview()" in callback, "poll must refresh active market"
+    assert "refreshMarketOverview(activeMarketCategory, { force: true })" in callback, (
+        "poll must refresh only the active market, even while cached"
+    )
     assert "refreshIndices" not in callback
 
 
