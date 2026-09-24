@@ -145,7 +145,7 @@ Detailed tests-first implementation plan: `feature.md`.
 **Effort:** 5 days
 **Files:** `db.py`, `app.py`, `static/js/common.js`, `static/js/main.js`, `static/js/ledger.js`, `static/js/preferences.js`, `static/js/stock.js` if needed, `templates/index.html`, `templates/ledger.html`, `templates/preferences.html`, `static/style.css`, `project-brief.md`, portfolio tests and existing fixture/route tests
 **Depends on:** Nothing; preserve #3 fee accounting and #13/#14 performance history behavior
-**Status:** in progress
+**Status:** shipped 2026-09-24 (PR #80)
 
 ---
 

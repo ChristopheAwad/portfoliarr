@@ -4,7 +4,7 @@
 
 Implemented after user approval. Migration, isolation, and frontend contract tests were written and run red before implementation. During the GUI check, the user found a malformed chart history URL and brief dashboard overflow on a phone browser. The chart now appends the period with the correct query delimiter; the mobile grid has a zero minimum and the portfolio selector reserves its width before the list loads. Regressions were written red first. The lead agent's final full `python -m pytest` run passes (953 tests). The user checked the browser again and requested a PR, authorizing the shipping workflow. Mark roadmap #23 shipped only in the approved shipping commit.
 
-The prior transaction-fee plan in this file is superseded by this handoff: fee code is already present in `db.py` and `app.py` and shipped in PR #79. Roadmap #3 still says `in progress`; do not silently change that unrelated roadmap status as part of this plan. Preserve the existing fee and FX contracts throughout this feature.
+The prior transaction-fee plan in this file is superseded by this handoff: fee code is already present in `db.py` and `app.py` and shipped in PR #79. Preserve the existing fee and FX contracts throughout this feature.
 
 ## Agreed product behavior
 
