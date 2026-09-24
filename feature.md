@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Approved and implemented 2026-09-24. The user approved the browser GUI and requested a PR. Roadmap #24 is in progress until the PR number is known, then it is marked shipped in the PR. The focused tests failed before implementation (9 failed, 53 passed); the full `python -m pytest` suite passed after implementation (970 passed). This changes the existing dashboard market tabs: all six categories start loading in parallel as soon as the page script runs. The selected tab remains North America on a fresh load. No API shape or market-symbol configuration changes.
+Approved and implemented 2026-09-24. The user approved the browser GUI and requested PR #82. Roadmap #24 is marked shipped in the PR. The focused tests failed before implementation (9 failed, 53 passed); the full `python -m pytest` suite passed after implementation (970 passed). This changes the existing dashboard market tabs: all six categories start loading in parallel as soon as the page script runs. The selected tab remains North America on a fresh load. No API shape or market-symbol configuration changes.
 
 ## Tests first
 

@@ -268,7 +268,7 @@ guards.
 **Effort:** 1 day
 **Files:** `static/js/main.js`, `templates/index.html`, `project-brief.md`, `tests/test_market_tabs.py`, `tests/test_market_preload.py`
 **Depends on:** #20 (shipped)
-**Status:** in progress
+**Status:** shipped 2026-09-24 (PR #82)
 
 ---
 
