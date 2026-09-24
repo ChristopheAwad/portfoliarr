@@ -708,6 +708,21 @@ async function refreshPortfolioSummary() {
                 data.total_value === 0 &&
                 data.day_gain === 0 &&
                 data.total_gain === 0;
+            // Both the header's degradation path and the normal path must
+            // update the donut. An all-unpriced reply is not an empty ledger.
+            const tickerSlices = data.holdings.map(
+                (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
+            );
+            const tickerExcluded = data.unpriced.map(
+                (ticker) => ({ ticker, reason: "couldn't be priced" })
+            );
+            lastSummaryHoldings = tickerSlices;
+            lastSummaryExcluded = tickerExcluded;
+            lastSummaryReady = true;
+            lastSummaryFailed = false;
+            if (allocViewIndex === 0) {
+                paintAllocation(tickerSlices, tickerExcluded);
+            }
             if (nothingPriced) {
                 // While masked, keep the existing mask — don't overwrite with
                 // error text that would break the privacy look.
@@ -763,23 +778,6 @@ async function refreshPortfolioSummary() {
                 clearPortfolioGeometryLocks();
             }
 
-            // The donut eats the same reply: the holdings slice arrives
-            // already priced-only, CAD, and value-sorted — the backend's math,
-            // painted verbatim. Convert to the unified slices shape (key/value/
-            // weight) so both the ticker view and the allocation views share
-            // one paintAllocation function.
-            const tickerSlices = data.holdings.map(
-                (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
-            );
-            lastSummaryHoldings = tickerSlices;
-
-            // Paint ONLY if the ticker view is currently active — the other
-            // views have their own fetch cycle. Painting a non-active view
-            // would overwrite the chart with stale data on the next arrow flip.
-            if (allocViewIndex === 0) {
-                paintAllocation(tickerSlices, null);
-            }
-
             // Feed yesterday's portfolio value into the chart handle so the
             // 1D view can draw a horizontal reference line at yesterday's close.
             if (portfolioChartHandle) {
@@ -793,6 +791,15 @@ async function refreshPortfolioSummary() {
             if (epoch !== portfolioEpoch()) return;
             console.error("portfolio summary refresh failed:", err);
             setPortfolioUnavailable();
+            lastSummaryFailed = true;
+            if (allocViewIndex === 0) {
+                if (lastSummaryReady && lastAllocPayload?.by === null) {
+                    setAllocState("stale-error");
+                } else {
+                    updateAllocExcluded([]);
+                    setAllocState("unavailable");
+                }
+            }
         } finally {
             // Empty the slot so the next cycle starts a fresh request.
             if (epoch === summaryFlightEpoch) summaryInflight = null;
@@ -934,9 +941,10 @@ document.addEventListener("themechange", () => {
 
 // ---------------------------------------------------------------------------
 // ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
-// OF, cycled through 6 views with arrows, dots, and touch-swipe on the
-// donut box. The "By Ticker" view reads the summary reply's `holdings`
-// slice; the other 5 views fetch /api/portfolio/allocation?by=<key>.
+// OF, cycled through 6 views with arrows and dots. Touching the chart
+// shows a segment tooltip but never changes views. The "By Ticker" view
+// reads the summary reply's `holdings` slice; the other 5 views fetch
+// /api/portfolio/allocation?by=<key>.
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
 
@@ -993,22 +1001,25 @@ function donutBorderColor() {
         .getPropertyValue("--card-bg").trim();
 }
 
-// Show exactly one of: the donut box, or the status line. Each state owns
-// its message; "ready" (and "stale", where the old chart still has value)
-// keep the box visible. The box ships `hidden` in the template and the
-// global [hidden] rule does the hiding — toggling the ATTRIBUTE, not
+// Show the donut only when it has slices. A cached chart can stay visible
+// with a status note during a refresh or after a failed refresh. The box
+// ships `hidden` in the template and the global [hidden] rule hides it.
+// Toggle the ATTRIBUTE, not
 // style.display, so a reveal also lets CSS layout measure the canvas.
 function setAllocState(state) {
     if (!allocStatusEl || !donutBoxEl) return;
     const messages = {
         loading: "Loading allocation\u2026",
-        empty: "No priced holdings yet \u2014 log a buy and your allocation appears here.",
+        empty: "No open long holdings to allocate yet.",
+        excluded: "No holdings could be priced or classified for this view.",
         unavailable: "Allocation unavailable right now.",
         stale: "Refreshing allocation with the latest prices\u2026",
+        "stale-error": "Could not refresh allocation. Showing the last available result.",
         ready: "",
     };
     const message = messages[state] ?? "";
-    donutBoxEl.hidden = !(state === "ready" || state === "stale");
+    donutBoxEl.hidden = !allocationChart ||
+        !(state === "ready" || state === "stale" || state === "stale-error");
     allocStatusEl.textContent = message;
     allocStatusEl.hidden = !message;
     if (state === "ready") {
@@ -1022,7 +1033,7 @@ function setAllocState(state) {
 }
 
 // ---------------------------------------------------------------------------
-// ALLOCATION CAROUSEL — 6 views, cycled with arrows + swipe.
+// ALLOCATION CAROUSEL — 6 views, cycled with arrows and dots.
 //
 // The "By Ticker" view reads from the summary poll's `holdings` slice
 // (already fetched every 60s — zero extra network). The other 5 views
@@ -1146,7 +1157,13 @@ function switchAllocView(newIndex) {
     if (view.key === null) {
         // By Ticker: re-paint from the summary's holdings (already
         // in memory from the last poll). The next poll will refresh it.
-        paintAllocation(lastSummaryHoldings, null);
+        if (lastSummaryReady) {
+            paintAllocation(lastSummaryHoldings, lastSummaryExcluded);
+            if (lastSummaryFailed) setAllocState("stale-error");
+        } else {
+            updateAllocExcluded([]);
+            setAllocState(lastSummaryFailed ? "unavailable" : "loading");
+        }
     } else {
         fetchAllocDimension(view.key);
     }
@@ -1180,6 +1197,9 @@ async function fetchAllocDimension(by) {
     if (allocCache[key]) {
         const entry = allocCache[key];
         paintAllocation(entry.data.slices, entry.data.excluded, by);
+    } else {
+        updateAllocExcluded([]);
+        setAllocState("loading");
     }
 
     // Single-flight: join the request already in flight for this dimension
@@ -1234,7 +1254,7 @@ async function fetchAllocDimension(by) {
         } else if (prior) {
             // This dimension's last honest result was an empty portfolio —
             // keep its message instead of pretending it broke.
-            setAllocState("empty");
+            setAllocState(allocationResultState(prior.slices, prior.excluded));
         } else {
             // Nothing for THIS dimension was ever painted. Hide whatever
             // other dimension's data is on the canvas and say so plainly.
@@ -1260,11 +1280,10 @@ if (allocNextBtn) {
     });
 }
 
-// Touch-swipe on the donut box for phones: only a single, mainly horizontal
-// gesture changes slides. A diagonal page scroll must leave the view alone.
+// Touch cleanup on the donut box: Chart.js has no touchend event in its
+// default list, so clear a tap's hover after the last finger lifts. The
+// browser remains free to scroll; dragging the donut never changes views.
 if (donutBoxEl) {
-    let swipeStart = null;
-
     function clearDonutTouchHover() {
         if (!allocationChart) return;
         allocationChart._touchHoverDormant = true;
@@ -1278,32 +1297,11 @@ if (donutBoxEl) {
 
     donutBoxEl.addEventListener("touchstart", (e) => {
         if (allocationChart) allocationChart._touchHoverDormant = false;
-        swipeStart = e.touches.length === 1
-            ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
-            : null;
     }, { passive: true });
     donutBoxEl.addEventListener("touchend", (e) => {
-        if (e.touches.length !== 0) {
-            swipeStart = null; // one finger of a multi-touch gesture lifted
-            return;
-        }
-        const end = e.changedTouches[0];
-        const start = swipeStart;
-        swipeStart = null;
-        clearDonutTouchHover();
-        if (start && end) {
-            const rect = donutBoxEl.getBoundingClientRect();
-            if (end.clientX < rect.left || end.clientX > rect.right
-                || end.clientY < rect.top || end.clientY > rect.bottom) return;
-            const dx = end.clientX - start.x;
-            const dy = end.clientY - start.y;
-            if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-                switchAllocView(allocViewIndex + (dx < 0 ? 1 : -1));
-            }
-        }
+        if (e.touches.length === 0) clearDonutTouchHover();
     }, { passive: true });
     donutBoxEl.addEventListener("touchcancel", () => {
-        swipeStart = null;
         clearDonutTouchHover();
     }, { passive: true });
 }
@@ -1312,6 +1310,9 @@ if (donutBoxEl) {
 // Set on every summary poll, consumed by switchAllocView when the
 // ticker view is active.
 let lastSummaryHoldings = [];
+let lastSummaryExcluded = [];
+let lastSummaryReady = false;
+let lastSummaryFailed = false;
 
 function initializeAllocCarousel() {
     buildAllocDots();
@@ -1330,6 +1331,25 @@ portfolioReady.then(initializeAllocCarousel);
 // endpoint's slices already match.
 // ---------------------------------------------------------------------------
 
+function allocationResultState(slices, excluded) {
+    if (slices && slices.length > 0) return "ready";
+    return excluded && excluded.length > 0 ? "excluded" : "empty";
+}
+
+function updateAllocExcluded(excluded) {
+    if (!allocExcludedEl) return;
+    if (excluded && excluded.length > 0) {
+        const parts = excluded.map(
+            (e) => `${e.ticker}\u2009\u2014\u2009${e.reason}`
+        );
+        allocExcludedEl.textContent = `Excludes ${parts.join("; ")}`;
+        allocExcludedEl.style.display = "";
+    } else {
+        allocExcludedEl.textContent = "";
+        allocExcludedEl.style.display = "none";
+    }
+}
+
 function paintAllocation(slices, excluded, by = null) {
     // No canvas (defensive — index.html ships one) or no Chart.js (the
     // CDN script failed to load): degrade to the unavailable state rather
@@ -1346,19 +1366,7 @@ function paintAllocation(slices, excluded, by = null) {
     currentHoldings = slices;
     runAllocationCrossfade();
 
-    // Update the excluded note.
-    if (allocExcludedEl) {
-        if (excluded && excluded.length > 0) {
-            const parts = excluded.map(
-                (e) => `${e.ticker}\u2009\u2014\u2009${e.reason}`
-            );
-            allocExcludedEl.textContent = `Excludes ${parts.join("; ")}`;
-            allocExcludedEl.style.display = "";
-        } else {
-            allocExcludedEl.textContent = "";
-            allocExcludedEl.style.display = "none";
-        }
-    }
+    updateAllocExcluded(excluded);
 
     if (!slices || slices.length === 0) {
         // Empty reply: no wedges. DESTROY any chart a previous cycle
@@ -1368,11 +1376,9 @@ function paintAllocation(slices, excluded, by = null) {
             allocationChart.destroy();
             allocationChart = null;
         }
-        setAllocState("empty");
+        setAllocState(allocationResultState(slices, excluded));
         return;
     }
-    setAllocState("ready");
-
     const labels = slices.map((s) => s.key ?? s.ticker);
     const weights = slices.map((s) => s.weight);
 
@@ -1385,6 +1391,7 @@ function paintAllocation(slices, excluded, by = null) {
         allocationChart.data.labels = labels;
         allocationChart.data.datasets[0].data = weights;
         allocationChart.update("none");
+        setAllocState("ready");
         return;
     }
 
@@ -1469,6 +1476,9 @@ function paintAllocation(slices, excluded, by = null) {
             cutout: "62%",
         },
     });
+    // Chart.js may have measured the initially hidden box at zero size.
+    // Reveal after construction, then resize on the next layout frame.
+    setAllocState("ready");
 }
 
 // ---------------------------------------------------------------------------
@@ -1669,8 +1679,12 @@ document.addEventListener("portfoliochange", () => {
     portfolioTotalReturnEl.textContent = "";
     if (!portfolioMasked()) portfolioCostBasisEl.textContent = "";
     lastSummaryHoldings = [];
+    lastSummaryExcluded = [];
+    lastSummaryReady = false;
+    lastSummaryFailed = false;
     lastAllocPayload = null;
     setPortfolioUnavailable("Loading portfolio...");
+    updateAllocExcluded([]);
     setAllocState("loading");
     if (portfolioChartHandle) portfolioChartHandle.invalidate();
     refreshPortfolioSummary();
