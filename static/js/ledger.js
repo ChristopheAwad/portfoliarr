@@ -1256,6 +1256,7 @@ ledgerBody.addEventListener("click", async (event) => {
     // data-id the group button doesn't carry.
     const deleteTickerBtn = event.target.closest(".ticker-delete-btn");
     if (deleteTickerBtn) {
+        const epoch = portfolioEpoch();
         const ticker = deleteTickerBtn.dataset.ticker;
         // The confirmation's wording comes from the CACHED rows: how many
         // facts this action would erase. The backend stays the real
@@ -1285,15 +1286,17 @@ ledgerBody.addEventListener("click", async (event) => {
             );
             return;
         }
+        if (epoch !== portfolioEpoch()) return;
 
         try {
             // Same percent-encoding rule as the watchlist path: symbols
             // can contain URL-hostile characters ("^GSPC", "BRK.B") —
             // encode the PATH segment, never the whole URL.
             const response = await fetch(
-                `/api/transactions/ticker/${encodeURIComponent(ticker)}`,
+                `/api/transactions/ticker/${encodeURIComponent(ticker)}${portfolioQuery()}`,
                 { method: "DELETE" }
             );
+            if (epoch !== portfolioEpoch()) return;
             // 204 = all rows gone. 404 = another window beat us to it —
             // refreshing either way shows the stored truth.
             if (!response.ok && response.status !== 404) {
@@ -1311,6 +1314,7 @@ ledgerBody.addEventListener("click", async (event) => {
             if (editingTx && editingTx.ticker === ticker) exitEditMode();
             refreshLedger();
         } catch (err) {
+            if (epoch !== portfolioEpoch()) return;
             console.error("delete ticker transactions failed:", err);
             showToast("Could not reach the server — is it running?", "error");
         }
@@ -1323,6 +1327,7 @@ ledgerBody.addEventListener("click", async (event) => {
     const tx = lastTransactions.find(
         (t) => t.id === Number(deleteBtn.dataset.id));
     if (!tx) return;
+    const epoch = portfolioEpoch();
 
     // Deletion is immediate and unrecoverable — the backend keeps no trash
     // bin. showConfirm (awaited — this listener is async) resolves once the
@@ -1337,11 +1342,13 @@ ledgerBody.addEventListener("click", async (event) => {
     }))) {
         return;
     }
+    if (epoch !== portfolioEpoch()) return;
 
     try {
-        const response = await fetch(`/api/transactions/${tx.id}`, {
+        const response = await fetch(`/api/transactions/${tx.id}${portfolioQuery()}`, {
             method: "DELETE",
         });
+        if (epoch !== portfolioEpoch()) return;
         // 204 = gone. 404 = already gone (another window beat us to it) —
         // refreshing either way shows the stored truth, watchlist rule.
         if (!response.ok && response.status !== 404) {
@@ -1352,6 +1359,7 @@ ledgerBody.addEventListener("click", async (event) => {
         if (editingTxId === tx.id) exitEditMode();
         refreshLedger();
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("delete transaction failed:", err);
         showToast("Could not reach the server — is it running?", "error");
     }
@@ -1385,16 +1393,20 @@ function markLedgerUnavailable() {
 // and the watchlist. The display-currency param rides along on every
 // fetch, so a toggle click and the 60s poll always agree on the mode.
 async function refreshLedger() {
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
     try {
         const response = await fetch(
-            `/api/transactions?${ledgerCurrencyParam()}`
+            `/api/transactions${portfolioQuery()}&${ledgerCurrencyParam()}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
+        if (epoch !== portfolioEpoch()) return;
         lastTransactions = transactions; // cache for action-click lookups
         ledgerStale = false; // fresh quotes — live cells and Sell may return
         renderLedger(transactions);
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("ledger refresh failed:", err);
         if (ledgerBody.querySelector(".ledger-row")) {
             markLedgerUnavailable();
@@ -1418,6 +1430,9 @@ usdNativeToggle.addEventListener("change", () => refreshLedger());
 // the trigger to re-fetch.
 txForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
+    const destination = portfolioQuery();
 
     // FormData collects every named input's current value; fromEntries
     // turns it into a plain object. Numbers arrive as STRINGS from inputs
@@ -1451,12 +1466,12 @@ txForm.addEventListener("submit", async (event) => {
         // drops out of FormData, matching the backend's ignore-it rule),
         // POST for a brand-new row.
         const response = editingTxId === null
-            ? await fetch("/api/transactions", {
+            ? await fetch(`/api/transactions${destination}`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify(body),
               })
-            : await fetch(`/api/transactions/${editingTxId}`, {
+            : await fetch(`/api/transactions/${editingTxId}${destination}`, {
                   method: "PUT",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -1467,6 +1482,7 @@ txForm.addEventListener("submit", async (event) => {
                       type: body.type,
                   }),
               });
+        if (epoch !== portfolioEpoch()) return;
         if (!response.ok) {
             const err = await response.json().catch(() => null);
             txErrorEl.textContent =
@@ -1556,6 +1572,12 @@ const importPreviewBtn = document.querySelector("#import-preview-btn");
 const importCommitBtn = document.querySelector("#import-commit-btn");
 const importCloseBtn = document.querySelector("#import-close-btn");
 const importReportEl = document.querySelector("#import-report");
+let previewPortfolioId = null;
+let previewText = null;
+importTextEl.addEventListener("input", () => {
+    previewPortfolioId = null;
+    importCommitBtn.hidden = true;
+});
 
 // Toggle the panel. The hidden attribute is the one source of truth — no
 // extra "open" class to keep in sync. Focus goes to the textarea so the
@@ -1627,12 +1649,16 @@ function showImportError(text) {
 // least one row is valid — committing zero rows is not an action.
 importPreviewBtn.addEventListener("click", async () => {
     importCommitBtn.hidden = true; // stale verdict until this preview lands
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
+    const text = importTextEl.value;
     try {
-        const response = await fetch("/api/transactions/import/preview", {
+        const response = await fetch(`/api/transactions/import/preview${portfolioQuery()}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: importTextEl.value }),
+            body: JSON.stringify({ text }),
         });
+        if (epoch !== portfolioEpoch() || text !== importTextEl.value) return;
         if (!response.ok) {
             const err = await response.json().catch(() => null);
             showImportError(
@@ -1641,12 +1667,16 @@ importPreviewBtn.addEventListener("click", async () => {
             return;
         }
         const payload = await response.json();
+        if (epoch !== portfolioEpoch() || text !== importTextEl.value) return;
         renderImportReport(payload);
+        previewPortfolioId = currentPortfolioId();
+        previewText = text;
         importCommitBtn.hidden = payload.valid_count === 0;
         importCommitBtn.textContent =
             `Import ${payload.valid_count} row` +
             `${payload.valid_count === 1 ? "" : "s"}`;
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("import preview failed:", err);
         showImportError("Could not reach the server — is it running?");
     }
@@ -1658,12 +1688,21 @@ importPreviewBtn.addEventListener("click", async () => {
 // panel"): closing it would hide the failure report, and the ledger
 // refresh below is visible either way. The user closes when done.
 importCommitBtn.addEventListener("click", async () => {
+    if (!currentPortfolioId() || previewPortfolioId !== currentPortfolioId() ||
+        previewText !== importTextEl.value) {
+        importCommitBtn.hidden = true;
+        showImportError("Preview again for this portfolio before importing.");
+        return;
+    }
+    const epoch = portfolioEpoch();
+    importCommitBtn.hidden = true;
     try {
-        const response = await fetch("/api/transactions/import/commit", {
+        const response = await fetch(`/api/transactions/import/commit${portfolioQuery()}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: importTextEl.value }),
         });
+        if (epoch !== portfolioEpoch()) return;
         if (!response.ok) {
             const err = await response.json().catch(() => null);
             showImportError(
@@ -1672,6 +1711,7 @@ importCommitBtn.addEventListener("click", async () => {
             return;
         }
         const payload = await response.json();
+        if (epoch !== portfolioEpoch()) return;
         if (payload.failed.length > 0) {
             // Partial success: show ONLY what failed (the imported rows
             // are already visible in the ledger behind the panel), with
@@ -1693,6 +1733,7 @@ importCommitBtn.addEventListener("click", async () => {
         // (same rule as the log form's submit handler).
         refreshLedger();
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("import commit failed:", err);
         showImportError("Could not reach the server — is it running?");
     }
@@ -1903,12 +1944,17 @@ function renderClosedSales(payload) {
 }
 
 async function refreshClosedSales() {
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
     try {
-        const response = await fetch("/api/portfolio/realized");
+        const response = await fetch(`/api/portfolio/realized${portfolioQuery()}`);
         // fetch does NOT throw on 4xx/5xx — only on network failure.
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        renderClosedSales(await response.json());
+        const data = await response.json();
+        if (epoch !== portfolioEpoch()) return;
+        renderClosedSales(data);
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("closed sales refresh failed:", err);
         setClosedSalesMessage("Closed sales unavailable");
     }
@@ -1921,8 +1967,23 @@ async function refreshClosedSales() {
 // does too (same 60s cadence, REFRESH_MS from common.js).
 // ---------------------------------------------------------------------------
 
-refreshLedger();
-refreshClosedSales();
+portfolioReady.then(() => {
+    refreshLedger();
+    refreshClosedSales();
+});
+document.addEventListener("portfoliochange", () => {
+    exitEditMode();
+    expandedTickers.clear();
+    lastTransactions = [];
+    previewPortfolioId = null;
+    previewText = null;
+    importCommitBtn.hidden = true;
+    importReportEl.hidden = true;
+    setLedgerMessage("Loading portfolio...");
+    setClosedSalesMessage("Loading portfolio...");
+    refreshLedger();
+    refreshClosedSales();
+});
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).
 setupAutoRefresh(() => {

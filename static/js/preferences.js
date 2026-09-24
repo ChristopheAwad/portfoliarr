@@ -106,3 +106,105 @@
         });
     }
 })();
+
+// Portfolios are stored on the server. This page edits the ordered list;
+// common.js keeps the browser's selected ID in sync with other tabs.
+(function managePortfolios() {
+    const list = document.getElementById("portfolio-list");
+    const form = document.getElementById("portfolio-create");
+    const errorEl = document.getElementById("portfolio-error");
+    if (!list || !form) return;
+
+    function report(message) {
+        errorEl.textContent = message;
+        errorEl.hidden = !message;
+    }
+    function broadcast() {
+        localStorage.setItem("portfolioRevision", String(Date.now()));
+    }
+    async function mutate(url, method, body) {
+        report("");
+        try {
+            const response = await fetch(url, {
+                method, headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                report(payload?.error || `Could not update portfolio (HTTP ${response.status})`);
+                return null;
+            }
+            const result = response.status === 204 ? true : await response.json();
+            await refreshPortfolioList();
+            broadcast();
+            return result;
+        } catch (error) {
+            report("Could not reach the server.");
+            return null;
+        }
+    }
+    function button(text, action, label, disabled = false) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.textContent = text;
+        el.dataset.action = action;
+        el.setAttribute("aria-label", label);
+        el.disabled = disabled;
+        return el;
+    }
+    function render() {
+        list.replaceChildren();
+        knownPortfolios.forEach((portfolio, index) => {
+            const row = document.createElement("li");
+            row.dataset.id = portfolio.id;
+            const name = document.createElement("span");
+            name.textContent = portfolio.name;
+            row.append(name,
+                button("↑", "up", `Move ${portfolio.name} up`, index === 0),
+                button("↓", "down", `Move ${portfolio.name} down`,
+                       index === knownPortfolios.length - 1),
+                button("Rename", "rename", `Rename ${portfolio.name}`),
+                button("Delete", "delete", `Delete ${portfolio.name}`,
+                       knownPortfolios.length === 1));
+            list.append(row);
+        });
+    }
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const created = await mutate("/api/portfolios", "POST",
+            { name: form.elements.name.value });
+        if (created) {
+            form.reset();
+            setActivePortfolio(created.id);
+        }
+    });
+    list.addEventListener("click", async (event) => {
+        const target = event.target.closest("button[data-action]");
+        const row = target?.closest("li[data-id]");
+        if (!row) return;
+        const id = Number(row.dataset.id);
+        const portfolio = knownPortfolios.find((item) => item.id === id);
+        if (!portfolio) return;
+        const action = target.dataset.action;
+        if (action === "up" || action === "down") {
+            await mutate(`/api/portfolios/${id}/move`, "PATCH", { direction: action });
+        } else if (action === "rename") {
+            const name = await showPrompt({ title: `Rename ${portfolio.name}`,
+                message: "Enter a unique portfolio name (up to 60 characters).",
+                placeholder: portfolio.name, confirmLabel: "Rename" });
+            if (name !== null) await mutate(`/api/portfolios/${id}`, "PATCH", { name });
+        } else if (action === "delete") {
+            const name = await showPrompt({ title: `Delete ${portfolio.name}?`,
+                message: `Type ${portfolio.name} to delete this portfolio and ALL its transactions. This cannot be undone.`,
+                placeholder: portfolio.name, confirmLabel: "Delete", danger: true });
+            if (name === null) return;
+            if (name !== portfolio.name) {
+                report("The typed name does not match.");
+                return;
+            }
+            await mutate(`/api/portfolios/${id}`, "DELETE", { name });
+        }
+    });
+    document.addEventListener("portfoliolistchange", render);
+    portfolioReady.then(render);
+})();

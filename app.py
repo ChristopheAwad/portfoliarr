@@ -282,6 +282,25 @@ def start_request_timer():
     g.request_started_at = time.perf_counter()
 
 
+@app.before_request
+def resolve_portfolio_request():
+    """Validate ownership before any portfolio route fetches prices or writes."""
+    if not (request.path.startswith("/api/portfolio/") or
+            request.path.startswith("/api/transactions")):
+        return
+    raw = request.args.get("portfolio_id")
+    if raw is None:
+        # Older API clients use the first displayed portfolio. New browser
+        # requests always provide an ID; an explicit bad ID never falls back.
+        g.portfolio_id = db.default_portfolio_id()
+    elif not raw.isdecimal() or int(raw) < 1:
+        return jsonify({"error": "portfolio_id must be a positive integer"}), 400
+    elif not db.get_portfolio(int(raw)):
+        return jsonify({"error": "portfolio not found"}), 404
+    else:
+        g.portfolio_id = int(raw)
+
+
 @app.after_request
 def log_request_duration(response):
     now = time.perf_counter()
@@ -353,6 +372,73 @@ def ledger_page():
     painted by static/js/ledger.js (the same no-server-render rule as
     the dashboard)."""
     return render_template("ledger.html")
+
+
+def _portfolio_name(body):
+    if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+        return None
+    name = body["name"].strip()
+    return name if 1 <= len(name) <= 60 else None
+
+
+@app.route("/api/portfolios", methods=["GET", "POST"])
+def portfolios_api():
+    if request.method == "GET":
+        return jsonify(db.get_portfolios())
+    name = _portfolio_name(request.get_json(silent=True))
+    if name is None:
+        return jsonify({"error": "name must contain 1 to 60 characters"}), 400
+    try:
+        pid = db.create_portfolio(name)
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "portfolio name already exists"}), 409
+    app.logger.info("event=portfolio_created request_id=%s portfolio_id=%d",
+                    g.request_id, pid)
+    return jsonify(db.get_portfolio(pid)), 201
+
+
+@app.route("/api/portfolios/<int:portfolio_id>", methods=["PATCH", "DELETE"])
+def portfolio_api(portfolio_id):
+    if request.method == "PATCH":
+        name = _portfolio_name(request.get_json(silent=True))
+        if name is None:
+            return jsonify({"error": "name must contain 1 to 60 characters"}), 400
+        try:
+            changed = db.rename_portfolio(portfolio_id, name)
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "portfolio name already exists"}), 409
+        if not changed:
+            return jsonify({"error": "portfolio not found"}), 404
+        app.logger.info("event=portfolio_renamed request_id=%s portfolio_id=%d",
+                        g.request_id, portfolio_id)
+        return jsonify(db.get_portfolio(portfolio_id))
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+        return jsonify({"error": "type the portfolio name to confirm"}), 400
+    outcome = db.delete_portfolio(portfolio_id, body["name"])
+    if outcome == "missing":
+        return jsonify({"error": "portfolio not found"}), 404
+    if outcome != "deleted":
+        return jsonify({"error": "cannot delete the last portfolio" if outcome == "last"
+                        else "portfolio name does not match"}), 409
+    app.logger.info("event=portfolio_deleted request_id=%s portfolio_id=%d",
+                    g.request_id, portfolio_id)
+    return "", 204
+
+
+@app.route("/api/portfolios/<int:portfolio_id>/move", methods=["PATCH"])
+def move_portfolio_api(portfolio_id):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or body.get("direction") not in ("up", "down"):
+        return jsonify({"error": "direction must be up or down"}), 400
+    outcome = db.move_portfolio(portfolio_id, body["direction"])
+    if outcome is None:
+        return jsonify({"error": "portfolio not found"}), 404
+    if outcome is False:
+        return jsonify({"error": "portfolio is already at the edge"}), 409
+    app.logger.info("event=portfolio_moved request_id=%s portfolio_id=%d",
+                    g.request_id, portfolio_id)
+    return jsonify(db.get_portfolio(portfolio_id))
 
 
 # JSON endpoint that powers the dashboard's tabbed market overview. The
@@ -632,7 +718,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     # The ledger's default sort is newest-first; we need the opposite to
     # walk history forward, so sort ascending here.
     transactions = sorted(
-        db.get_transactions(),
+        db.get_transactions(g.portfolio_id),
         key=lambda tx: (tx["transaction_date"], tx["id"]),
     )
 
@@ -1092,7 +1178,7 @@ def portfolio_summary():
     """
     # The ledger is the source of truth for what is held. Order doesn't
     # matter here — everything below is sums, not a forward walk.
-    transactions = db.get_transactions()
+    transactions = db.get_transactions(g.portfolio_id)
 
     # Pass 1 — FACTS ONLY (no network): fold every transaction into per-
     # ticker figures.
@@ -1384,7 +1470,7 @@ def portfolio_realized():
             realized_pct     realized ÷ basis × 100; null when basis ≤ 0
             degraded         null, or a human-readable reason
     """
-    transactions = db.get_transactions()
+    transactions = db.get_transactions(g.portfolio_id)
     transactions.reverse()  # the replay runs oldest-first
 
     def stored_rate(tx):
@@ -1681,7 +1767,7 @@ def portfolio_allocation():
     # Same fold as portfolio_summary: net qty (BUY adds, SELL subtracts)
     # and cost. We need net_qty for the long-only check; value is priced
     # in pass 2 from live quotes.
-    transactions = db.get_transactions()
+    transactions = db.get_transactions(g.portfolio_id)
     net_qty = {}
     currency_by_symbol = {}
     for tx in transactions:
@@ -2241,6 +2327,7 @@ def log_transaction():
         transaction_type=fields["transaction_type"],
         fx_rate=fx_rate,
         fee=fields["fee"],
+        portfolio_id=g.portfolio_id,
     )
     app.logger.info(
         "event=transaction_created request_id=%s tx_id=%d ticker=%r type=%r",
@@ -2259,6 +2346,7 @@ def log_transaction():
         "currency": currency,
         "fx_rate": fx_rate,
         "transaction_type": fields["transaction_type"],
+        "portfolio_id": g.portfolio_id,
     }), 201
 
 
@@ -2305,7 +2393,7 @@ def list_transactions():
     and this keeps main.js a pure renderer (numbers in, text out), matching
     the architecture rule in AGENTS.md.
     """
-    transactions = db.get_transactions()
+    transactions = db.get_transactions(g.portfolio_id)
 
     # Validate the display-currency key BEFORE doing any work — the same
     # contract as the chart's ?period= (a named 400 listing the options).
@@ -2642,7 +2730,7 @@ def edit_transaction(tx_id):
     # would just confuse. (Flask's <int:tx_id> converter 404s non-numeric
     # ids before this code even runs.) The row itself is kept: its
     # (non-editable) currency feeds the fx_rate re-derivation below.
-    row = db.get_transaction(tx_id)
+    row = db.get_transaction(tx_id, g.portfolio_id)
     if row is None:
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
 
@@ -2668,13 +2756,14 @@ def edit_transaction(tx_id):
         transaction_type=fields["transaction_type"],
         fx_rate=_derive_fx_rate(row["currency"], fields["transaction_date"]),
         fee=fields["fee"],
+        portfolio_id=g.portfolio_id,
     ):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
 
     # 200 with the truth, RE-READ from the DB: the reply shows exactly what
     # is now on disk (including the untouched ticker/currency), not what we
     # think we wrote.
-    stored = db.get_transaction(tx_id)
+    stored = db.get_transaction(tx_id, g.portfolio_id)
     app.logger.info(
         "event=transaction_updated request_id=%s tx_id=%d ticker=%r type=%r",
         g.request_id, tx_id, stored["ticker"], stored["transaction_type"],
@@ -2689,7 +2778,7 @@ def remove_transaction(tx_id):
     first) — the frontend refreshes either way and shows the stored truth,
     same rule as watchlist removal.
     """
-    if not db.delete_transaction(tx_id):
+    if not db.delete_transaction(tx_id, g.portfolio_id):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
     app.logger.info(
         "event=transaction_deleted request_id=%s tx_id=%d", g.request_id, tx_id
@@ -2722,7 +2811,7 @@ def remove_ticker_transactions(symbol):
     # symbol from a URL: "aapl" in the path must hit the stored "AAPL".
     ticker = symbol.strip().upper()
 
-    deleted = db.delete_transactions_for_ticker(ticker)
+    deleted = db.delete_transactions_for_ticker(ticker, g.portfolio_id)
     if deleted == 0:
         # TIER 1 at INFO: expected client behavior (stale UI, typo, double
         # click) — no traceback; the ticker string IS the story.
@@ -3021,6 +3110,7 @@ def import_commit():
                 transaction_type=row["transaction_type"],
                 fx_rate=row["fx_rate"],
                 fee=None,
+                portfolio_id=g.portfolio_id,
             )
         except Exception:
             app.logger.warning(

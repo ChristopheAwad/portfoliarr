@@ -18,6 +18,75 @@
 // touches Yahoo.
 const REFRESH_MS = 60000;
 
+// A selection belongs to this browser, but portfolio data belongs to SQLite.
+// Resolve the saved ID against the server's list before making scoped requests.
+let activePortfolioId = null;
+let knownPortfolios = [];
+let portfoliosLoaded = false;
+let portfolioGeneration = 0;
+
+function currentPortfolioId() { return activePortfolioId; }
+function portfolioEpoch() { return portfolioGeneration; }
+function currentPortfolioName() {
+    return knownPortfolios.find((item) => item.id === activePortfolioId)?.name || "";
+}
+function portfolioQuery(separator = "?") {
+    if (!activePortfolioId) throw new Error("Portfolio selection unavailable");
+    return `${separator}portfolio_id=${activePortfolioId}`;
+}
+function paintPortfolioSelect() {
+    const select = document.getElementById("portfolio-select");
+    if (select) {
+        select.replaceChildren(...knownPortfolios.map((portfolio) => {
+            const option = document.createElement("option");
+            option.value = portfolio.id;
+            option.textContent = portfolio.name;
+            return option;
+        }));
+        select.value = String(activePortfolioId);
+        select.disabled = !activePortfolioId;
+    }
+    const destination = document.getElementById("portfolio-form-name");
+    if (destination) destination.textContent = currentPortfolioName();
+}
+function setActivePortfolio(id) {
+    if (!knownPortfolios.some((item) => item.id === id)) return;
+    const previous = activePortfolioId;
+    activePortfolioId = id;
+    if (previous !== id) ++portfolioGeneration;
+    localStorage.setItem("activePortfolioId", String(id));
+    paintPortfolioSelect();
+    if (previous !== null && previous !== id) {
+        document.dispatchEvent(new CustomEvent("portfoliochange",
+            { detail: { id, previous } }));
+    }
+}
+async function refreshPortfolioList() {
+    const response = await fetch("/api/portfolios");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    knownPortfolios = await response.json();
+    const saved = Number(localStorage.getItem("activePortfolioId"));
+    const wanted = knownPortfolios.some((item) => item.id === saved)
+        ? saved : knownPortfolios[0]?.id;
+    if (wanted) setActivePortfolio(wanted);
+    portfoliosLoaded = true;
+    paintPortfolioSelect();
+    document.dispatchEvent(new CustomEvent("portfoliolistchange"));
+    return wanted;
+}
+document.getElementById("portfolio-select")?.addEventListener("change", (event) => {
+    setActivePortfolio(Number(event.target.value));
+});
+window.addEventListener("storage", (event) => {
+    if (event.key === "activePortfolioId" || event.key === "portfolioRevision") {
+        refreshPortfolioList().catch((error) => console.error("portfolio selection failed", error));
+    }
+});
+const portfolioReady = refreshPortfolioList().catch((error) => {
+    console.error("portfolio list failed", error);
+    return null;
+});
+
 // How long after a finger LIFTS from the chart to keep treating mouse
 // events as "ghosts" to swallow. The browser fires synthetic mouse events
 // (mousemove, click, ...) at the spot where a touch ended; Chart.js sees
@@ -1207,10 +1276,17 @@ function oppositePositioner(items, eventPosition) {
     };
 }
 
+// Stock history has no query string; portfolio history already carries its
+// selected portfolio ID. Append period with the delimiter each URL needs.
+function historyRequestUrl(endpointUrl, period, benchmarkParam) {
+    const separator = endpointUrl.includes("?") ? "&" : "?";
+    return `${endpointUrl}${separator}period=${encodeURIComponent(period)}${benchmarkParam}`;
+}
+
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
       onPeriodSummary, modeBar, getBenchmarks, comparisonReadout,
-      comparisonPrimaryLabel = datasetLabel }
+      comparisonPrimaryLabel = datasetLabel, getScope = () => "global" }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -1254,6 +1330,7 @@ function setupTimeframeChart(
     // Per-period generations separately protect each cache entry from an
     // older request for the same period finishing last.
     let visibleRequestGeneration = 0;
+    let scopeGeneration = 0;
     const chartRequestGenerations = {};
 
     function isLatestChartRequest(period, generation) {
@@ -2213,11 +2290,13 @@ function setupTimeframeChart(
     // untouched — except the direction color, which is DATA-derived and
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod, { silent = false } = {}) {
+        const scope = getScope();
+        const scopeAtStart = scopeGeneration;
         const benchmarks = (getBenchmarks && getBenchmarks()) || [];
         const benchmarkParam = benchmarks.length
             ? `&benchmark=${encodeURIComponent(benchmarks.join(","))}`
             : "";
-        const cacheKey = `${period}|${benchmarks.join(",")}`;
+        const cacheKey = `${scope}|${period}|${benchmarks.join(",")}`;
         const requestGeneration =
             (chartRequestGenerations[period] || 0) + 1;
         chartRequestGenerations[period] = requestGeneration;
@@ -2246,8 +2325,10 @@ function setupTimeframeChart(
             if (cached && (Date.now() - cached.fetchedAt) < ttl) {
                 data = cached.data;
             } else {
+                const endpointUrl = typeof endpoint === "function"
+                    ? endpoint() : endpoint;
                 const response = await fetch(
-                    `${endpoint}?period=${period}${benchmarkParam}`
+                    historyRequestUrl(endpointUrl, period, benchmarkParam)
                 );
                 // fetch does NOT throw on 4xx/5xx — only on network failure. A
                 // 400 (bad period key) arrives with ok === false; the buttons
@@ -2256,10 +2337,13 @@ function setupTimeframeChart(
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 data = await response.json(); // {labels, values}
                 // An older same-period response must not replace fresher data.
-                if (isLatestChartRequest(period, requestGeneration)) {
+                if (scopeAtStart === scopeGeneration && scope === getScope() &&
+                    isLatestChartRequest(period, requestGeneration)) {
                     chartCache[cacheKey] = { data, fetchedAt: Date.now() };
                 }
             }
+
+            if (scopeAtStart !== scopeGeneration || scope !== getScope()) return;
 
             // Silent mode: fetch + cache only, don't repaint the chart.
             // Used by the pre-fetch loop to warm the cache without
@@ -2276,6 +2360,7 @@ function setupTimeframeChart(
             paint(data, period);
             syncTimeframeButtons(period);
         } catch (err) {
+            if (scopeAtStart !== scopeGeneration || scope !== getScope()) return;
             console.error("chart refresh failed:", err);
             // Initial-load failure: no chart ever painted, so the readout
             // must say "unavailable" rather than appear to load forever.
@@ -2588,6 +2673,18 @@ function setupTimeframeChart(
     return {
         chart,
         refresh,
+        invalidate() {
+            ++scopeGeneration;
+            ++visibleRequestGeneration;
+            lastReply = null;
+            lastCosts = null;
+            clearMeasurement();
+            chart.data.labels = [];
+            chart.data.datasets.forEach((dataset) => { dataset.data = []; });
+            chart.update();
+            if (comparisonReadout) comparisonReadout.replaceChildren();
+            emitPeriodSummary(requestedPeriod, null);
+        },
         reload() {
             return refresh(requestedPeriod);
         },

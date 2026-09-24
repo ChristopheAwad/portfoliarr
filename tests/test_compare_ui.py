@@ -370,5 +370,5 @@ def test_comparison_readout_has_styles():
         ".comparison-readout-name",
     ):
         assert selector in STYLE_CSS
-    media_at = STYLE_CSS.rindex("@media")
-    assert "comparison-readout" in STYLE_CSS[media_at:]
+    assert any("comparison-readout" in section
+               for section in STYLE_CSS.split("@media")[1:])

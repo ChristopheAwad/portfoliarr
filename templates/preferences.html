@@ -7,6 +7,18 @@
         <div class="preferences-page">
             <h2>Preferences</h2>
 
+            <div class="card preferences-card">
+                <h3>Portfolios</h3>
+                <p>Each portfolio has its own transactions. Your watchlist is shared.</p>
+                <form id="portfolio-create" class="portfolio-create">
+                    <label for="portfolio-new-name">New portfolio name</label>
+                    <input id="portfolio-new-name" name="name" maxlength="60" required>
+                    <button type="submit" class="btn-text">Create</button>
+                </form>
+                <p id="portfolio-error" class="action-error" role="alert" hidden></p>
+                <ul id="portfolio-list" class="portfolio-manage-list"></ul>
+            </div>
+
             <!-- Theme setting. Light/Dark/System — the same three options
                  the old inline dropdown offered, now on a dedicated page.
                  preferences.js reads localStorage on load and saves on change. -->

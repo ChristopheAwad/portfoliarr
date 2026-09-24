@@ -32,6 +32,9 @@
             <div class="card ledger-card">
                 <div class="card-header">
                     <h3>Transactions</h3>
+                    <label class="portfolio-picker" for="portfolio-select">Portfolio
+                        <select id="portfolio-select" aria-label="Active portfolio" disabled></select>
+                    </label>
                     <div class="card-header-actions">
                         <!-- Privacy button: click to hide/show ledger
                              holding values (Qty, Value, Total Gain, and
@@ -112,6 +115,7 @@
                      only a first filter. The stock detail page's "Log
                      Transaction" button deep-links here as
                      /ledger?ticker=AAPL#tx-form; ledger.js prefills. -->
+                <p class="portfolio-destination">Logging in <strong id="portfolio-form-name"></strong></p>
                 <form id="tx-form" class="tx-form">
                     <!-- The Ticker field is WRAPPED so the suggestion
                          dropdown can anchor under it: .search-results is

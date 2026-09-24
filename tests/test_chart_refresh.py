@@ -64,10 +64,11 @@ def test_stale_same_period_response_cannot_replace_newer_cache_data():
         "chartCache[cacheKey] = { data, fetchedAt: Date.now() };"
     )
     cache_guard = body.index(
-        "if (isLatestChartRequest(period, requestGeneration))"
+        "isLatestChartRequest(period, requestGeneration))"
     )
     assert "const cacheKey = `" in body
     assert "${benchmarks.join(",")}" in body
+    assert "scopeAtStart === scopeGeneration && scope === getScope()" in body
     assert cache_guard < cache_write
 
 

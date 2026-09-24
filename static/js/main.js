@@ -678,16 +678,21 @@ if (hidePortfolioToggle) {
 // response paints the same header, so joining costs nothing. The slot
 // empties when the cycle settles so the NEXT cycle fetches fresh.
 let summaryInflight = null;
+let summaryFlightEpoch = null;
 
 async function refreshPortfolioSummary() {
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
     // Join the in-flight cycle instead of starting a duplicate request.
-    if (summaryInflight) return summaryInflight;
+    if (summaryInflight && summaryFlightEpoch === epoch) return summaryInflight;
+    summaryFlightEpoch = epoch;
     summaryInflight = (async () => {
         try {
-            const response = await fetch("/api/portfolio/summary");
+            const response = await fetch(`/api/portfolio/summary${portfolioQuery()}`);
             // fetch does NOT throw on 4xx/5xx — only on network failure.
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
+            if (epoch !== portfolioEpoch()) return;
 
             // Privacy guard: when masked, skip painting dollar-only spans
             // (portfolio value and cost basis) but still paint the change
@@ -785,11 +790,12 @@ async function refreshPortfolioSummary() {
                 );
             }
         } catch (err) {
+            if (epoch !== portfolioEpoch()) return;
             console.error("portfolio summary refresh failed:", err);
             setPortfolioUnavailable();
         } finally {
             // Empty the slot so the next cycle starts a fresh request.
-            summaryInflight = null;
+            if (epoch === summaryFlightEpoch) summaryInflight = null;
         }
     })();
     return summaryInflight;
@@ -888,7 +894,8 @@ const portfolioChartHandle = setupTimeframeChart({
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",
-    endpoint: "/api/portfolio/history",
+    endpoint: () => `/api/portfolio/history${portfolioQuery()}`,
+    getScope: () => currentPortfolioId(),
     defaultPeriod: DEFAULT_CHART_PERIOD,
 });
 
@@ -1155,6 +1162,10 @@ function switchAllocView(newIndex) {
 // "refreshing" note instead of blanking to a skeleton; only a first-load
 // paints "loading".
 async function fetchAllocDimension(by) {
+    if (!currentPortfolioId()) return;
+    const epoch = portfolioEpoch();
+    const key = `${currentPortfolioId()}|${by}`;
+    const flightKey = `${key}|${epoch}`;
     // Navigation guard: never paint (or queue work) for a slide the user
     // already left — a late reply for an old view must not appear under
     // the current label.
@@ -1166,17 +1177,17 @@ async function fetchAllocDimension(by) {
     // (or re-fetching) leaves the previous slide's donut on the canvas
     // under the new label until the network answers. Honest-empties carry
     // their own message via paintAllocation's states.
-    if (allocCache[by]) {
-        const entry = allocCache[by];
+    if (allocCache[key]) {
+        const entry = allocCache[key];
         paintAllocation(entry.data.slices, entry.data.excluded, by);
     }
 
     // Single-flight: join the request already in flight for this dimension
     // instead of starting a second one.
-    if (allocInFlight[by]) return allocInFlight[by];
+    if (allocInFlight[flightKey]) return allocInFlight[flightKey];
 
     // Fresh cache — just painted above, nothing to fetch this cycle.
-    if (!allocCacheStale(by)) return;
+    if (!allocCacheStale(key)) return;
 
     const flight = (async () => {
         // Stale or first visit: the cache TTL mirrors the 60s poll, so
@@ -1184,7 +1195,7 @@ async function fetchAllocDimension(by) {
         // soft "refreshing" note; an honest empty keeps its empty message
         // (the revalidate paints nothing new yet); a first load says
         // clearly that data is on the way.
-        const cached = allocCache[by];
+        const cached = allocCache[key];
         if (cached && cached.data.slices &&
             cached.data.slices.length > 0) {
             setAllocState("stale");
@@ -1193,17 +1204,19 @@ async function fetchAllocDimension(by) {
         }
 
         const response = await fetch(
-            `/api/portfolio/allocation?by=${encodeURIComponent(by)}`
+            `/api/portfolio/allocation${portfolioQuery()}&by=${encodeURIComponent(by)}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
+        if (epoch !== portfolioEpoch()) return;
         // Reply landed after the user moved on: cache it, but never paint
         // it over the current slide — their next flip reads the cache.
-        allocCache[by] = { data, fetchedAt: Date.now() };
+        allocCache[key] = { data, fetchedAt: Date.now() };
         if (isActiveAllocView(by)) {
             paintAllocation(data.slices, data.excluded, by);
         }
     })().catch((err) => {
+        if (epoch !== portfolioEpoch()) return;
         if (!isActiveAllocView(by)) return;
         console.error(`allocation fetch (${by}) failed:`, err);
         // The prior payload is reusable ONLY when it belongs to THIS
@@ -1228,10 +1241,10 @@ async function fetchAllocDimension(by) {
             setAllocState("unavailable");
         }
     }).finally(() => {
-        if (allocInFlight[by] === flight) delete allocInFlight[by];
+        if (allocInFlight[flightKey] === flight) delete allocInFlight[flightKey];
     });
 
-    allocInFlight[by] = flight;
+    allocInFlight[flightKey] = flight;
     return flight;
 }
 
@@ -1307,7 +1320,7 @@ function initializeAllocCarousel() {
     if (view.key !== null) fetchAllocDimension(view.key);
 }
 
-initializeAllocCarousel();
+portfolioReady.then(initializeAllocCarousel);
 
 // ---------------------------------------------------------------------------
 // PAINT ALLOCATION — build or update the donut from one payload.
@@ -1599,7 +1612,7 @@ setupMarketTabs();
 refreshMarketOverview();
 refreshWatchlist();
 refreshVolumeLeaders();
-refreshPortfolioSummary();
+portfolioReady.then(() => refreshPortfolioSummary());
 // If the persisted privacy state is masked, paint the **** now — the
 // refresh above is guarded and will NOT paint over the mask, so without
 // this the header would sit on its empty skeletons until the user clicks
@@ -1611,7 +1624,7 @@ if (portfolioMasked()) {
 // again only when a timeframe button is clicked — unlike the quote-driven
 // sections, price history doesn't change on a 60s cadence, so it would be
 // wasteful (and Yahoo rate-limit-hammering) to poll it too.
-const chartReady = refreshPortfolioChart();
+const chartReady = portfolioReady.then(() => refreshPortfolioChart());
 
 // Pre-fetch all other timeframes in the background so switching is instant.
 // Fire-and-forget — no UI feedback needed. The frontend cache stores each
@@ -1646,4 +1659,22 @@ setupAutoRefresh(() => {
     if (view.key !== null) {
         fetchAllocDimension(view.key);
     }
+});
+
+document.addEventListener("portfoliochange", () => {
+    // A masked header keeps a snapshot for instant unmask. It belongs to the
+    // old portfolio and must never be restored under the new name.
+    lastPortfolioPaint = null;
+    portfolioDayChangeEl.textContent = "";
+    portfolioTotalReturnEl.textContent = "";
+    if (!portfolioMasked()) portfolioCostBasisEl.textContent = "";
+    lastSummaryHoldings = [];
+    lastAllocPayload = null;
+    setPortfolioUnavailable("Loading portfolio...");
+    setAllocState("loading");
+    if (portfolioChartHandle) portfolioChartHandle.invalidate();
+    refreshPortfolioSummary();
+    refreshPortfolioChart();
+    const view = ALLOCATION_VIEWS[allocViewIndex];
+    if (view.key !== null) fetchAllocDimension(view.key);
 });
