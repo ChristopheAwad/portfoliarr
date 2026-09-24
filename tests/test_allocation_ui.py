@@ -4,8 +4,8 @@
 #
 # WHY "META" TESTS? Same reason test_web_refresh_wiring.py exists: we
 # can't run the JS, but we can lock the source text so a future refactor
-# can't silently drop the carousel wiring, the dimension list, or the
-# swipe handler. Read-the-file-and-assert, the same approach test_docker.py
+# can't silently drop the carousel wiring or the dimension list.
+# Read-the-file-and-assert, the same approach test_docker.py
 # uses for config files.
 
 from pathlib import Path
@@ -207,9 +207,8 @@ def test_refetch_keeps_last_painable_payload():
         "warmed revalidation must surface a soft refreshing state"
     assert '"empty"' in src, \
         "a genuine empty reply must show the empty state, not an error"
-    assert 'setAllocState("empty")' in src, \
-        "a same-dimension honest empty keeps its message on revalidation " \
-        "failure, instead of being blanked or mislabeled ready"
+    assert 'setAllocState(allocationResultState(prior.slices, prior.excluded))' in src, \
+        "a failed revalidation keeps the empty or excluded state from its own reply"
 
 
 def test_stale_dimension_paints_its_cached_donut_first():
@@ -261,37 +260,38 @@ def test_allocation_tooltip_ignores_a_stale_hover_index():
 
 
 # ---------------------------------------------------------------------------
-# JS: swipe wiring
+# JS: touch cleanup without swipe navigation
 # ---------------------------------------------------------------------------
 
-def test_main_js_wires_swipe_on_donut_box():
-    """The donut box must have touchstart/touchend listeners for swipe-
-    based view flipping on phones."""
+def test_donut_touch_never_changes_allocation_view():
+    """A drag over a donut may scroll the page but cannot flip slides."""
     src = _read_js("static/js/main.js")
-    assert "touchstart" in src
-    assert "touchend" in src
-
-
-def test_donut_swipe_is_single_finger_and_horizontal():
-    src = _read_js("static/js/main.js")
-    swipe = src.split("// Touch-swipe on the donut box", 1)[1].split(
+    touch = src.split("// Touch cleanup on the donut box", 1)[1].split(
         "// The summary's holdings slice", 1)[0]
-    assert 'addEventListener("touchcancel"' in swipe
-    assert "e.touches.length === 1" in swipe
-    assert "e.touches.length !== 0" in swipe
-    assert "clientY" in swipe
-    assert "Math.abs(dx) > Math.abs(dy)" in swipe
-    assert "Math.abs(dx) > 40" in swipe
+    assert "switchAllocView" not in touch
+    assert "clientX" not in touch
+    assert "clientY" not in touch
+    assert 'addEventListener("touchend"' in touch
+    assert 'addEventListener("touchcancel"' in touch
 
 
-def test_donut_clears_touch_hover_even_without_a_live_chart():
+def test_donut_controls_still_switch_and_wrap():
     src = _read_js("static/js/main.js")
-    swipe = src.split("// Touch-swipe on the donut box", 1)[1].split(
+    assert "switchAllocView(allocViewIndex - 1)" in src
+    assert "switchAllocView(allocViewIndex + 1)" in src
+    assert "switchAllocView(index)" in src
+    assert "(newIndex + ALLOCATION_VIEWS.length) % ALLOCATION_VIEWS.length" in src
+
+
+def test_donut_clears_touch_hover_without_changing_other_charts():
+    src = _read_js("static/js/main.js")
+    touch = src.split("// Touch cleanup on the donut box", 1)[1].split(
         "// The summary's holdings slice", 1)[0]
-    assert "allocationChart" in swipe
-    assert "tooltip.setActiveElements([]" in swipe
-    assert "setActiveElements([]" in swipe
-    assert 'addEventListener("touchcancel"' in swipe
+    assert "if (!allocationChart) return;" in touch
+    assert "tooltip.setActiveElements([]" in touch
+    assert "setActiveElements([]" in touch
+    assert 'addEventListener("touchcancel"' in touch
+    assert 'addEventListener("touchstart"' in touch
     plugin = src.split('id: "donutTouchHoverEnd"', 1)[1].split(
         "data: {", 1)[0]
     assert "_touchHoverDormant" in plugin
