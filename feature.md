@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-Implemented after user approval. The full `python -m pytest` suite passes (921 tests). Awaiting the user's browser GUI approval before shipping. This feature adds a per-transaction fee to the ledger so costs, realized gains, and reported returns include what a trade actually cost. Old transactions remain valid. The fee is a stored transaction fact, not a live market value.
+Implemented after user approval. The full `python -m pytest` suite passes (921 tests). The user approved the browser GUI and requested PR #79. This feature adds a per-transaction fee to the ledger so costs, realized gains, and reported returns include what a trade actually cost. Old transactions remain valid. The fee is a stored transaction fact, not a live market value.
 
 ## Contract to implement
 

@@ -34,7 +34,7 @@ Currently no fee tracking. Add a nullable native-currency `fee` column to the `t
 
 **Files:** `db.py` (schema + migration), `app.py` (validator + accounting routes), `static/js/ledger.js` (form + display), `templates/ledger.html` (input + column), `project-brief.md`, tests
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-23 (PR #79)
 
 ---
 
