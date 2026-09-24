@@ -26,7 +26,8 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 - **Markets today** — the first content on the page, above the whole
   portfolio: six category tabs (North America, Europe, Asia-Pacific, Crypto,
   Commodities, Currencies) over one divided strip of live instruments, each
-  cell a link to its stock detail page; only the selected category is fetched.
+  cell a link to its stock detail page; all categories load in parallel on
+  page load.
   Phones show each category's instruments as ONE horizontal scrolling row of
   flat divided chips (not a two-column grid), so names are never truncated.
 - Value summary strip (total value, day change, total return, cost basis)
@@ -199,12 +200,14 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   `?category=<key>`: missing/empty means `north-america`, which is why the
   no-query live-smoke URL still works; an unknown key is HTTP 400 BEFORE any
   quote call; a partial failure is HTTP 200 with the successful siblings in
-  configured order; only an all-symbol failure is HTTP 503; and inactive
-  categories are never fetched. The browser fetches ONLY the active tab (on
-  load, on click, and from the one `setupAutoRefresh` poll — never a
-  page-level `setInterval`), paints only that panel's `data-symbol` cells, and
-  keeps a per-category request token so a slow response cannot overwrite a
-  newer one. Tab choice is ephemeral: no localStorage/sessionStorage. Market
+  configured order; only an all-symbol failure is HTTP 503. The browser starts
+  every category request in parallel on page load, deriving keys from the
+  rendered tabs, and paints each reply only into its own `data-symbol` cells.
+  Tab clicks reuse a pending request or successful results younger than 120
+  seconds; failures remain retryable. The one `setupAutoRefresh` poll refreshes
+  only the active category (never a page-level `setInterval`). Per-category
+  request tokens prevent a slow response from overwriting a newer one. Tab
+  choice is ephemeral: no localStorage/sessionStorage. Market
   LEVELS use adaptive precision (`Math.abs(value) < 1 ? 4 : 2`, for CAD-based
   FX pairs) while portfolio, ledger, and stock money stay the two-decimal
   `formatPrice`. No breadth roll-up ("3 of 4 higher") and no sentiment

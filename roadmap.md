@@ -258,6 +258,20 @@ two-column phone grid).
 
 ---
 
+### 24. Parallel Market Tab Preload
+Start all six dashboard market-category requests in parallel on page load so a
+completed tab opens without another network round-trip. Reuse a pending request
+and short-lived successful panel data on tab changes; refresh only the selected
+category on the normal poll. Keep per-category failure retries and response-order
+guards.
+
+**Effort:** 1 day
+**Files:** `static/js/main.js`, `templates/index.html`, `project-brief.md`, `tests/test_market_tabs.py`, `tests/test_market_preload.py`
+**Depends on:** #20 (shipped)
+**Status:** in progress
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -310,6 +324,7 @@ Tier 2.5:
   14. TWR Flow Timing ────────────────── depends on #13 (refines its flow fold)
   15. Allocation Carousel Pagination ─── independent frontend quick extend
   20. Dashboard Market Tabs ──────────── independent frontend/API quick extend
+  24. Parallel Market Tab Preload ────── depends on #20 (shipped)
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -340,6 +355,7 @@ For maximum compounding value:
 21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
 22. **In-App Version Display** → identifies the deployed web and Android release from one shared version source
 23. **Several Named Portfolios** → separates ledgers and portfolio calculations while retaining the shared watchlist and markets
+24. **Parallel Market Tab Preload** → starts all market tabs together and reuses recent results on tab changes
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 
