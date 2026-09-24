@@ -13,9 +13,11 @@
 //     common.js).
 //   - Shared helpers (formatters, paintChange, UI kit) are globals from
 //     common.js, loaded before this file by base.html.
-// Mutating actions (log/edit/delete/import) refresh only LEDGER data:
-// there is no portfolio summary on this page to refresh. The dashboard,
-// if open in another tab, picks the change up on its own next poll.
+// Mutating actions (log/edit/delete/import) refresh BOTH this page's
+// views — the ledger and the closed-sales card, because a SELL changes
+// both. There is no portfolio summary on this page to refresh. The
+// dashboard, if open in another tab, picks the change up on its own
+// next poll.
 
 // ---------------------------------------------------------------------------
 // TRANSACTION LEDGER — the list of BUY/SELL events, plus the form that logs
@@ -1312,7 +1314,7 @@ ledgerBody.addEventListener("click", async (event) => {
             const editingTx = lastTransactions.find(
                 (t) => t.id === editingTxId);
             if (editingTx && editingTx.ticker === ticker) exitEditMode();
-            refreshLedger();
+            refreshLedgerViews();
         } catch (err) {
             if (epoch !== portfolioEpoch()) return;
             console.error("delete ticker transactions failed:", err);
@@ -1357,7 +1359,7 @@ ledgerBody.addEventListener("click", async (event) => {
         // If THIS row was open in the form, its edit target is gone —
         // drop back to log mode rather than submitting into a 404.
         if (editingTxId === tx.id) exitEditMode();
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("delete transaction failed:", err);
@@ -1507,7 +1509,7 @@ txForm.addEventListener("submit", async (event) => {
         // today-default date in one place), then pull the truth
         // immediately rather than waiting for the next poll.
         exitEditMode();
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         console.error("save transaction failed:", err);
         txErrorEl.textContent = "Could not reach the server — is it running?";
@@ -1731,7 +1733,7 @@ importCommitBtn.addEventListener("click", async () => {
         importCommitBtn.hidden = true; // one paste, one commit — re-preview first
         // Pull the truth immediately rather than waiting for the next poll
         // (same rule as the log form's submit handler).
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("import commit failed:", err);
@@ -1941,6 +1943,15 @@ function renderClosedSales(payload) {
                    priceCell, realizedCell, pctCell);
         closedSalesBody.append(row);
     }
+}
+
+// Mutation paths change the ledger AND the realized picture it feeds
+// (a SELL edits both a row and the closed-sales card). Refreshing only
+// one leaves the other stale until the next 60s poll. One call keeps
+// the two views on the same truth.
+function refreshLedgerViews() {
+    refreshLedger();
+    refreshClosedSales();
 }
 
 async function refreshClosedSales() {

@@ -208,3 +208,23 @@ def test_closed_sales_card_mode_covers_label_cap():
     desktop = css[:start]
     assert re.search(r"\.closed-sales-table\s*\{[^}]*min-width:\s*640px",
                      desktop), "desktop swipe table must keep its floor"
+
+
+# ── Mutations refresh BOTH views ──────────────────────────────────────
+
+def test_mutations_refresh_ledger_and_closed_sales():
+    """A SELL changes the ledger AND the closed-sales card. Every
+    transaction mutation handler must refresh both: skipping closed
+    sales leaves a just-completed sale invisible until the next 60s
+    poll (or a manual reload) — the bug this pins. The four mutation
+    sites (delete ticker, delete row, log/edit submit, import commit)
+    call the pair through refreshLedgerViews."""
+    js = LEDGER_JS.read_text()
+    assert "function refreshLedgerViews" in js, \
+        "the ledger+closed-sales refresh pair must exist"
+    start = js.find("function refreshLedgerViews")
+    body = js[start:js.find("}", start)]
+    assert "refreshLedger();" in body and "refreshClosedSales();" in body, \
+        "the pair helper must refresh BOTH views"
+    assert len(re.findall(r"refreshLedgerViews\s*\(\s*\)", js)) >= 4, \
+        "every mutation path must refresh the ledger AND closed sales"
