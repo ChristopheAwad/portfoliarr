@@ -2805,7 +2805,8 @@ input[type="date"]::-moz-placeholder {
        no cell carries a .type/.price class, so the bare class form of
        these selectors once matched nothing and quietly never hid them. */
     tr.ledger-group td[data-col="type"],
-    tr.ledger-group td[data-col="price"] { display: none; }
+    tr.ledger-group td[data-col="price"],
+    tr.ledger-group td[data-col="fee"] { display: none; }
 
     /* Three cells are structure, not facts — no caption: */
     tr.ledger-group td[data-col="date"]::before,    /* caret + "N txns" = meta line   */

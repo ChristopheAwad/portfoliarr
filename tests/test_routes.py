@@ -437,17 +437,17 @@ def th_attr(tag, attr):
 
 
 def test_ledger_header_renders_expected_columns_in_default_order(client):
-    """The ledger <thead> declares exactly 11 columns, each carrying a
+    """The ledger <thead> declares exactly 12 columns, each carrying a
     UNIQUE data-col key, in the default order — the order every consumer
     assumes: ledger.js reads it at boot, both row builders append cells in
-    it, and setLedgerMessage's colSpan=11 assumes the count. This is the
+    it, and setLedgerMessage's colSpan=12 assumes the count. This is the
     reordered-columns feature's foundation test: without it, a template
     edit that added a column without its data-col (or duplicated one)
     would misplace cells in ways only the eye could catch."""
     tags = ledger_header_tags(client.get("/ledger").get_data(as_text=True))
-    assert len(tags) == 11  # the colSpan=11 contract, counted for real
+    assert len(tags) == 12  # the colSpan=12 contract, counted for real
     assert [th_attr(t, "data-col") for t in tags] == [
-        "date", "type", "ticker", "qty", "price", "value",
+        "date", "type", "ticker", "qty", "price", "fee", "value",
         "total_gain", "total_gain_pct", "day_gain", "day_gain_pct",
         "actions",
     ]

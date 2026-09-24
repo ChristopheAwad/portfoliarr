@@ -802,7 +802,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     # Walk each label forward, maintaining quantity per ticker. This is
     # the heart of the chart: buying shares must push the line up from
     # that point on; selling must pull it down. We only add/sell, never
-    # average cost — that (more nuanced) math is a later feature.
+    # average cost — the history chart uses net cash paid, not open basis.
     #
     # Alongside quantity we fold a COST accumulator — the chart's hover
     # shows what was PAID at each point (netted cost basis), not just
@@ -819,6 +819,8 @@ Algorithm: walk every trading day in the range forward, keeping a
     #   contributes 0 (above), but their COST stays a ledger fact — money
     #   genuinely paid is real regardless of pricing. The gap the tooltip
     #   shows is therefore the honest, blended gain-to-date.
+    # The cost side includes trade fees; the price-only TWR flow below
+    # stays gross. With no cash account, TWR cannot model fee drag.
     # The cost side needs no network — it is all stored facts, so it
     # rides this existing walk for free.
     def tx_cad_cost(tx):
@@ -835,7 +837,9 @@ Algorithm: walk every trading day in the range forward, keeping a
         else:
             return 0.0       # unsupported currency — contributes 0
         sign = 1 if tx["transaction_type"] == "BUY" else -1
-        return sign * tx["price"] * tx["qty"] * rate
+        # Fees change the money paid or recovered, but not the shares or
+        # the price-only performance flow below.
+        return (sign * tx["price"] * tx["qty"] + (tx["fee"] or 0)) * rate
 
     # THE TWR FLOW — the walk's third accumulator. The cost side answers
     # "what did I pay"; the flow side removes the CASH that moved in/out,
@@ -1071,7 +1075,7 @@ def portfolio_summary():
         day_gain_pct    day_gain ÷ yesterday's value (null if no base)
         total_gain      total_value − cost_basis (realized + unrealized)
         total_gain_pct  total_gain ÷ cost_basis (null if no base)
-        cost_basis      Σ ±(price × qty × that tx's fx_rate) — buys paid
+        cost_basis      Σ (±price × qty + fee) × tx fx — buys paid
                         minus sells recouped, each at ITS day's rate
         unpriced        tickers excluded from ALL sums: quote failed, FX
                         unavailable for a USD holding, or a currency the
@@ -1094,14 +1098,15 @@ def portfolio_summary():
     # ticker figures.
     #   net_qty:    BUY adds shares, SELL subtracts — the same fold the
     #               history route does, but only the final state matters.
-    #   cost_stored: Σ ±(price × qty × stored fx_rate) — the CAD cost of
+    #   cost_stored: Σ (±price × qty + fee) × stored fx_rate — CAD cost of
     #               every transaction whose rate is a known fact. CAD rows
     #               carry fx_rate 1.0, so one formula serves both.
-    #   cost_unrated: Σ ±(price × qty) for USD rows whose fx_rate is NULL
+    #   cost_unrated: Σ (±price × qty + fee) for USD rows whose fx_rate is NULL
     #               (pre-feature rows, or Yahoo couldn't answer at insert
     #               time). Their rate is genuinely unknown — they convert
     #               at the LIVE rate as a documented per-request fallback.
-    #   A buy adds what was PAID; a sell SUBTRACTS what was RECOUPED. The
+    #   A buy adds what was PAID including fees; a sell SUBTRACTS net proceeds.
+    #   The
     #   gap between today's value and this net figure is the position's
     #   whole lifetime gain (realized + unrealized) in ONE formula.
     net_qty = {}
@@ -1115,7 +1120,7 @@ def portfolio_summary():
         if tx["currency"] == "USD" and tx["fx_rate"] is None:
             cost_unrated[symbol] = (
                 cost_unrated.get(symbol, 0.0)
-                + sign * tx["price"] * tx["qty"]
+                + sign * tx["price"] * tx["qty"] + (tx["fee"] or 0)
             )
             has_unrated = True
         else:
@@ -1125,7 +1130,8 @@ def portfolio_summary():
             rate = tx["fx_rate"] if tx["currency"] == "USD" else 1.0
             cost_stored[symbol] = (
                 cost_stored.get(symbol, 0.0)
-                + sign * tx["price"] * tx["qty"] * rate
+                + (sign * tx["price"] * tx["qty"]
+                   + (tx["fee"] or 0)) * rate
             )
 
     # (An empty ledger falls through this loop and returns all zeros +
@@ -1418,6 +1424,9 @@ def portfolio_realized():
         })
         q = tx["qty"]
         price = tx["price"]
+        fee_per_share = (tx["fee"] or 0) / q
+        buy_unit = price + fee_per_share
+        sell_unit = price - fee_per_share
         rate = stored_rate(tx)
         is_buy = tx["transaction_type"] == "BUY"
         qty_before = pos["qty"]
@@ -1431,9 +1440,9 @@ def portfolio_realized():
                 covered = min(q, -qty_before)
                 if rate is not None and pos["rated"]:
                     fold_total += covered * (
-                        pos["cost_cad"] / qty_before - price * rate
+                        pos["cost_cad"] / qty_before - buy_unit * rate
                     )
-                elif rate is None:
+                else:
                     total_uncertain = True
                 if pos["rated"]:
                     # The CAD side of the short shrinks only when its
@@ -1457,9 +1466,9 @@ def portfolio_realized():
             # joins — or opens — the long pool.
             if q > 0:
                 pos["qty"] += q
-                pos["cost_native"] += q * price
+                pos["cost_native"] += q * buy_unit
                 if rate is not None:
-                    pos["cost_cad"] += q * price * rate
+                    pos["cost_cad"] += q * buy_unit * rate
                 else:
                     # Unrated cost entering the pool: the pool's CAD value
                     # is no longer exactly known until it goes flat.
@@ -1475,7 +1484,7 @@ def portfolio_realized():
                 "qty": q,
                 "currency": tx["currency"],
                 "price": price,
-                "avg_cost": price,     # short-opening fallback, replaced below
+                "avg_cost": sell_unit,  # short-opening fallback
                 "avg_cost_fx": rate,
                 "realized": None,
                 "realized_pct": None,
@@ -1490,11 +1499,11 @@ def portfolio_realized():
                 row["avg_cost"] = ps_native
                 row["avg_cost_fx"] = (
                     pos["cost_cad"] / pos["cost_native"]
-                    if pos["rated"] else None
+                    if pos["rated"] and pos["cost_native"] != 0 else None
                 )
                 if pos["rated"] and rate is not None:
                     basis_cad = covered * ps_cad
-                    realized = covered * price * rate - basis_cad
+                    realized = covered * sell_unit * rate - basis_cad
                     fold_total += realized
                     row["realized"] = realized
                     # A percentage needs a meaningful base to divide by
@@ -1533,9 +1542,9 @@ def portfolio_realized():
             # "average = pool ÷ qty" identity keeps working.
             if q > 0:
                 pos["qty"] -= q
-                pos["cost_native"] -= q * price
+                pos["cost_native"] -= q * sell_unit
                 if rate is not None:
-                    pos["cost_cad"] -= q * price * rate
+                    pos["cost_cad"] -= q * sell_unit * rate
                 else:
                     pos["rated"] = False
                     pos["reason"] = unrated_reason(tx)
@@ -2036,8 +2045,8 @@ def remove_from_watchlist(symbol):
 
 
 def validate_tx_fields(body):
-    """Validate the four ticker-independent fields of a transaction:
-    date, price, qty, type.
+    """Validate the ticker-independent fields of a transaction:
+    date, price, qty, type, and optional fee.
 
     ONE validator for BOTH routes that write transactions — POST (log) and
     PUT (edit). If the two routes each had their own checks they could
@@ -2078,6 +2087,15 @@ def validate_tx_fields(body):
         if error:
             return None, error
 
+    fee = body.get("fee")
+    if fee is not None:
+        if isinstance(fee, bool) or not isinstance(fee, (int, float)):
+            return None, (jsonify({"error": "fee must be a number or null"}), 400)
+        if not math.isfinite(fee):
+            return None, (jsonify({"error": "fee must be finite"}), 400)
+        if fee < 0:
+            return None, (jsonify({"error": "fee must be at least 0"}), 400)
+
     # Type: normalize, then allow only the two verbs a ledger knows.
     transaction_type = str(body.get("type", "")).strip().upper()
     if transaction_type not in ("BUY", "SELL"):
@@ -2087,6 +2105,7 @@ def validate_tx_fields(body):
         "transaction_date": transaction_date,
         "price": body["price"],
         "qty": body["qty"],
+        "fee": fee,
         "transaction_type": transaction_type,
     }, None
 
@@ -2177,7 +2196,7 @@ def log_transaction():
     """
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        return jsonify({"error": "expected JSON body with ticker, date, price, qty, type"}), 400
+        return jsonify({"error": "expected JSON body with ticker, date, price, qty, type, optional fee"}), 400
 
     # --- Ticker: same trim + uppercase normalization as the watchlist add
     # route — one canonical form everywhere ("aapl" and "AAPL" must match).
@@ -2221,6 +2240,7 @@ def log_transaction():
         currency=currency,
         transaction_type=fields["transaction_type"],
         fx_rate=fx_rate,
+        fee=fields["fee"],
     )
     app.logger.info(
         "event=transaction_created request_id=%s tx_id=%d ticker=%r type=%r",
@@ -2235,6 +2255,7 @@ def log_transaction():
         "transaction_date": fields["transaction_date"],
         "price": fields["price"],
         "qty": fields["qty"],
+        "fee": fields["fee"],
         "currency": currency,
         "fx_rate": fx_rate,
         "transaction_type": fields["transaction_type"],
@@ -2391,10 +2412,9 @@ def list_transactions():
 
         if converts:
             # CAD display: value and day move scale by the LIVE rate;
-            # the gain compares today's CAD value against the CAD cost
-            # AT THE STORED RATE (price_display × qty — the same number
-            # the frontend's group-% math divides by).
-            cad_cost = bought_at * row_rate * tx["qty"]
+            # the gain compares today's CAD value against the original
+            # gross trade and fee at the stored rate.
+            cad_cost = (bought_at * tx["qty"] + (tx["fee"] or 0)) * row_rate
             tx["value"] = live_price * tx["qty"] * live_rate
             tx["total_gain"] = tx["value"] - cad_cost
             # cad_cost > 0: price, qty and rates are all validated > 0.
@@ -2408,9 +2428,11 @@ def list_transactions():
             # row this is the position's unrealized gain: what it's worth now
             # vs what was paid. (Its % is this position's return since purchase
             # — qty matters, 100 shares "gained" more dollars than 1.)
-            tx["total_gain"] = (live_price - bought_at) * tx["qty"]
+            tx["total_gain"] = ((live_price - bought_at) * tx["qty"]
+                                - (tx["fee"] or 0))
             # bought_at > 0 is enforced at insert time, so this division is safe.
-            tx["total_gain_pct"] = (live_price - bought_at) / bought_at * 100
+            basis = bought_at * tx["qty"] + (tx["fee"] or 0)
+            tx["total_gain_pct"] = tx["total_gain"] / basis * 100
 
             # DAILY gain — TODAY's market move applied to the position. The
             # quote already carries the move (change = live − previous close,
@@ -2434,8 +2456,8 @@ def list_transactions():
     # THE MATH MIRRORS /api/portfolio/summary exactly (app.py, Pass 1/2
     # there) — same netting, same two-rate contract, same guards:
     #   group_value          = net_qty × live price × value-rate
-    #   group_cost_basis     = Σ ±(price_display × qty) — buys PAID minus
-    #                          sells RECOUPED, each at its own display rate
+    #   group_cost_basis     = Σ (±price × qty + fee) × display rate — buys
+    #                          paid minus net proceeds from sells
     #   group_total_gain     = value − cost (realized + unrealized in ONE
     #                          formula, like the summary)
     #   group_total_gain_pct = gain ÷ cost, NULL when cost ≤ 0 (a ≤ 0
@@ -2487,18 +2509,21 @@ def list_transactions():
                 tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
             )
             px = tx["price_display"]
+            fee_per_share = ((tx["fee"] or 0) / tx["qty"]
+                             * px / tx["price"])
+            opening_price = px + fee_per_share if signed > 0 else px - fee_per_share
 
             if abs(pos_qty) <= FLAT_QTY_TOL:
                 # Flat (or dust): this transaction opens the pool at its
                 # own price — long for BUY, short for SELL.
                 pos_qty = signed
-                pos_cost = abs(signed) * px
+                pos_cost = abs(signed) * opening_price
                 continue
 
             if (pos_qty > 0) == (signed > 0):
                 # Same side: grow the pool; the weighted average follows.
                 pos_qty += signed
-                pos_cost += abs(signed) * px
+                pos_cost += abs(signed) * opening_price
                 continue
 
             # Opposite side: close at the pool's CURRENT average first.
@@ -2520,7 +2545,7 @@ def list_transactions():
                     pos_cost = 0.0
                 else:
                     pos_qty = excess if signed > 0 else -excess
-                    pos_cost = excess * px
+                    pos_cost = excess * opening_price
 
         avg_cost = (
             pos_cost / abs(pos_qty)
@@ -2569,7 +2594,8 @@ def list_transactions():
         for tx in rows:
             sign = 1 if tx["transaction_type"] == "BUY" else -1
             net_qty += sign * tx["qty"]
-            cost += sign * tx["price_display"] * tx["qty"]
+            cost += (sign * tx["price_display"] * tx["qty"]
+                     + (tx["fee"] or 0) * tx["price_display"] / tx["price"])
 
         # Pass B — live math: value and day move apply to the NET
         # position (sold shares no longer move with the market).
@@ -2601,7 +2627,7 @@ def edit_transaction(tx_id):
     browser PUTs JSON like:
         {"date": "2026-08-30", "price": 231.10, "qty": 12, "type": "BUY"}
 
-    The body is exactly those four fields — nothing else. Ticker and
+    The body has those required fields plus an optional fee. Ticker and
     currency are NOT editable (see the section banner above: identity and
     its yfinance-derived fact). If a client sends a "ticker" anyway it is
     ignored outright — the route never reads it.
@@ -2622,14 +2648,14 @@ def edit_transaction(tx_id):
 
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        return jsonify({"error": "expected JSON body with date, price, qty, type"}), 400
+        return jsonify({"error": "expected JSON body with date, price, qty, type, optional fee"}), 400
 
     # Same validator as POST — one set of rules, no drift (see its docstring).
     fields, error = validate_tx_fields(body)
     if error:
         return error
 
-    # update_transaction's SET list names the four editable columns PLUS
+    # update_transaction's SET list names the editable facts PLUS
     # the date-derived fx_rate, so ticker/currency physically cannot
     # change here. A False return means the row vanished between the
     # existence check and the UPDATE (deleted in another window) — same
@@ -2641,6 +2667,7 @@ def edit_transaction(tx_id):
         qty=fields["qty"],
         transaction_type=fields["transaction_type"],
         fx_rate=_derive_fx_rate(row["currency"], fields["transaction_date"]),
+        fee=fields["fee"],
     ):
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
 
@@ -2993,6 +3020,7 @@ def import_commit():
                 currency=quote["currency"],
                 transaction_type=row["transaction_type"],
                 fx_rate=row["fx_rate"],
+                fee=None,
             )
         except Exception:
             app.logger.warning(

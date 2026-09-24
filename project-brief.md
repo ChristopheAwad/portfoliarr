@@ -83,13 +83,21 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   Full investigation and rationale: see `feature.md` and reverted commit
   `d4cd772`. Scrapped 2026-09-12.
 - **The transaction ledger stores immutable facts only** (ticker, date,
-  price, qty, currency, buy/sell type). Anything market-dependent — total
+  price, qty, optional native-currency fee, currency, buy/sell type). An absent
+  fee remains null and counts as zero; a BUY adds its fee to the cost paid,
+  and a SELL subtracts its fee from the proceeds received. CAD cost converts
+  the full fee-adjusted amount at that transaction's stored rate. The chart's
+  cost line includes fees, while its price-only TWR view continues to remove
+  gross flows because there is no cash account to represent fee drag.
+  Anything market-dependent — total
   value, gain $/% — is computed at display time from live quotes, never
   stored: stored copies would freeze stale the moment they were written.
 - **Realized gains are an average-cost replay of stored facts, computed
   on read.** `GET /api/portfolio/realized` folds the ledger oldest-first
-  per ticker (buys grow the pool, each sell realizes
-  `covered × (sell_price × stored fx − avg CAD cost)`); nothing is
+  per ticker (buys grow the pool including fees, each sell realizes
+  its fee-adjusted proceeds less the covered shares' average CAD cost);
+  crossing trades split their fee per share between closed and new positions;
+  nothing is
   stored, so correcting an old buy rewrites realized history honestly.
   Every rate is a FROZEN FACT (each leg's own `fx_rate`), the endpoint
   makes no quote or FX calls (the one network touch is the Name

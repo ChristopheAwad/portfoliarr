@@ -63,6 +63,7 @@ def test_valid_body_returns_fields():
         "transaction_date": "2026-08-31",
         "price": 150,
         "qty": 10,
+        "fee": None,
         "transaction_type": "BUY",
     }
 

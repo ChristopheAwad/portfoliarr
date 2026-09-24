@@ -111,6 +111,7 @@ def test_transaction_round_trip(fresh_db):
         "currency": "USD",
         "transaction_type": "BUY",
         "fx_rate": 1.3821,
+        "fee": None,
     }
 
 
