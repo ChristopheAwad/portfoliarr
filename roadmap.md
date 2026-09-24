@@ -133,6 +133,22 @@ or build time so the two clients cannot silently drift.
 
 ## Tier 2 — Core Features (3–5 days each)
 
+### 23. Several Named Portfolios
+Replace the single implicit ledger with independent named portfolios. Assign old
+transactions to `Main`; select the active portfolio on the dashboard or ledger,
+manage names and order in Preferences, and scope transactions, summary, history,
+allocation, and closed sales to it. The watchlist and market pages remain shared.
+Selection persists per browser and updates its other tabs immediately. Deleting
+a portfolio requires typed confirmation and cannot remove the last portfolio.
+Detailed tests-first implementation plan: `feature.md`.
+
+**Effort:** 5 days
+**Files:** `db.py`, `app.py`, `static/js/common.js`, `static/js/main.js`, `static/js/ledger.js`, `static/js/preferences.js`, `static/js/stock.js` if needed, `templates/index.html`, `templates/ledger.html`, `templates/preferences.html`, `static/style.css`, `project-brief.md`, portfolio tests and existing fixture/route tests
+**Depends on:** Nothing; preserve #3 fee accounting and #13/#14 performance history behavior
+**Status:** shipped 2026-09-24 (PR #80)
+
+---
+
 ### 6. Dividend Tracking
 The `transaction_type` CHECK constraint needs a new value (`DIVIDEND`). Add it to the validator, the form, and the ledger display. Dividends don't affect cost basis (they're income, not a reinvestment unless logged as a BUY). The ledger already handles multiple transaction types — this extends the pattern.
 
@@ -284,7 +300,8 @@ Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
   7. Benchmark Line ────── superseded ─┤── can be done in any order
   8. Multi-Currency ───────────────────┤   (#17 replaces #7)
-  17. Comparison Overlays ─────────────┘
+  17. Comparison Overlays ──────────────┤
+  23. Several Named Portfolios ─────────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -322,6 +339,7 @@ For maximum compounding value:
 20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
 21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
 22. **In-App Version Display** → identifies the deployed web and Android release from one shared version source
+23. **Several Named Portfolios** → separates ledgers and portfolio calculations while retaining the shared watchlist and markets
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 
@@ -334,7 +352,7 @@ Back burner (user request): #2 CSV Export and #16 Android Biometric/PIN Lock.
 These are Ghostfolio features that don't fit Portfoliarr's scope:
 
 - **Multi-user auth** — single-user by design
-- **Multi-account / multi-broker** — single portfolio by design
+- **Multi-account / multi-broker** — #23 adds separate portfolios, not broker-account hierarchies
 - **AI assistant** — "no AI" in the project brief
 - **FIRE calculator** — out of scope
 - **Fear & Greed Index** — out of scope

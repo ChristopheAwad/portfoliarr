@@ -51,17 +51,30 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ## Scope (MVP — Lean)
 
-- Single portfolio, single implicit user (no auth)
+- Several independent named portfolios, single implicit user (no auth)
 - Transaction ledger: buy and sell events with dates and prices
 - yfinance for all market data; anything Yahoo has is searchable
 - Price cache with short TTL to avoid hammering Yahoo
 - CAD display conversion for portfolio views (USD↔CAD only, via
   Yahoo's `USDCAD=X` pair), with a ledger toggle for native-USD display
 
-**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, multiple named portfolios, currencies other than USD/CAD, PWA install-to-homescreen.
+**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, currencies other than USD/CAD, PWA install-to-homescreen.
 
 ## Design Rules (permanent)
 
+- **Each portfolio owns its transaction ledger and all calculations built
+  from it.** Existing rows migrate unchanged into `Main`; new portfolios
+  start empty. One shared watchlist, market overview, search, and stock
+  detail view remain global. The dashboard and ledger select the active
+  portfolio by stable ID, saved in this browser and synchronized across
+  its tabs. The browser sends `portfolio_id` on every portfolio-specific
+  API request; an explicit missing/invalid ID never falls back to another
+  ledger. Omitted IDs still select the first ordered portfolio for older
+  API callers. A rename or reorder does not change IDs or transaction
+  ownership. At least one portfolio must remain. Deletion checks the
+  typed name server-side and removes its trades atomically; the global
+  watchlist survives. Chart caches and async paints must be scoped to
+  the selected portfolio so late replies never show another ledger.
 - **The root `VERSION` file is the human-readable release source for both the
   Flask UI and Android `versionName`.** Preferences displays it in the About
   card. Android's independently increasing `VERSION_CODE` remains in

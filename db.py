@@ -46,7 +46,9 @@ def _connect():
     with zero setup.
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def init():
@@ -69,6 +71,13 @@ def init():
             )
             """
         )
+        conn.execute("""CREATE TABLE IF NOT EXISTS portfolios (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL
+                CHECK (length(name) BETWEEN 1 AND 60 AND name = trim(name)),
+            sort_order INTEGER NOT NULL)""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS portfolio_name_unique ON portfolios(name COLLATE NOCASE)")
+        if not conn.execute("SELECT 1 FROM portfolios LIMIT 1").fetchone():
+            conn.execute("INSERT INTO portfolios (name, sort_order) VALUES ('Main', 0)")
 
         # The transaction ledger. Stores IMMUTABLE FACTS ONLY — nothing that
         # depends on a live market price (such values would freeze stale the
@@ -110,7 +119,8 @@ def init():
                 fee              REAL,
                 currency         TEXT NOT NULL,
                 fx_rate          REAL,
-                transaction_type TEXT NOT NULL CHECK (transaction_type IN ('BUY', 'SELL'))
+                transaction_type TEXT NOT NULL CHECK (transaction_type IN ('BUY', 'SELL')),
+                portfolio_id INTEGER NOT NULL REFERENCES portfolios(id)
             )
             """
         )
@@ -134,6 +144,26 @@ def init():
             )
         if "fee" not in columns:
             conn.execute("ALTER TABLE transactions ADD COLUMN fee REAL")
+        if "portfolio_id" not in columns:
+            # SQLite cannot add a NOT NULL foreign key to a populated table.
+            # Rebuild it in this transaction so a failed copy keeps the old ledger.
+            conn.execute("""CREATE TABLE transactions_scoped (
+                id INTEGER PRIMARY KEY, ticker TEXT NOT NULL,
+                transaction_date TEXT NOT NULL, price REAL NOT NULL,
+                qty REAL NOT NULL, fee REAL, currency TEXT NOT NULL,
+                fx_rate REAL, transaction_type TEXT NOT NULL
+                    CHECK (transaction_type IN ('BUY', 'SELL')),
+                portfolio_id INTEGER NOT NULL REFERENCES portfolios(id))""")
+            main_id = conn.execute("SELECT id FROM portfolios WHERE name = 'Main'").fetchone()[0]
+            conn.execute("""INSERT INTO transactions_scoped
+                (id, ticker, transaction_date, price, qty, fee, currency,
+                 fx_rate, transaction_type, portfolio_id)
+                SELECT id, ticker, transaction_date, price, qty, fee, currency,
+                       fx_rate, transaction_type, ? FROM transactions""", (main_id,))
+            conn.execute("DROP TABLE transactions")
+            conn.execute("ALTER TABLE transactions_scoped RENAME TO transactions")
+        conn.execute("CREATE INDEX IF NOT EXISTS tx_portfolio_date ON transactions(portfolio_id, transaction_date DESC, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS tx_portfolio_ticker ON transactions(portfolio_id, ticker)")
 
         # Backfill what migration CAN know: a CAD row needs no conversion
         # (the rate is exactly 1.0 — a true fact, not a guess). USD rows
@@ -145,6 +175,84 @@ def init():
             "UPDATE transactions SET fx_rate = 1.0"
             " WHERE currency = 'CAD' AND fx_rate IS NULL"
         )
+
+
+def get_portfolios():
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(row) for row in conn.execute(
+            "SELECT id, name, sort_order FROM portfolios ORDER BY sort_order, id")]
+
+
+def get_portfolio(portfolio_id):
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT id, name, sort_order FROM portfolios WHERE id = ?",
+                           (portfolio_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def default_portfolio_id():
+    with _connect() as conn:
+        return conn.execute("SELECT id FROM portfolios ORDER BY sort_order, id LIMIT 1").fetchone()[0]
+
+
+def create_portfolio(name):
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if any(row[0].casefold() == name.casefold() for row in
+               conn.execute("SELECT name FROM portfolios")):
+            raise sqlite3.IntegrityError("portfolio name already exists")
+        cursor = conn.execute("INSERT INTO portfolios (name, sort_order) VALUES (?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM portfolios))", (name,))
+        return cursor.lastrowid
+
+
+def rename_portfolio(portfolio_id, name):
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if any(row[0] != portfolio_id and row[1].casefold() == name.casefold()
+               for row in conn.execute("SELECT id, name FROM portfolios")):
+            raise sqlite3.IntegrityError("portfolio name already exists")
+        return conn.execute("UPDATE portfolios SET name = ? WHERE id = ?",
+                            (name, portfolio_id)).rowcount > 0
+
+
+def move_portfolio(portfolio_id, direction):
+    """Swap adjacent display positions in one write transaction."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM portfolios ORDER BY sort_order, id")]
+        if portfolio_id not in ids:
+            return None
+        index = ids.index(portfolio_id)
+        neighbor = index + (-1 if direction == "up" else 1)
+        if not 0 <= neighbor < len(ids):
+            return False
+        ids[index], ids[neighbor] = ids[neighbor], ids[index]
+        conn.executemany("UPDATE portfolios SET sort_order = ? WHERE id = ?",
+                         [(order, pid) for order, pid in enumerate(ids)])
+        return True
+
+
+def delete_portfolio(portfolio_id, confirmation):
+    """Return deleted, missing, last, or mismatch; never leave orphan trades."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT name FROM portfolios WHERE id = ?",
+                           (portfolio_id,)).fetchone()
+        if row is None:
+            return "missing"
+        if conn.execute("SELECT COUNT(*) FROM portfolios").fetchone()[0] == 1:
+            return "last"
+        if confirmation != row[0]:
+            return "mismatch"
+        conn.execute("DELETE FROM transactions WHERE portfolio_id = ?", (portfolio_id,))
+        conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
+        ids = [r[0] for r in conn.execute("SELECT id FROM portfolios ORDER BY sort_order, id")]
+        conn.executemany("UPDATE portfolios SET sort_order = ? WHERE id = ?",
+                         [(order, pid) for order, pid in enumerate(ids)])
+        return "deleted"
 
 
 def get_symbols():
@@ -215,7 +323,7 @@ def remove_symbol(symbol):
 # ---------------------------------------------------------------------------
 
 def add_transaction(ticker, transaction_date, price, qty, currency,
-                    transaction_type, fx_rate, fee=None):
+                    transaction_type, fx_rate, fee=None, portfolio_id=None):
     """Insert one BUY or SELL row. Returns the new row's auto-numbered id.
 
     Validation has already happened in the route layer (fields checked,
@@ -232,16 +340,18 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
     Same ? placeholder rule as add_symbol: values travel separately from
     SQL text, so even hostile input is inert data, never executable SQL.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO transactions
                 (ticker, transaction_date, price, qty, currency, fx_rate,
-                 transaction_type, fee)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  transaction_type, fee, portfolio_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (ticker, transaction_date, price, qty, currency, fx_rate,
-             transaction_type, fee),
+              transaction_type, fee, portfolio_id),
         )
         # lastrowid: the id SQLite just assigned to THIS insert. Telling the
         # caller which row was created makes the route's 201 response more
@@ -249,7 +359,7 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
         return cursor.lastrowid
 
 
-def get_transactions():
+def get_transactions(portfolio_id=None):
     """Return every transaction, newest first, as a list of plain dicts.
 
     Newest first because a ledger is read like a bank statement: the most
@@ -262,20 +372,23 @@ def get_transactions():
     — exactly the shape jsonify needs. Setting row_factory on the connection
     switches every fetch from that connection to Row objects.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   fx_rate, transaction_type, fee
+                    fx_rate, transaction_type, fee, portfolio_id
             FROM transactions
+            WHERE portfolio_id = ?
             ORDER BY transaction_date DESC, id DESC
-            """
+            """, (portfolio_id,)
         ).fetchall()
     return [dict(row) for row in rows]
 
 
-def get_transaction(tx_id):
+def get_transaction(tx_id, portfolio_id=None):
     """Return ONE transaction as a dict, or None if that id doesn't exist.
 
     Routes use this for the 404-before-validation check: when a PUT/DELETE
@@ -283,22 +396,24 @@ def get_transaction(tx_id):
     far better than validating fields for a row that was never there.
     Same SELECT shape as get_transactions, narrowed to one id.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
             SELECT id, ticker, transaction_date, price, qty, currency,
-                   fx_rate, transaction_type, fee
+                    fx_rate, transaction_type, fee, portfolio_id
             FROM transactions
-            WHERE id = ?
+            WHERE id = ? AND portfolio_id = ?
             """,
-            (tx_id,),
+            (tx_id, portfolio_id),
         ).fetchone()
     return dict(row) if row else None
 
 
 def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
-                       fx_rate, fee=None):
+                       fx_rate, fee=None, portfolio_id=None):
     """Correct the user-editable facts of one transaction.
 
     The SET list names SIX columns — date, price, qty, type, fx_rate, fee.
@@ -316,20 +431,23 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
     row was actually updated, False if the id doesn't exist (rowcount 0),
     which the route turns into a 404.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             """
             UPDATE transactions
             SET transaction_date = ?, price = ?, qty = ?, transaction_type = ?,
                 fx_rate = ?, fee = ?
-            WHERE id = ?
+            WHERE id = ? AND portfolio_id = ?
             """,
-            (transaction_date, price, qty, transaction_type, fx_rate, fee, tx_id),
+            (transaction_date, price, qty, transaction_type, fx_rate, fee, tx_id,
+             portfolio_id),
         )
         return cursor.rowcount > 0
 
 
-def delete_transaction(tx_id):
+def delete_transaction(tx_id, portfolio_id=None):
     """Remove one transaction permanently. Returns True if a row was
     actually deleted, False if the id doesn't exist (route turns that
     into a 404 — e.g. a second DELETE after the first one succeeded).
@@ -338,14 +456,17 @@ def delete_transaction(tx_id):
     table's one destructive verb, which is exactly why the UI gates it
     behind a confirm() dialog.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
-            "DELETE FROM transactions WHERE id = ?", (tx_id,)
+            "DELETE FROM transactions WHERE id = ? AND portfolio_id = ?",
+            (tx_id, portfolio_id),
         )
         return cursor.rowcount > 0
 
 
-def delete_transactions_for_ticker(ticker):
+def delete_transactions_for_ticker(ticker, portfolio_id=None):
     """Delete EVERY transaction of one ticker — the ledger's one BULK
     verb, sitting next to delete_transaction's single-row verb. Returns
     the number of rows actually deleted: 0 means no row carried this
@@ -357,8 +478,11 @@ def delete_transactions_for_ticker(ticker):
     securities that must never wipe each other. Parameterized like every
     query here — the ticker travels as data, never as SQL text.
     """
+    if portfolio_id is None:
+        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
-            "DELETE FROM transactions WHERE ticker = ?", (ticker,)
+            "DELETE FROM transactions WHERE ticker = ? AND portfolio_id = ?",
+            (ticker, portfolio_id),
         )
         return cursor.rowcount

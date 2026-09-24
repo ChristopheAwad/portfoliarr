@@ -173,14 +173,16 @@ def test_same_dimension_fetch_is_single_flighted():
     src = _read_js("static/js/main.js")
     assert "const allocInFlight = {};" in src, \
         "main.js must keep one in-flight promise per dimension"
-    assert "if (allocInFlight[by]) return allocInFlight[by];" in src, \
+    assert "if (allocInFlight[flightKey]) return allocInFlight[flightKey];" in src, \
         "exported callers must join (and share) the in-flight fetch"
-    assert "allocInFlight[by] = flight;" in src, \
+    assert "allocInFlight[flightKey] = flight;" in src, \
         "the fetch must register its own promise under the dimension key"
     assert ".finally" in src, \
         "the in-flight slot must be released when the fetch settles"
-    assert "delete allocInFlight[by]" in src, \
+    assert "delete allocInFlight[flightKey]" in src, \
         "a settled fetch must empty its slot so the next poll refetches"
+    assert "const flightKey = `${key}|${epoch}`;" in src, \
+        "a request from another portfolio or prior selection cannot block this fetch"
     assert "isLatestAllocRequest" not in src, \
         "the old generation counter is gone, replaced by the promise map"
 
@@ -224,7 +226,7 @@ def test_stale_dimension_paints_its_cached_donut_first():
     # The cached-payload repaint must run before the in-flight join, so a
     # re-flip onto an in-flight dimension still shows that dimension's donut.
     paint_pos = fetch.find("paintAllocation(entry.data.slices")
-    inflight_pos = fetch.find("if (allocInFlight[by]) return")
+    inflight_pos = fetch.find("if (allocInFlight[flightKey]) return")
     assert paint_pos != -1 and inflight_pos != -1 and paint_pos < inflight_pos, \
         "the cached payload must be painted before the single-flight join"
 
@@ -427,9 +429,10 @@ def test_summary_refresh_is_single_flighted():
     drops the new call and lets the in-flight one serve this cycle."""
     src = _read_js("static/js/main.js")
     assert "let summaryInflight = null;" in src
-    assert "if (summaryInflight) return summaryInflight;" in src
+    assert "if (summaryInflight && summaryFlightEpoch === epoch) return summaryInflight;" in src
     assert "summaryInflight = null;" in src
     body = src.split("async function refreshPortfolioSummary()", 1)[1]
     body = body.split("\n}", 1)[0]
     assert "summaryInflight = null" in body, \
         "the guard must be released inside the function, not just at module level"
+    assert "if (epoch !== portfolioEpoch()) return;" in body
