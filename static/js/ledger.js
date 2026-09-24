@@ -1312,7 +1312,7 @@ ledgerBody.addEventListener("click", async (event) => {
             const editingTx = lastTransactions.find(
                 (t) => t.id === editingTxId);
             if (editingTx && editingTx.ticker === ticker) exitEditMode();
-            refreshLedger();
+            refreshLedgerViews();
         } catch (err) {
             if (epoch !== portfolioEpoch()) return;
             console.error("delete ticker transactions failed:", err);
@@ -1357,7 +1357,7 @@ ledgerBody.addEventListener("click", async (event) => {
         // If THIS row was open in the form, its edit target is gone —
         // drop back to log mode rather than submitting into a 404.
         if (editingTxId === tx.id) exitEditMode();
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("delete transaction failed:", err);
@@ -1507,7 +1507,7 @@ txForm.addEventListener("submit", async (event) => {
         // today-default date in one place), then pull the truth
         // immediately rather than waiting for the next poll.
         exitEditMode();
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         console.error("save transaction failed:", err);
         txErrorEl.textContent = "Could not reach the server — is it running?";
@@ -1731,7 +1731,7 @@ importCommitBtn.addEventListener("click", async () => {
         importCommitBtn.hidden = true; // one paste, one commit — re-preview first
         // Pull the truth immediately rather than waiting for the next poll
         // (same rule as the log form's submit handler).
-        refreshLedger();
+        refreshLedgerViews();
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("import commit failed:", err);
@@ -1941,6 +1941,15 @@ function renderClosedSales(payload) {
                    priceCell, realizedCell, pctCell);
         closedSalesBody.append(row);
     }
+}
+
+// Mutation paths change the ledger AND the realized picture it feeds
+// (a SELL edits both a row and the closed-sales card). Refreshing only
+// one leaves the other stale until the next 60s poll. One call keeps
+// the two views on the same truth.
+function refreshLedgerViews() {
+    refreshLedger();
+    refreshClosedSales();
 }
 
 async function refreshClosedSales() {
