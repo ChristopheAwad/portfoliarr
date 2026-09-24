@@ -364,7 +364,9 @@ def test_market_js_boot_preloads_all_categories_in_parallel():
     assert "preloadMarketOverview()" in boot, "boot must start all market requests"
     assert boot.index("preloadMarketOverview()") < boot.index("refreshWatchlist()")
     assert "function preloadMarketOverview()" in js
-    preload = js.split("function preloadMarketOverview()", 1)[1].split("\n}", 1)[0]
+    preload = js.split("function preloadMarketOverview()", 1)[1].split(
+        "// Activate a category tab:", 1
+    )[0]
     assert 'document.querySelectorAll(".market-tab")' in preload
     assert "refreshMarketOverview(" in preload
     assert "await " not in preload, "requests must start without waiting for another tab"

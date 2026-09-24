@@ -1647,9 +1647,8 @@ volumeLeadersEl.addEventListener("click", (event) => {
 //    section immediately — no waiting for the first interval. (The ledger
 //    lives on /ledger with its own timer.) The market overview ships EMPTY
 //    from the template — the CSS :empty shimmer stands in until real data
-//    lands — and preloadMarketOverview starts all six category requests
-//    together. The watchlist starts
-//    truly empty, painted by refreshWatchlist within the second.
+//    lands — and preloadMarketOverview starts every category request
+//    together. The watchlist starts empty and refreshWatchlist paints it.
 setupMarketTabs();
 preloadMarketOverview();
 refreshWatchlist();

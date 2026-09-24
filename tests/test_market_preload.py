@@ -113,6 +113,8 @@ def test_all_six_start_before_a_reply_and_paint_their_own_panels(js):
     ]
     assert js.eval("panels['north-america'].hidden") is False
     assert js.eval("panels.europe.hidden") is True
+    assert js.eval("tabs[0].classList.values.has('active')") is True
+    assert js.eval("document.activeElement === tabs[0]") is True
     _succeed(js, 1, "europe")
     assert "USD" in js.eval("panels.europe.items[0].price.textContent")
     assert js.eval("panels['north-america'].items[0].price.textContent") == ""
