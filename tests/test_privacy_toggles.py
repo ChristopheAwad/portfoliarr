@@ -611,3 +611,27 @@ def test_js_unmask_restores_cached_values_instantly():
         "unmask must paint the cached values back instantly"
     assert 'lastPortfolioPaint = null' in body, \
         "the cache must be consumed (nulled) on unmask"
+
+
+def test_masked_change_pills_keep_their_places_without_wide_backgrounds():
+    """Lock the outer slots, while the colored pills fit their own text."""
+    html = _read_html()
+    for pill_id in ("portfolio-day-change", "portfolio-total-return"):
+        assert re.search(
+            rf'<span class="portfolio-change-slot"><span class="price-change" '
+            rf'id="{pill_id}"></span></span>', html
+        )
+
+    js = _read_js()
+    mask = _function_body(js, "function applyPortfolioPrivacy()")
+    clear = _function_body(js, "function clearPortfolioGeometryLocks()")
+    for pill in ("portfolioDayChangeEl", "portfolioTotalReturnEl"):
+        assert f"{pill}.parentElement" in mask.split("if (masked)")[0]
+        assert f"{pill}.parentElement" in clear
+
+    css = _read_css()
+    slot = re.search(r'\.portfolio-change-slot\s*\{([^}]*)\}', css)
+    assert slot and "background" not in slot.group(1)
+    assert ".portfolio-change-slot .price-change" in css
+    assert ".price-change.pos { background-color:" in css
+    assert ".price-change.neg { background-color:" in css
