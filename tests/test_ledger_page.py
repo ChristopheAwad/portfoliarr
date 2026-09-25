@@ -36,6 +36,8 @@ LEDGER_HTML = Path("templates/ledger.html")
 LEDGER_MARKERS = [
     'id="ledger-body"',        # the transaction table's tbody
     'id="tx-form"',            # the log-a-transaction form
+    'id="tx-logger-toggle"',   # the logger's collapse control
+    'id="tx-logger-wrap"',     # the logger's collapsible region
     'id="import-panel"',       # the paste-to-import panel
     'id="hide-ledger-toggle"', # the ledger's privacy eye
 ]
@@ -228,3 +230,46 @@ def test_mutations_refresh_ledger_and_closed_sales():
         "the pair helper must refresh BOTH views"
     assert len(re.findall(r"refreshLedgerViews\s*\(\s*\)", js)) >= 4, \
         "every mutation path must refresh the ledger AND closed sales"
+
+
+# ── Collapsible transaction logger ────────────────────────────────────
+#
+# The logger (Logging-in line + tx form + edit notice + error line) ships
+# COLLAPSED so the ledger table is the first thing on screen. The state
+# lives in the wrapper's `hidden` attribute, exactly like Closed sales;
+# this file pins the shipped markup and the JS wiring that reverses it.
+
+def test_tx_logger_ships_collapsed(client):
+    """The toggle and its wrapper must ship on /ledger, and the wrapper
+    must be hidden with aria-expanded=false — 'collapsed on every page
+    load' is the HTML's initial state, not boot-time JS."""
+    html = rendered(client, "/ledger")
+    assert 'id="tx-logger-toggle"' in html, "logger toggle is missing"
+    assert re.search(r'id="tx-logger-wrap"[^>]*\bhidden\b', html), \
+        "the logger wrapper must ship hidden"
+    assert re.search(r'id="tx-logger-toggle"[^>]*aria-expanded="false"', html), \
+        "the collapsed toggle must report aria-expanded=false"
+
+
+def test_tx_logger_js_wires_toggle():
+    """ledger.js owns the toggle: it must query both ids, flip the wrapper
+    via one setter, keep aria-expanded truthful, and answer click AND
+    keyboard (a role=button div has no native activation)."""
+    js = LEDGER_JS.read_text()
+    assert "#tx-logger-toggle" in js and "#tx-logger-wrap" in js
+    assert "function setTxLoggerOpen" in js, \
+        "the one wrapper/caret/aria setter must exist"
+    assert "aria-expanded" in js
+    assert re.search(r'txLoggerToggle\.addEventListener\(\s*"click"', js), \
+        "the toggle must answer mouse clicks"
+    assert re.search(r'txLoggerToggle\.addEventListener\(\s*"keydown"', js), \
+        "the toggle must answer Enter/Space"
+
+
+def test_tx_logger_auto_expands_all_flows():
+    """Three flows fill or scroll a form the user cannot see if it stays
+    collapsed: the stock page deep link (?ticker=…#tx-form), edit-row,
+    and Quick Sell. Each must open the logger explicitly."""
+    js = LEDGER_JS.read_text()
+    assert len(re.findall(r"setTxLoggerOpen\(\s*true\s*\)", js)) >= 3, \
+        "deep-link, edit, and Quick Sell must each auto-expand the logger"

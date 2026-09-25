@@ -108,6 +108,34 @@
                     </div>
                 </div>
 
+                <!-- The logger's collapse control. The wrapper below ships
+                     `hidden`, so every page load starts collapsed with no
+                     boot-time JS; ledger.js only ever REVERSES this state.
+                     The header is a toggle (role=button + tabindex +
+                     aria-expanded, the Closed-sales kit) because the card's
+                     main header already holds other controls. The chevron is
+                     the same inline SVG the Closed-sales toggle uses. -->
+                <div class="tx-logger-toggle" id="tx-logger-toggle"
+                     role="button" tabindex="0" aria-expanded="false">
+                    <span class="caret">
+                        <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
+                             fill="none" stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round"
+                             aria-hidden="true">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </span>
+                    <span class="tx-logger-title">Log a transaction</span>
+                    <span class="portfolio-destination">Logging in
+                        <strong id="portfolio-form-name"></strong></span>
+                </div>
+
+                <!-- The collapsible logger body. ledger.js opens it on three
+                     flows that would otherwise fill a hidden form: the stock
+                     page deep link (/ledger?ticker=AAPL#tx-form), an edit-row
+                     click, and Quick Sell. -->
+                <div id="tx-logger-wrap" hidden>
+
                 <!-- The inline log form. name= attributes are what JS
                      reads via FormData; required gives free browser-side
                      validation, while the REAL validation lives in the
@@ -115,7 +143,6 @@
                      only a first filter. The stock detail page's "Log
                      Transaction" button deep-links here as
                      /ledger?ticker=AAPL#tx-form; ledger.js prefills. -->
-                <p class="portfolio-destination">Logging in <strong id="portfolio-form-name"></strong></p>
                 <form id="tx-form" class="tx-form">
                     <!-- The Ticker field is WRAPPED so the suggestion
                          dropdown can anchor under it: .search-results is
@@ -162,6 +189,8 @@
                 <!-- Backend error messages (bad date, unknown ticker...)
                      land here — inline, watchlist-alert style but quiet. -->
                 <p class="tx-error" hidden></p>
+
+                </div>
 
                 <!-- Import panel. Hidden until the Import button in the
                      card header toggles it. A textarea, not a file

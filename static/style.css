@@ -2530,6 +2530,43 @@ input[type="date"]::-moz-placeholder {
     transform: rotate(90deg);
 }
 
+/* The ledger's logger sub-header is a second collapse control (the
+   Transactions card's main header already holds other buttons, so the
+   logger gets its own row). Same visual language as Closed sales: caret
+   rotation, pointer cursor, hover tint. */
+.tx-logger-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+
+.tx-logger-toggle .caret {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.tx-logger-toggle:hover {
+    background-color: var(--bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+.tx-logger-toggle.open .caret {
+    transform: rotate(90deg);
+}
+
+.tx-logger-toggle .tx-logger-title {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.tx-logger-toggle .portfolio-destination {
+    margin: 0 0 0 auto;
+}
+
 @media (hover: none) {
     .tx-action-btn,
     .remove-btn {
