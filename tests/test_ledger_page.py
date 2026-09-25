@@ -249,6 +249,14 @@ def test_tx_logger_ships_collapsed(client):
         "the logger wrapper must ship hidden"
     assert re.search(r'id="tx-logger-toggle"[^>]*aria-expanded="false"', html), \
         "the collapsed toggle must report aria-expanded=false"
+    # hidden on an EMPTY wrapper proves nothing: the form must sit INSIDE
+    # it, before the (untouched, always-visible) import panel. Without this
+    # the form could move back out and every test here stays green while
+    # the collapse promise silently breaks.
+    wrap = html.index('id="tx-logger-wrap"')
+    form = html.index('id="tx-form"')
+    assert wrap < form < html.index('id="import-panel"'), \
+        "#tx-form must live inside the collapsed wrapper"
 
 
 def test_tx_logger_js_wires_toggle():

@@ -128,11 +128,12 @@ Do NOT touch the `#import-panel` (it is toggled separately from the header).
 
 ### C. `static/style.css`
 
-1. Extend the Closed-sales toggle selectors to also match `.tx-logger-toggle`:
-   - `.closed-sales-toggle, .tx-logger-toggle { cursor: pointer; }`
-   - `.closed-sales-toggle .caret, .tx-logger-toggle .caret { … }`
-   - `.closed-sales-toggle:hover, .tx-logger-toggle:hover { … }`
-   - `.closed-sales-toggle.open .caret, .tx-logger-toggle.open .caret { … }`
+1. Add a parallel `.tx-logger-toggle` block with the same four rules as
+   Closed sales (`.tx-logger-toggle { cursor: pointer }`,
+   `… .caret`, `…:hover`, `… .open .caret`). They are deliberately
+   DUPLICATED, not merged into the `.closed-sales-toggle` selectors: the
+   standalone selector shape is string-locked by
+   `tests/test_closed_sales_collapse.py`, so grouping would break it.
 2. Add:
    ```css
    .tx-logger-toggle {
