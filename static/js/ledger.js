@@ -49,6 +49,34 @@ const ledgerBody = document.querySelector("#ledger-body");
 const ledgerHead = document.querySelector(".ledger-table thead");
 const txDateInput = txForm.elements.date;
 
+// The collapsible logger. The collapsed state ships in the HTML (`hidden`
+// on the wrapper), so no boot-time JS is needed to start closed; this code
+// only ever REVERSES the shipped state. setTxLoggerOpen is the ONE place
+// the wrapper, the .open caret class, and aria-expanded change together —
+// keeping the screen-reader state from drifting from the visible one.
+const txLoggerToggle = document.querySelector("#tx-logger-toggle");
+const txLoggerWrap = document.querySelector("#tx-logger-wrap");
+
+function setTxLoggerOpen(open) {
+    txLoggerWrap.hidden = !open;
+    txLoggerToggle.classList.toggle("open", open);
+    txLoggerToggle.setAttribute("aria-expanded", String(open));
+}
+
+function toggleTxLogger() {
+    setTxLoggerOpen(txLoggerWrap.hidden);
+}
+
+txLoggerToggle.addEventListener("click", toggleTxLogger);
+// A role="button" DIV responds to no keys natively — Enter and Space are
+// wired by hand, the Closed-sales/sortable-<th> kit's exact pattern
+// (preventDefault stops Space from scrolling the page).
+txLoggerToggle.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleTxLogger();
+});
+
 // Ticker autocomplete — the SAME /api/search suggestion dropdown the
 // navbar uses, via the shared setupTickerSuggestions factory from
 // common.js (loaded before this file). Typing in the Ticker field shows
@@ -833,6 +861,9 @@ function enterEditMode(tx) {
         `${tx.transaction_date}. `;
     txEditingEl.hidden = false;
     txErrorEl.hidden = true;
+    // The logger may be collapsed from the last page load — open it before
+    // scrolling, or the prefilled form would stay hidden.
+    setTxLoggerOpen(true);
     // The clicked row may sit far below the form — bring the form to it.
     txForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -899,6 +930,8 @@ function prepareFullSale(ticker, txs) {
     autofillPrice = livePrice;
     priceEdited = false;
     txForm.elements.price.value = livePrice.toFixed(2);
+    // The logger may be collapsed — open it so the prepared sale is seen.
+    setTxLoggerOpen(true);
     // The group row can sit far below the form — bring the prepared form
     // to the user instead of leaving the fill off-screen.
     txForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1550,6 +1583,10 @@ const prefillTicker =
 if (prefillTicker) {
     txForm.elements.ticker.value = prefillTicker.trim().toUpperCase();
     prefillPriceForTicker();
+    // The #tx-form anchor only scrolls to a VISIBLE form, and the logger
+    // ships collapsed — open it first so the deep link lands the user
+    // right in the prefilled field.
+    setTxLoggerOpen(true);
     txForm.elements.ticker.focus();
 }
 
