@@ -295,6 +295,23 @@ Already has a rework trigger in `project-brief.md`. A dict with 30s TTL keyed by
 
 ---
 
+### 25. Coin-Stack Brand Mark
+Replace the inconsistent web logo set (a green sparkline navbar mark and a
+blue/green Google-Finance-style bar-chart favicon) with one "coin stack with
+growth arrow" mark drawn in the accent palette: ink-navy in light mode,
+banknote gold in dark mode. Apply the mark to the navbar, the favicon, and
+the master asset. Back up the existing logo first. The web mark takes its
+color from `--accent`, which also frees green/red to mean market up/down
+only. Android launcher icons are intentionally NOT changed in this item;
+they are deferred to a later Android-only change.
+
+**Effort:** 0.5 day
+**Files:** `assets/logo/` (mark, icon, lockup, dated backup), `static/favicon.png`, `templates/base.html`, `static/style.css`, `tests/test_brand_assets.py`
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
 ## Dependency Graph
 
 ```
@@ -328,7 +345,8 @@ Tier 2.5:
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
-  12. Stats Caching ───────────────────┴── can be done in any order
+  12. Stats Caching ───────────────────┤── can be done in any order
+  25. Coin-Stack Brand Mark ────────────┘
 ```
 
 ---
@@ -358,6 +376,7 @@ For maximum compounding value:
 24. **Parallel Market Tab Preload** → starts all market tabs together and reuses recent results on tab changes
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
+25. **Coin-Stack Brand Mark** → one consistent brand across web and Android
 
 Back burner (user request): #2 CSV Export and #16 Android Biometric/PIN Lock.
 

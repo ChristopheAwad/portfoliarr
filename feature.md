@@ -1,173 +1,293 @@
-# Collapsible transaction logger (collapsed by default)
+# Coin-Stack Brand Mark (roadmap #25)
 
 ## Status and scope
 
-Approved and implemented 2026-09-25. Tests written first and confirmed red
-(4 failed in `tests/test_ledger_page.py`); after implementation the focused
-file is green (17 passed) and the full `python -m pytest` suite is green
-(975 passed). The user approved the browser GUI and requested the PR. Not a
-roadmap item (UI tweak). The ledger page's inline
-transaction logger (the `Logging in …` line, `#tx-form`, the edit notice, and
-the error line) becomes collapsible and ships COLLAPSED on every page load.
-This mirrors the existing Closed-sales collapse kit. It changes
-`templates/ledger.html`, `static/js/ledger.js`, `static/style.css`, and
-`tests/test_ledger_page.py` only. No route, API, or DB change.
+Plan approved by the user 2026-09-25. Not yet implemented. The user picked
+the "coin stack with growth arrow" mark (candidate D) from the demo page at
+`assets/logo/candidates/index.html`. The mark uses the accent palette:
+ink-navy `#1c3a5e` in light mode, banknote gold `#d0a959` in dark mode.
+
+This replaces the current inconsistent web logo set (green sparkline navbar
+mark plus a blue/green Google-Finance-style bar-chart favicon) with ONE mark
+on the web surfaces: navbar, favicon, and master asset. Android launcher
+icons are intentionally NOT changed (deferred to a later Android-only
+change).
 
 Decisions locked with the user:
-- Toggle is a dedicated sub-header row inside the Transactions card:
-  caret + `Log a transaction` on the left, `Logging in <portfolio>` on the
-  right.
-- Three flows auto-expand the logger: edit-row, Quick Sell, and the stock
-  page deep link `/ledger?ticker=AAPL#tx-form`.
+- Backup the current logo into a dated copy folder BEFORE any replacement.
+- Web only. Android launcher icons stay exactly as they are and are NOT
+  exported or changed.
+- Roadmap item #25 added and marked in progress.
+- No new Python dependency; tests read PNG size with the standard library.
+- The web mark takes its color from `--accent` (CSS token), so it flips
+  navy/gold with the theme and frees green/red to mean market up/down only.
+
+Note on the mark: the approved demo had the two coins overlapping, which at
+icon size looked like one blob (a "mushroom"). The final mark adds a small
+gap between the two coins. Same concept, clearer. This is the geometry
+specified below; do NOT use `assets/logo/candidates/D.svg` verbatim.
 
 ## Hard contracts that must not break
 
-- `id="tx-form"` stays. `tests/test_ledger_page.py:38` and
-  `tests/test_ui_revamp.py:106` lock it.
-- `id="portfolio-form-name"` stays. `static/js/common.js:49` writes into it.
-- `.tx-error` and `.tx-editing` class hooks stay. `static/js/ledger.js:43-45`
-  queries them.
-- The `#tx-form` anchor must still work; auto-expand on deep link handles it.
-- No page-level `setInterval`; polling stays in `setupAutoRefresh`.
+- `class="logo"` must stay in `templates/base.html`. Locked by
+  `tests/test_ledger_page.py:83` and `tests/test_stock.py:38-46`.
+- The wordmark text must stay `Portfoli<span class="logo-accent">arr</span>`.
+- The favicon must stay at `static/favicon.png` and be served as PNG. Locked
+  by `tests/test_ui_revamp.py:42` and `:60`.
+- The logo stays a link to `/` (`<a href="/" class="logo">`).
+- Android icons stay at
+  `android/app/src/main/res/mipmap-<density>/ic_launcher.png` with the same
+  filenames and counts; `AndroidManifest.xml` references `@mipmap/ic_launcher`
+  and must not change.
+- No change to routes, DB, or JavaScript.
 
-## Tests first (write these, confirm RED, then implement)
+## Step 0 — Backup (ALREADY DONE by the lead agent)
 
-Append to `tests/test_ledger_page.py`:
+The backup already exists at `assets/logo/backup-2026-09-25/` containing:
+`favicon.png`, `portfoliarr-icon.png`, `navbar-mark.svg`, and
+`mipmap-<density>/ic_launcher.png` for the five densities. Do not modify or
+delete this folder.
 
-1. `test_tx_logger_ships_collapsed`
-   - `client.get("/ledger")` returns 200.
-   - HTML contains `id="tx-logger-toggle"`.
-   - HTML contains `id="tx-logger-wrap"` and the wrap tag carries `hidden`.
-     Use `re.search(r'id="tx-logger-wrap"[^>]*\bhidden\b', html)`.
-   - The toggle carries `aria-expanded="false"`. Use
-     `re.search(r'id="tx-logger-toggle"[^>]*aria-expanded="false"', html)`.
-2. `test_tx_logger_js_wires_toggle`
-   - `LEDGER_JS.read_text()` contains `"tx-logger-toggle"` and
-     `"tx-logger-wrap"`.
-   - Contains `setTxLoggerOpen` (the single state setter).
-   - Contains `aria-expanded` (screen-reader state kept truthful).
-   - Contains a `click` and a `keydown` listener on the toggle id.
-3. `test_tx_logger_auto_expands_all_flows`
-   - `setTxLoggerOpen(true)` appears at least 3 times in `LEDGER_JS`.
-     That pins the deep-link, enterEditMode, and prepareFullSale flows.
-4. Add `"tx-logger-toggle"` and `"tx-logger-wrap"` to `LEDGER_MARKERS` (or a
-   separate assertion) so the hooks are locked on `/ledger` and absent from
-   `/` like the other ledger markers.
+## Step 1 — Tests first (write these, confirm RED, then implement)
 
-Run: `python -m pytest tests/test_ledger_page.py`. Record the failures.
+Create `tests/test_brand_assets.py` with EXACTLY this content:
 
-## Implementation after red tests
+```python
+# tests/test_brand_assets.py
+# =========================
+# Source/meta locks for the coin-stack brand mark (roadmap #25).
+#
+# pytest cannot see rendered CSS+SVG, so these tests lock the ASSET FILES on
+# disk and the two source strings the browser draws from: the navbar mark in
+# templates/base.html and the accent token in static/style.css. PNG sizes are
+# read with the standard library only (PNG IHDR bytes 16..24 = width, height)
+# so no new dependency is added.
 
-### A. `templates/ledger.html`
+import struct
+from pathlib import Path
 
-Replace the region from the `<p class="portfolio-destination">` line (118)
-through the `.tx-error` line (164) with:
+import pytest
 
-1. A toggle row ABOVE the form:
-   ```html
-   <div class="tx-logger-toggle" id="tx-logger-toggle" role="button"
-        tabindex="0" aria-expanded="false">
-       <span class="caret">
-           <svg class="icon" viewBox="0 0 24 24" width="16" height="16"
-                fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round"
-                aria-hidden="true">
-               <polyline points="9 18 15 12 9 6"></polyline>
-           </svg>
-       </span>
-       <span class="tx-logger-title">Log a transaction</span>
-       <span class="portfolio-destination">Logging in
-           <strong id="portfolio-form-name"></strong></span>
-   </div>
-   ```
-   The chevron SVG is identical to Closed sales (`ledger.html:308-313`).
-2. `<div id="tx-logger-wrap" hidden>` wrapping, in order:
-   - the existing `<form id="tx-form" class="tx-form">…</form>` byte-identical,
-   - the existing `<p class="tx-editing" hidden>…</p>`,
-   - the existing `<p class="tx-error" hidden></p>`,
-   - close `</div>` after `.tx-error`.
-3. Keep/extend the teaching comments: state that the wrapper ships `hidden`
-   so "collapsed on every page load" needs no boot JS, and that the three
-   flows below auto-expand.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-Do NOT touch the `#import-panel` (it is toggled separately from the header).
 
-### B. `static/js/ledger.js`
+def png_size(path):
+    """Return (width, height) from a PNG's IHDR chunk, stdlib only."""
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{path} is not a PNG"
+    return struct.unpack(">II", data[16:24])
 
-1. Near the top, after `const txDateInput = txForm.elements.date;` (~line 50),
-   add:
-   ```js
-   const txLoggerToggle = document.querySelector("#tx-logger-toggle");
-   const txLoggerWrap = document.querySelector("#tx-logger-wrap");
 
-   // The collapsed state ships in the HTML (`hidden` on the wrapper), so
-   // page load needs no boot JS. This setter is the ONE place the wrapper,
-   // the .open caret class, and aria-expanded change together.
-   function setTxLoggerOpen(open) {
-       txLoggerWrap.hidden = !open;
-       txLoggerToggle.classList.toggle("open", open);
-       txLoggerToggle.setAttribute("aria-expanded", String(open));
-   }
-   function toggleTxLogger() {
-       setTxLoggerOpen(txLoggerWrap.hidden);
-   }
-   txLoggerToggle.addEventListener("click", toggleTxLogger);
-   txLoggerToggle.addEventListener("keydown", (event) => {
-       if (event.key !== "Enter" && event.key !== " ") return;
-       event.preventDefault();
-       toggleTxLogger();
-   });
-   ```
-2. Deep-link prefill block (currently `ledger.js:1550-1554`): call
-   `setTxLoggerOpen(true);` before `txForm.elements.ticker.focus();`.
-3. `enterEditMode(tx)` (currently `ledger.js:811`): call
-   `setTxLoggerOpen(true);` before `txForm.scrollIntoView(...)`.
-4. `prepareFullSale(...)` (currently `ledger.js:883`): call
-   `setTxLoggerOpen(true);` before `txForm.scrollIntoView(...)`.
-   Use three explicit calls, not a shared wrapper, so each flow reads alone.
+# ── Exports: favicon, master, Android ────────────────────────────────
 
-### C. `static/style.css`
+def test_favicon_is_64_square():
+    assert png_size(PROJECT_ROOT / "static" / "favicon.png") == (64, 64)
 
-1. Add a parallel `.tx-logger-toggle` block with the same four rules as
-   Closed sales (`.tx-logger-toggle { cursor: pointer }`,
-   `… .caret`, `…:hover`, `… .open .caret`). They are deliberately
-   DUPLICATED, not merged into the `.closed-sales-toggle` selectors: the
-   standalone selector shape is string-locked by
-   `tests/test_closed_sales_collapse.py`, so grouping would break it.
-2. Add:
-   ```css
-   .tx-logger-toggle {
-       display: flex;
-       align-items: center;
-       gap: 8px;
-       padding: 6px 8px;
-   }
-   .tx-logger-toggle .tx-logger-title {
-       font-weight: 600;
-       font-size: 14px;
-   }
-   .tx-logger-toggle .portfolio-destination {
-       margin: 0 0 0 auto;
-   }
-   ```
-   The `margin-left: auto` pins the "Logging in" text to the right of the row.
-3. Do NOT touch the ≤600px card-mode block.
 
-## Verification
+def test_master_icon_is_square():
+    w, h = png_size(PROJECT_ROOT / "assets" / "logo" / "portfoliarr-icon.png")
+    assert w == h, "master icon must be square"
 
-1. `python -m pytest tests/test_ledger_page.py` — green.
-2. `python -m pytest` — full suite green.
-3. Browser GUI approval from the user:
-   - Reload `/ledger`: only the toggle row shows; table is first.
-   - Click toggle: form appears; caret rotates; click again: hides.
-   - Keyboard: Tab to the toggle, Enter and Space both toggle.
-   - From `/stock/AAPL`, press "Log Transaction": lands on `/ledger`, logger
-     is OPEN, ticker prefilled, ticker field focused.
-   - Expand a group, click a row's edit button: logger opens prefilled.
-   - Click a group's Quick Sell: logger opens prefilled SELL.
-4. Wait for GUI approval. Only then ask whether to commit/push.
+
+@pytest.mark.parametrize(
+    "density,size",
+    [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)],
+)
+def test_android_launcher_icon(density, size):
+    path = (
+        PROJECT_ROOT
+        / "android" / "app" / "src" / "main" / "res"
+        / f"mipmap-{density}" / "ic_launcher.png"
+    )
+    assert png_size(path) == (size, size)
+
+
+# ── Source: canonical mark + web wire-up ─────────────────────────────
+
+def test_mark_svg_exists_and_uses_currentcolor():
+    path = PROJECT_ROOT / "assets" / "logo" / "portfoliarr-mark.svg"
+    assert path.is_file(), "assets/logo/portfoliarr-mark.svg is missing"
+    text = path.read_text()
+    assert 'viewBox="0 0 24 24"' in text
+    assert "currentColor" in text
+
+
+def test_icon_svg_exists():
+    path = PROJECT_ROOT / "assets" / "logo" / "portfoliarr-icon.svg"
+    assert path.is_file(), "assets/logo/portfoliarr-icon.svg is missing"
+    text = path.read_text()
+    assert "#1c3a5e" in text  # navy tile
+    assert "#d0a959" in text  # gold mark
+
+
+def test_navbar_mark_uses_accent_token():
+    css = (PROJECT_ROOT / "static" / "style.css").read_text()
+    assert ".logo-mark { color: var(--accent);" in css
+    assert ".logo-accent { color: var(--accent);" in css
+
+
+def test_base_logo_mark_is_coin_stack():
+    html = (PROJECT_ROOT / "templates" / "base.html").read_text()
+    start = html.index('class="logo-mark"')
+    region = html[start:html.index("</svg>", start)]
+    assert "<ellipse" in region, "mark must contain the two coin ellipses"
+    assert "polyline" not in region, "old sparkline polyline must be gone"
+    assert 'class="logo-accent"' in html
+```
+
+Run `python -m pytest tests/test_brand_assets.py`. Record the red failures.
+Expected red: `test_mark_svg_exists_and_uses_currentcolor` (file missing),
+`test_icon_svg_exists` (file missing), `test_navbar_mark_uses_accent_token`
+(still `--green-pos`), `test_base_logo_mark_is_coin_stack` (still `polyline`).
+The size/guard tests (favicon, master, and the unchanged Android icons)
+should already be green from the old assets; they become guards for the new
+web exports. The Android parametrization is kept as a passive guard only —
+Android icons are not changed by this feature.
+
+## Step 2 — Create the two canonical SVGs
+
+### A. `assets/logo/portfoliarr-mark.svg` (new file)
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"/>
+  <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"/>
+</svg>
+```
+
+### B. `assets/logo/portfoliarr-icon.svg` (new file)
+
+The launcher/favicon source: navy rounded tile, gold mark. The `scale(30)`
+and `translate(152,185)` center the 24-unit mark on the 1024 tile (mark
+center is at 12,10.9 in its own coordinates).
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="220" fill="#1c3a5e"/>
+  <g transform="translate(152,185) scale(30)">
+    <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none" stroke="#d0a959" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="#d0a959"/>
+    <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="#d0a959"/>
+  </g>
+</svg>
+```
+
+### C. `assets/logo/portfoliarr-lockup.svg` (new file, mark + wordmark)
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 96" width="340" height="96">
+  <g transform="translate(8,18) scale(2.4)" color="#1c3a5e">
+    <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"/>
+    <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"/>
+  </g>
+  <text x="72" y="63" font-family="Fraunces, Georgia, serif" font-size="46" font-weight="600" fill="#171a20">Portfoli<tspan fill="#1c3a5e">arr</tspan></text>
+</svg>
+```
+
+## Step 3 — Rasterize the exports (ImageMagick + librsvg are installed)
+
+Run these from the project root, in order:
+
+```bash
+magick -background none assets/logo/portfoliarr-icon.svg -resize 64x64 static/favicon.png
+magick -background none assets/logo/portfoliarr-icon.svg -resize 1254x1254 assets/logo/portfoliarr-icon.png
+```
+
+Then confirm the output sizes:
+
+```bash
+magick identify static/favicon.png assets/logo/portfoliarr-icon.png
+```
+
+Expected: `64x64` and `1254x1254`. Android launcher icons are NOT exported.
+
+## Step 4 — Wire the mark into the web app
+
+### A. `templates/base.html` — replace the navbar mark
+
+Find this exact block (currently around lines 107-112):
+
+```html
+                <svg class="logo-mark" viewBox="0 0 24 24" width="24" height="24"
+                     fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <polyline points="3 17 9 11 13 15 21 7"></polyline>
+                </svg>
+```
+
+Replace it with:
+
+```html
+                <svg class="logo-mark" viewBox="0 0 24 24" width="24" height="24"
+                     aria-hidden="true">
+                    <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8"
+                          fill="none" stroke="currentColor" stroke-width="2.2"
+                          stroke-linecap="round" stroke-linejoin="round"></path>
+                    <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
+                    <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
+                </svg>
+```
+
+Update the comment above it (currently lines 96-105) so it describes a
+coin stack with a growth arrow instead of a sparkline. Keep the sentence
+that the SVG uses `stroke`/`fill="currentColor"` and takes its color from
+CSS (`.logo-mark`), and keep that the logo doubles as "home".
+
+### B. `static/style.css` — switch the mark to the accent token
+
+Find (currently lines 205-206):
+
+```css
+.logo-mark { color: var(--green-pos); flex: 0 0 auto; }
+.logo-accent { color: var(--green-pos); }
+```
+
+Replace with:
+
+```css
+.logo-mark { color: var(--accent); flex: 0 0 auto; }
+.logo-accent { color: var(--accent); }
+```
+
+Update the comment block above (currently lines 203-206) to say the mark and
+the accented tail use the ACCENT token, so they are ink-navy in light mode and
+banknote gold in dark mode, which keeps green/red for market up/down only.
+
+Do not change `.logo` sizing, the wordmark structure, or any other rule.
+
+## Step 5 — Full verification
+
+1. `python -m pytest tests/test_brand_assets.py` — green.
+2. `python -m pytest` — full suite green (existing logo locks included).
+3. Confirm no old colors remain in the changed blocks:
+   `grep -n "green-pos" static/style.css` must not list `.logo-mark` or
+   `.logo-accent`.
+4. Browser GUI approval from the user (this is a gate; do not commit before
+   it):
+   - Dashboard and ledger navbar: mark is navy beside the wordmark; reload in
+     dark mode: mark and wordmark tail are gold.
+   - Browser tab: the favicon shows the navy tile with the gold coin stack.
+   - `/stock/AAPL` navbar mark matches.
+5. Android is out of scope: no `android/**` file is changed, so the Build
+   Android APK workflow is not triggered.
+6. Do NOT commit or push. Wait for explicit user approval.
 
 ## Expected files
 
-`feature.md`, `tests/test_ledger_page.py`, `templates/ledger.html`,
-`static/js/ledger.js`, `static/style.css`.
+Changed:
+- `roadmap.md` (item #25, in progress — done by lead agent)
+- `feature.md` (this file)
+- `static/favicon.png`
+- `assets/logo/portfoliarr-icon.png`
+- `templates/base.html`
+- `static/style.css`
+
+New:
+- `assets/logo/portfoliarr-mark.svg`
+- `assets/logo/portfoliarr-icon.svg`
+- `assets/logo/portfoliarr-lockup.svg`
+- `assets/logo/backup-2026-09-25/` (backup, already created)
+- `tests/test_brand_assets.py`
