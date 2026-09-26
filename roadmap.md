@@ -308,7 +308,7 @@ they are deferred to a later Android-only change.
 **Effort:** 1 day
 **Files:** `assets/logo/` (mark, icon, lockup, dated backup), `static/favicon.png`, `templates/base.html`, `static/style.css`, `tests/test_brand_assets.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-25 (PR #86)
 
 ---
 
