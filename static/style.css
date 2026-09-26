@@ -167,9 +167,10 @@ h2, h3 {
 }
 
 /* Card titles: the browser's default h3 (~18.7px) sat OFF the app's scale
-   — nothing anywhere sized them, so "Transactions" / "Closed sales" /
-   watchlist card heads rendered a hair too large and off-scale between
-   the dashboard's 22px h2 and 15px preference heads. */
+   — nothing anywhere sized them, so the Allocation, Transactions, Closed
+   sales, and Stats card heads rendered a hair too large and off-scale
+   between the dashboard's 22px h2 and the 15px preference heads (the
+   preferences cards size their own h3s, so they are unaffected here). */
 .card h3 {
     font-size: 16px;
 }
@@ -3235,7 +3236,9 @@ input[type="date"]::-moz-placeholder {
 @media (max-width: 640px) {
     .portfolio-picker { max-width: 100%; }
     .portfolio-create label { flex-basis: 100%; }
+}
 
+@media (max-width: 640px) {
     /* ── Ledger/closed-sales card header, portrait phone ─────────────
        `.card-header` is a nowrap space-between flex row, and at 390px the
        three children (title + portfolio picker + actions group) cannot
@@ -3263,9 +3266,14 @@ input[type="date"]::-moz-placeholder {
     }
     .ledger-card .portfolio-picker select { flex: 1 1 auto; }
 
-    /* Eye + Import + FX back on ONE right-anchored line, no orphan. The
-       panel is full width, so the auto margin that pushed the FX toggle
-       right on desktop is redundant (and was the orphan's cause). */
+    /* Eye + Import + FX back on ONE line, no orphan. The panel is full
+       width, so the auto margin that pushed the FX toggle right on
+       desktop is redundant (and was the orphan's cause). The three
+       controls share one row down to ~370px viewports; below that the
+       pre-existing ≤600px wrap lets the FX label fall to a second line
+       (left-aligned, spread by space-between) — the honest overflow
+       outcome for extreme folds, and cheaper than nowrap, which would
+       clip it outright. */
     .ledger-card .card-header-actions {
         flex: 1 1 100%;
         justify-content: space-between;
