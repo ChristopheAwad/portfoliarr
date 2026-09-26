@@ -305,7 +305,7 @@ color from `--accent`, which also frees green/red to mean market up/down
 only. Android launcher icons are intentionally NOT changed in this item;
 they are deferred to a later Android-only change.
 
-**Effort:** 0.5 day
+**Effort:** 1 day
 **Files:** `assets/logo/` (mark, icon, lockup, dated backup), `static/favicon.png`, `templates/base.html`, `static/style.css`, `tests/test_brand_assets.py`
 **Depends on:** Nothing
 **Status:** in progress

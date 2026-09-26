@@ -16,13 +16,13 @@
          can't show the tags literally.) -->
     <title>{% block title %}Portfoliarr{% endblock %}</title>
 
-    <!-- The favicon is static/favicon.png, downscaled from the full-size
-         portfoliarr-icon.png in assets/logo/ (64x64, white corners made
-         transparent so it sits clean on dark and light tab bars alike).
-         PNG (not the earlier hand-written SVG) because Firefox and Safari
-         silently ignore SVG favicons — a PNG tab icon works in every
-         browser. The original 1254x1254 PNG stays in assets/ as the
-         master copy. -->
+    <!-- The favicon is static/favicon.png, rasterized from
+         assets/logo/portfoliarr-icon.svg (the 64x64 downscale; the rounded
+         tile's corners stay transparent so it sits clean on dark and light
+         tab bars alike). PNG (not the earlier hand-written SVG) because
+         Firefox and Safari silently ignore SVG favicons — a PNG tab icon
+         works in every browser. The 1254x1254 PNG in assets/logo/ is the
+         master copy, and portfoliarr-icon.svg is its source. -->
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">

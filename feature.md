@@ -2,7 +2,9 @@
 
 ## Status and scope
 
-Plan approved by the user 2026-09-25. Not yet implemented. The user picked
+Plan approved and implemented 2026-09-25 (PR #86, branch
+`brand/coin-stack-mark`). Web only. Focused tests `tests/test_brand_assets.py`
+11 passed; full suite 986 passed; GUI approved by the user. The user picked
 the "coin stack with growth arrow" mark (candidate D) from the demo page at
 `assets/logo/candidates/index.html`. The mark uses the accent palette:
 ink-navy `#1c3a5e` in light mode, banknote gold `#d0a959` in dark mode.
@@ -191,8 +193,8 @@ center is at 12,10.9 in its own coordinates).
 Run these from the project root, in order:
 
 ```bash
-magick -background none assets/logo/portfoliarr-icon.svg -resize 64x64 static/favicon.png
-magick -background none assets/logo/portfoliarr-icon.svg -resize 1254x1254 assets/logo/portfoliarr-icon.png
+magick -background none assets/logo/portfoliarr-icon.svg -depth 8 -resize 64x64 static/favicon.png
+magick -background none assets/logo/portfoliarr-icon.svg -depth 8 -resize 1254x1254 assets/logo/portfoliarr-icon.png
 ```
 
 Then confirm the output sizes:
@@ -290,4 +292,5 @@ New:
 - `assets/logo/portfoliarr-icon.svg`
 - `assets/logo/portfoliarr-lockup.svg`
 - `assets/logo/backup-2026-09-25/` (backup, already created)
+- `assets/logo/candidates/` (design review artifacts)
 - `tests/test_brand_assets.py`

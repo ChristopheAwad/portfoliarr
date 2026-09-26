@@ -31,5 +31,11 @@ AGENTS.md
 !portfoliarr-stock-detail-dark.png
 !portfoliarr-mobile-dark.png
 
+# Brand assets ARE tracked despite the *.png rule above (the favicon and
+# master icon are real product assets). New top-level brand PNGs in
+# assets/logo/ need no -f; deeper backup folders still do.
+!static/favicon.png
+!assets/logo/*.png
+
 # Test framework
 .pytest_cache/

@@ -34,6 +34,11 @@ AGENTS.md
 project-brief.md
 feature.md
 
+# Design-source assets — nothing at runtime reads assets/ (the served
+# favicon lives in static/), so the logo backup and design candidates
+# stay out of the production image
+assets/
+
 # Docker files themselves (not needed inside the image)
 Dockerfile
 docker-compose.yml
