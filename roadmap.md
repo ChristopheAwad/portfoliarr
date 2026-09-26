@@ -137,7 +137,8 @@ or build time so the two clients cannot silently drift.
 Replace the single implicit ledger with independent named portfolios. Assign old
 transactions to `Main`; select the active portfolio on the dashboard or ledger,
 manage names and order in Preferences, and scope transactions, summary, history,
-allocation, and closed sales to it. The watchlist and market pages remain shared.
+allocation, and closed sales to it. Market pages remain shared; the
+watchlist stayed shared until #26 made it per-person.
 Selection persists per browser and updates its other tabs immediately. Deleting
 a portfolio requires typed confirmation and cannot remove the last portfolio.
 Detailed tests-first implementation plan: `feature.md`.
@@ -188,6 +189,31 @@ request (no new endpoint). Currency-agnostic by construction (ratios only).
 `tests/test_compare.py`, `tests/test_compare_ui.py`
 **Depends on:** #13 (shipped) for the growth-of-$100 index
 **Status:** shipped 2026-09-20 (PR #60)
+
+---
+
+### 26. Multi-User Accounts (Login + Ownership)
+Make the server require a login and give each person their own data. A `users`
+table (username, Werkzeug password hash) is created on a first-run setup page
+that also claims the migration's existing portfolios and watchlist rows; every
+later person is created from the Preferences People card. A `before_request`
+auth gate signs Flask session cookies (secret generated once, stored in an
+`app_settings` table so restarts keep sessions) and turns pages 302 and `/api/*`
+401 when signed out. Ownership: portfolios gain a `user_id` (per-user "Main",
+per-user name uniqueness, per-user last-portfolio rule), transactions stay
+owned through their portfolio's FK, and the watchlist becomes per-user. The
+portfolio-resolution hook checks the session user before honoring any
+`portfolio_id`, so no request can ever read another person's ledger. People
+management (list/add/delete/reset rules: no self-delete, no last-user delete,
+typed-username confirm for the cascade) and change-own-password live in
+Preferences. Signed-out 401s redirect the browser to login through one common.js
+fetch hook; Android needs no changes (the WebView logs in and keeps cookies).
+No open registration, no roles, no rate limiting (home-LAN trust model).
+
+**Effort:** 5 days
+**Files:** `db.py`, `app.py`, `templates/base.html`, `templates/login.html`, `templates/setup.html`, `templates/preferences.html`, `static/js/common.js`, `static/js/preferences.js`, `static/style.css`, `conftest.py`, `project-brief.md`, `tests/test_users.py`, `tests/test_auth.py`, `tests/test_multiuser_scoping.py`, `tests/test_users_ui.py`, existing fixture/db/route tests
+**Depends on:** Nothing; preserves #23's portfolio contracts per user
+**Status:** in progress
 
 ---
 
@@ -332,7 +358,8 @@ Tier 2 (all independent of each other):
   7. Benchmark Line ────── superseded ─┤── can be done in any order
   8. Multi-Currency ───────────────────┤   (#17 replaces #7)
   17. Comparison Overlays ──────────────┤
-  23. Several Named Portfolios ─────────┘
+  23. Several Named Portfolios ─────────┤
+  26. Multi-User Accounts ──────────────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -372,8 +399,9 @@ For maximum compounding value:
 20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
 21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
 22. **In-App Version Display** → identifies the deployed web and Android release from one shared version source
-23. **Several Named Portfolios** → separates ledgers and portfolio calculations while retaining the shared watchlist and markets
+23. **Several Named Portfolios** → separates ledgers and portfolio calculations (#26 later scoped them per person, replacing the shared watchlist)
 24. **Parallel Market Tab Preload** → starts all market tabs together and reuses recent results on tab changes
+26. **Multi-User Accounts** → login + ownership, so portfolios and the watchlist belong to a person
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 25. **Coin-Stack Brand Mark** → one consistent brand across web and Android
@@ -386,8 +414,7 @@ Back burner (user request): #2 CSV Export and #16 Android Biometric/PIN Lock.
 
 These are Ghostfolio features that don't fit Portfoliarr's scope:
 
-- **Multi-user auth** — single-user by design
-- **Multi-account / multi-broker** — #23 adds separate portfolios, not broker-account hierarchies
+- **Broker-account hierarchies** — #23 separates ledgers by portfolio and #26 separates them by person; no broker-account layer on top of either
 - **AI assistant** — "no AI" in the project brief
 - **FIRE calculator** — out of scope
 - **Fear & Greed Index** — out of scope

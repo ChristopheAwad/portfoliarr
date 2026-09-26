@@ -22,8 +22,10 @@
 #                 can never leak its hacks into the next test.
 
 from types import SimpleNamespace
+import sqlite3
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 import db
 import market_data
@@ -57,9 +59,38 @@ def fresh_db(tmp_path, monkeypatch):
     return test_db_path
 
 
+def seed_user(username, password="pw-1234"):
+    """Create a user row the way the route layer would (hash first).
+    Returns the new user id. Duplicate usernames raise sqlite3.IntegrityError.
+    """
+    return db.create_user(username, generate_password_hash(password))
+
+
+def main_portfolio_id(user_id=1):
+    """A user's first ordered portfolio id. The `client` fixture always
+    seeds tester as user id 1, whose Main is portfolio id 1 (the first
+    user in a fresh test DB), so the default is safe there."""
+    return db.get_portfolios(user_id)[0]["id"]
+
+
+# The `client` fixture's identity: user id 1 / portfolio id 1. Documented
+# so single-user tests can hardcode ids; multi-user tests call seed_user
+# with OTHER names (reusing "tester" would trip the username conflict).
+CLIENT_USER_ID = 1
+TESTER_PASSWORD = "test-password-1234"
+
+
 @pytest.fixture
 def client(fresh_db):
-    """A Flask test client wired to the throwaway database.
+    """A Flask test client wired to the throwaway database, signed in as
+    the seeded tester user.
+
+    The session cookie is FORGED (session_transaction writes the signed
+    cookie directly) instead of running the /auth/login form every test:
+    a login costs one ~scrypt check per test and adds ~seconds to the
+    suite for no extra coverage — the login route itself has dedicated
+    tests in test_auth.py. Watching, scope-level and gate behavior stay
+    under test exactly as they would with a real login.
 
     The TEST CLIENT — the concept:
       Flask ships a fake browser. client.get("/api/watchlist") calls the
@@ -67,7 +98,11 @@ def client(fresh_db):
       parsing, status codes) but WITHOUT a network, a port, or a running
       server. Responses are real Response objects: .status_code, .get_json().
     """
-    return app.test_client()
+    test_client = app.test_client()
+    user_id = seed_user("tester", TESTER_PASSWORD)
+    with test_client.session_transaction() as session:
+        session["user_id"] = user_id
+    return test_client
 
 
 # ── The fake market ───────────────────────────────────────────────────
@@ -75,6 +110,33 @@ def client(fresh_db):
 # Shared by test_routes.py and test_stock.py (both exercise routes that
 # fetch market data), so it lives here in conftest — the agreed home for
 # anything more than one test file needs.
+
+def make_legacy_db(path):
+    """Build a database in the PRE-multi-user schema by hand: the exact
+    shape a committed Portfoliarr wrote before users/ownership existed.
+    db.init() must migrate it unchanged (facts preserved), and the setup
+    route's claim must hand the legacy portfolio + watchlist to the first
+    user. Returns nothing; the schema speaks for itself.
+    """
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE watchlist (symbol TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO watchlist VALUES ('AAPL')")
+        conn.execute("""CREATE TABLE portfolios (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL
+                CHECK (length(name) BETWEEN 1 AND 60 AND name = trim(name)),
+            sort_order INTEGER NOT NULL)""")
+        conn.execute("""CREATE UNIQUE INDEX portfolio_name_unique
+            ON portfolios(name COLLATE NOCASE)""")
+        conn.execute("INSERT INTO portfolios VALUES (1, 'Main', 0)")
+        conn.execute("""CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL,
+            transaction_date TEXT NOT NULL, price REAL NOT NULL,
+            qty REAL NOT NULL, currency TEXT NOT NULL, fx_rate REAL,
+            fee REAL, transaction_type TEXT NOT NULL,
+            portfolio_id INTEGER NOT NULL REFERENCES portfolios(id))""")
+        conn.execute("""INSERT INTO transactions VALUES
+            (42, 'AAPL', '2026-01-01', 12.5, 2, 'USD', 1.31, 3.5, 'BUY', 1)""")
+
 
 def make_quote(symbol, price, previous_close, currency="USD"):
     """Build a quote dict in exactly the shape market_data.get_quote

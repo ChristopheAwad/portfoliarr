@@ -189,7 +189,7 @@ def test_preview_reports_rows_and_derived_currency(client, fake_market):
     assert body["rows"][0]["currency"] == "USD"
     assert body["rows"][0]["fx_rate"] == 1.3725
     assert body["rows"][0]["error"] is None
-    assert db.get_transactions() == []   # preview stores NOTHING
+    assert db.get_transactions(1) == []   # preview stores NOTHING
 
 
 def test_preview_marks_unquotable_ticker_invalid(client, fake_market):
@@ -200,7 +200,7 @@ def test_preview_marks_unquotable_ticker_invalid(client, fake_market):
     assert res.status_code == 200        # the request worked; the ROW failed
     assert body["valid_count"] == 0
     assert body["rows"][0]["error"] == "unknown or unquotable ticker"
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_preview_counts_mixed_rows(client, fake_market):
@@ -250,7 +250,7 @@ def test_commit_inserts_rows_and_derives_currency(client, fake_market):
     assert body["imported"] == 1
     assert body["failed"] == []
 
-    (row,) = db.get_transactions()
+    (row,) = db.get_transactions(1)
     assert row["ticker"] == "CM"
     assert row["transaction_date"] == "2026-03-16"
     assert row["price"] == 132.55
@@ -270,7 +270,7 @@ def test_commit_cad_ticker_stores_fx_1_without_any_fx_call(client,
         "text": "CM.TO\t16 Mar 2026\t51.20\t100",
     })
     assert res.status_code == 200
-    assert db.get_transactions()[0]["fx_rate"] == 1.0
+    assert db.get_transactions(1)[0]["fx_rate"] == 1.0
     assert fake_market.fx_rates == {} and fake_market.fx_on == {}
 
 
@@ -287,7 +287,7 @@ def test_commit_best_effort_skips_dead_ticker(client, fake_market):
     assert len(body["failed"]) == 1       # ...CM didn't
     assert body["failed"][0]["error"] == "unknown or unquotable ticker"
     assert body["failed"][0]["ticker"] == "CM"
-    assert [tx["ticker"] for tx in db.get_transactions()] == ["AAPL"]
+    assert [tx["ticker"] for tx in db.get_transactions(1)] == ["AAPL"]
 
 
 def test_commit_reports_parse_failures_and_imports_the_rest(client, fake_market):
@@ -301,7 +301,7 @@ def test_commit_reports_parse_failures_and_imports_the_rest(client, fake_market)
     assert res.status_code == 200
     assert body["imported"] == 1
     assert "4 tab-separated columns" in body["failed"][0]["error"]
-    assert [tx["ticker"] for tx in db.get_transactions()] == ["CM"]
+    assert [tx["ticker"] for tx in db.get_transactions(1)] == ["CM"]
 
 
 def test_commit_200_even_when_nothing_qualifies(client, fake_market):
@@ -314,7 +314,7 @@ def test_commit_200_even_when_nothing_qualifies(client, fake_market):
     assert res.status_code == 200
     assert body["imported"] == 0
     assert len(body["failed"]) == 1
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_commit_database_failure_is_reported_per_row(
@@ -346,7 +346,7 @@ def test_commit_database_failure_is_reported_per_row(
     assert len(body["failed"]) == 1
     assert body["failed"][0]["ticker"] == "MSFT"
     assert body["failed"][0]["error"] == "database write failed"
-    assert {tx["ticker"] for tx in db.get_transactions()} == {"AAPL", "NVDA"}
+    assert {tx["ticker"] for tx in db.get_transactions(1)} == {"AAPL", "NVDA"}
 
 
 def test_commit_recommitting_duplicates_by_design(client, fake_market):
@@ -359,7 +359,7 @@ def test_commit_recommitting_duplicates_by_design(client, fake_market):
     second = client.post("/api/transactions/import/commit", json={"text": PASTE})
     assert first.get_json()["imported"] == 1
     assert second.get_json()["imported"] == 1
-    assert len(db.get_transactions()) == 2
+    assert len(db.get_transactions(1)) == 2
 
 
 def test_commit_rejects_bad_bodies_with_400(client):

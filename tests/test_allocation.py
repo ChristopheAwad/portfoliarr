@@ -57,26 +57,18 @@ def make_profile(sector=None, country=None, quote_type=None,
     }
 
 
-@pytest.fixture
-def fresh_db(tmp_path, monkeypatch):
-    """Point the db layer at a throwaway SQLite file for one test."""
-    test_db_path = tmp_path / "test_portfolio.db"
-    monkeypatch.setattr(db, "DB_PATH", test_db_path)
-    db.init()
-    return test_db_path
-
-
-@pytest.fixture
-def client(fresh_db):
-    """A Flask test client wired to the throwaway database."""
-    return app.test_client()
+# This file relies on the SHARED conftest fixtures: fresh_db (throwaway
+# database) and client (signed-in Flask test client). Own local copies
+# used to shadow them; multi-user auth made every route testied here
+# require a signed-in session, so the conftest versions (which forge it)
+# are the ones passed to every test below.
 
 
 def seed(ticker, price, qty, tx_type="BUY", currency="CAD", fx_rate=1.0,
          date="2026-08-01"):
     """Insert a ledger row through the db layer (never raw SQL)."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 # ── Market data: get_profile ────────────────────────────────────────────

@@ -213,7 +213,8 @@ def test_indices_partial_failure_is_one_aggregate_warning(
 
 def test_transaction_list_logs_previously_silent_quote_degradation(
         client, fake_market, caplog):
-    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0)
+    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0,
+                       portfolio_id=1)
     with caplog.at_level(logging.WARNING):
         response = client.get("/api/transactions")
 
@@ -227,7 +228,8 @@ def test_transaction_list_logs_previously_silent_quote_degradation(
 
 def test_portfolio_summary_uses_shared_aggregate_warning(
         client, fake_market, caplog):
-    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0)
+    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0,
+                       portfolio_id=1)
     with caplog.at_level(logging.WARNING):
         response = client.get("/api/portfolio/summary")
 
@@ -241,7 +243,8 @@ def test_portfolio_summary_uses_shared_aggregate_warning(
 
 def test_portfolio_history_uses_shared_aggregate_warning(
         client, fake_market, caplog):
-    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0)
+    db.add_transaction("DEAD", "2026-01-01", 10, 2, "CAD", "BUY", 1.0,
+                       portfolio_id=1)
     with caplog.at_level(logging.WARNING):
         response = client.get("/api/portfolio/history?period=1M")
 

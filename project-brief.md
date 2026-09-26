@@ -52,30 +52,61 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 ## Scope (MVP — Lean)
 
-- Several independent named portfolios, single implicit user (no auth)
+- Multi-user accounts: sign-in required, first-run setup page, each person
+  owns their own portfolios, transactions, and watchlist
+- Several independent named portfolios per person
 - Transaction ledger: buy and sell events with dates and prices
 - yfinance for all market data; anything Yahoo has is searchable
 - Price cache with short TTL to avoid hammering Yahoo
 - CAD display conversion for portfolio views (USD↔CAD only, via
   Yahoo's `USDCAD=X` pair), with a ledger toggle for native-USD display
 
-**Not in MVP:** dividends, cash-balance tracking, multi-user auth, "Most Active" trends section, currencies other than USD/CAD, PWA install-to-homescreen.
+**Not in MVP:** dividends, cash-balance tracking, "Most Active" trends section, currencies other than USD/CAD, PWA install-to-homescreen.
 
 ## Design Rules (permanent)
 
+- **Portfoliarr is multi-user; every row of user data belongs to exactly
+  one account.** The before_request gate resolves the session cookie into
+  `g.user` and answers unauthenticated requests with a 302 for pages and a
+  JSON 401 for `/api/*`; only the two auth pages and static assets are
+  exempt. A `users` table (username + Werkzeug hash) is created on a
+  first-run setup page that ALSO claims any owner-less rows a migration
+  left (an old install's portfolios/watchlist becomes the first account's;
+  nothing is visible before that claim). More people are created from the
+  Preferences People card — no open registration, no roles: any signed-in
+  person may create users or delete OTHER users (self-delete and the
+  last user are refused; delete cascades portfolios, transactions, and
+  watchlist rows in one transaction; the typed username confirms it).
+  Ownership is enforced where identity is resolved — the portfolio hook
+  verifies `portfolio_id` against the session user (unknown ID and
+  somebody else's ID are the same 404, never a fallback), the watchlist
+  routes and the stock page's watched stamp always touch the session
+  user's rows, and db functions take the owner explicitly with no silent
+  default. The session secret is generated once and STAYS in the
+  `app_settings` table (restarts keep signed-in sessions); cookies are
+  SameSite=Lax with a 30-day lifetime; mutating API routes only accept
+  JSON bodies, which together with Lax is the CSRF stance. Passwords are
+  hashed by werkzeug (scrypt), policy 4–128 characters; usernames are
+  1–30 characters, trimmed, case-insensitively unique. No rate limiting
+  yet (home-LAN trust model; rework trigger: first public exposure).
+  Android needs nothing: the WebView loads the login page and keeps the
+  cookie itself.
 - **Each portfolio owns its transaction ledger and all calculations built
   from it.** Existing rows migrate unchanged into `Main`; new portfolios
-  start empty. One shared watchlist, market overview, search, and stock
-  detail view remain global. The dashboard and ledger select the active
-  portfolio by stable ID, saved in this browser and synchronized across
-  its tabs. The browser sends `portfolio_id` on every portfolio-specific
-  API request; an explicit missing/invalid ID never falls back to another
-  ledger. Omitted IDs still select the first ordered portfolio for older
-  API callers. A rename or reorder does not change IDs or transaction
-  ownership. At least one portfolio must remain. Deletion checks the
-  typed name server-side and removes its trades atomically; the global
-  watchlist survives. Chart caches and async paints must be scoped to
-  the selected portfolio so late replies never show another ledger.
+  start empty. One watchlist PER PERSON (multi-user since #26); market
+  overview, search, and stock detail remain global. The dashboard and
+  ledger select the active portfolio by stable ID, saved in this browser
+  and synchronized across its tabs. The browser sends `portfolio_id` on
+  every portfolio-specific API request; an explicit missing/invalid ID
+  never falls back to another ledger — and a portfolio owned by ANOTHER
+  person reads exactly like a nonexistent one (404). Omitted IDs still
+  select the caller's own first ordered portfolio for older API callers.
+  A rename or reorder does not change IDs or transaction ownership. At
+  least one portfolio PER USER must remain. Deletion checks the typed
+  name server-side and removes its trades atomically; the owner's own
+  watchlist survives portfolio deletion (it is the person's, only
+  deletion of the PERSON takes it). Chart caches and async paints must be
+  scoped to the selected portfolio so late replies never show another ledger.
 - **The root `VERSION` file is the human-readable release source for both the
   Flask UI and Android `versionName`.** Preferences displays it in the About
   card. Android's independently increasing `VERSION_CODE` remains in

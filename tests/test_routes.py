@@ -60,7 +60,7 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
     row, rate unknown") so tests that don't care about conversion don't
     have to pretend a rate; conversion tests pass it explicitly."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ def test_add_to_watchlist_201_stores_normalized(client, fake_market):
     res = client.post("/api/watchlist", json={"symbol": "aapl"})
     assert res.status_code == 201
     assert res.get_json() == {"symbol": "AAPL"}
-    assert db.get_symbols() == ["AAPL"]
+    assert db.get_symbols(1) == ["AAPL"]
 
 
 def test_add_duplicate_returns_409(client, fake_market):
@@ -110,7 +110,7 @@ def test_add_unknown_symbol_returns_404(client, fake_market):
     crucially, nothing was stored."""
     res = client.post("/api/watchlist", json={"symbol": "TSLA"})
     assert res.status_code == 404
-    assert db.get_symbols() == []
+    assert db.get_symbols(1) == []
 
 
 @pytest.mark.parametrize(
@@ -132,8 +132,8 @@ def test_watchlist_quotes_skip_failed_symbols(client, fake_market):
     """The symbols/quotes split: the DB list is the source of truth for
     WHICH rows exist; a failed quote just doesn't appear in quotes (the
     frontend gap-fills that row with "—")."""
-    db.add_symbol("AAPL")
-    db.add_symbol("BAD")
+    db.add_symbol("AAPL", 1)
+    db.add_symbol("BAD", 1)
     fake_market.quotes["AAPL"] = make_quote("AAPL", 229.5, 225.0)
     fake_market.names["AAPL"] = "Apple Inc"
 
@@ -147,7 +147,7 @@ def test_watchlist_quotes_skip_failed_symbols(client, fake_market):
 def test_watchlist_name_failure_degrades_to_none(client, fake_market):
     """A missing company name must NOT sink the row — name becomes None
     and the frontend falls back to showing the bare symbol."""
-    db.add_symbol("MSFT")
+    db.add_symbol("MSFT", 1)
     fake_market.quotes["MSFT"] = make_quote("MSFT", 500.0, 495.0)
     # names dict deliberately empty → get_name raises KeyError → name None
 
@@ -159,7 +159,7 @@ def test_watchlist_delete_204_then_404(client, fake_market):
     """DELETE is idempotent-honest: first remove = 204 No Content (and
     the URL's lowercase 'aapl' is normalized to match storage), repeat =
     404 because it's already gone."""
-    db.add_symbol("AAPL")
+    db.add_symbol("AAPL", 1)
     res = client.delete("/api/watchlist/aapl")
     assert res.status_code == 204
     assert res.data == b""                      # 204 means "nothing to say"
@@ -518,7 +518,7 @@ def test_log_transaction_201_echoes_db_vocabulary(client, fake_market):
     assert body["fx_rate"] == 1.4123
     assert isinstance(body["id"], int)
     # ...and the fact actually landed in the ledger.
-    assert db.get_transactions()[0]["fx_rate"] == 1.4123
+    assert db.get_transactions(1)[0]["fx_rate"] == 1.4123
 
 
 def test_log_cad_ticker_stores_fx_1_without_any_fx_call(client, fake_market):
@@ -532,7 +532,7 @@ def test_log_cad_ticker_stores_fx_1_without_any_fx_call(client, fake_market):
         "price": 51.0, "qty": 10, "type": "BUY",
     })
     assert res.status_code == 201
-    assert db.get_transactions()[0]["fx_rate"] == 1.0
+    assert db.get_transactions(1)[0]["fx_rate"] == 1.0
     assert fake_market.fx_rates == {} and fake_market.fx_on == {}
 
 
@@ -549,7 +549,7 @@ def test_log_usd_ticker_falls_back_to_live_rate_when_history_fails(
         "price": 229.5, "qty": 10, "type": "BUY",
     })
     assert res.status_code == 201
-    assert db.get_transactions()[0]["fx_rate"] == 1.38
+    assert db.get_transactions(1)[0]["fx_rate"] == 1.38
 
 
 def test_log_usd_ticker_with_no_fx_at_all_stores_null(client, fake_market):
@@ -565,7 +565,7 @@ def test_log_usd_ticker_with_no_fx_at_all_stores_null(client, fake_market):
         "price": 229.5, "qty": 10, "type": "BUY",
     })
     assert res.status_code == 201
-    assert db.get_transactions()[0]["fx_rate"] is None
+    assert db.get_transactions(1)[0]["fx_rate"] is None
 
 
 def test_log_unknown_ticker_returns_404(client, fake_market):
@@ -576,7 +576,7 @@ def test_log_unknown_ticker_returns_404(client, fake_market):
         "price": 10.0, "qty": 1, "type": "BUY",
     })
     assert res.status_code == 404
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_log_inherits_shared_validator_rules(client, fake_market):
@@ -693,7 +693,7 @@ def test_delete_ticker_transactions_bulk_204_keeps_other_tickers(client):
     res = client.delete("/api/transactions/ticker/AAPL")
 
     assert res.status_code == 204
-    assert {row["ticker"] for row in db.get_transactions()} == {"MSFT"}
+    assert {row["ticker"] for row in db.get_transactions(1)} == {"MSFT"}
 
 
 def test_delete_ticker_transactions_normalizes_case(client):
@@ -702,7 +702,7 @@ def test_delete_ticker_transactions_normalizes_case(client):
     seed_transaction(ticker="AAPL")
     res = client.delete("/api/transactions/ticker/aapl")
     assert res.status_code == 204
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_delete_ticker_transactions_unknown_ticker_404(client):
@@ -726,7 +726,7 @@ def test_delete_ticker_transactions_percent_encoded_symbol(client):
     seed_transaction(ticker="^GSPC")
     res = client.delete("/api/transactions/ticker/%5EGSPC")
     assert res.status_code == 204
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_delete_ticker_leaves_single_tx_delete_working(client):
@@ -737,17 +737,17 @@ def test_delete_ticker_leaves_single_tx_delete_working(client):
     seed_transaction(ticker="AAPL")
     assert client.delete("/api/transactions/ticker/AAPL").status_code == 204
     assert client.delete(f"/api/transactions/{keep_id}").status_code == 204
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
 
 
 def test_delete_ticker_does_not_touch_watchlist(client):
     """Ledger and watchlist are INDEPENDENT lists: deleting every AAPL
     transaction must leave a watched AAPL on the watchlist."""
-    db.add_symbol("AAPL")
+    db.add_symbol("AAPL", 1)
     seed_transaction(ticker="AAPL")
     res = client.delete("/api/transactions/ticker/AAPL")
     assert res.status_code == 204
-    assert db.get_symbols() == ["AAPL"]
+    assert db.get_symbols(1) == ["AAPL"]
 
 
 # ── Portfolio history chart ───────────────────────────────────────────

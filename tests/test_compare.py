@@ -12,7 +12,7 @@ def seed_transaction(ticker="AAPL", date="2026-08-28", price=100.0,
                      qty=10, tx_type="BUY", currency="CAD", fx_rate=1.0):
     """Insert a ledger fact through the public database layer."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 def test_parse_compare_symbols_basic():

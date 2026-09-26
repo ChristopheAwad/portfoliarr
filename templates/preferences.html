@@ -9,7 +9,8 @@
 
             <div class="card preferences-card">
                 <h3>Portfolios</h3>
-                <p>Each portfolio has its own transactions. Your watchlist is shared.</p>
+                <p>Each portfolio has its own transactions. Your portfolios
+                    are visible only to you.</p>
                 <form id="portfolio-create" class="portfolio-create">
                     <label for="portfolio-new-name">New portfolio name</label>
                     <input id="portfolio-new-name" name="name" maxlength="60" required>
@@ -17,6 +18,47 @@
                 </form>
                 <p id="portfolio-error" class="action-error" role="alert" hidden></p>
                 <ul id="portfolio-list" class="portfolio-manage-list"></ul>
+            </div>
+
+            <!-- PEOPLE — user accounts for this server. The signed-in
+                 user's id rides in data-current-uid (the People card needs
+                 it to hide the delete control on its own row; the server
+                 re-checks everything anyway). preferences.js fills the
+                 list from /api/users and posts new people; deletion and
+                 password change are typed-confirmed modals. -->
+            <div class="card preferences-card" id="people-card"
+                 data-current-uid="{{ g.user.id }}">
+                <h3>People</h3>
+                <p>People share this server. Each person owns only their own portfolios and watchlist.</p>
+                <form id="people-create" class="portfolio-create">
+                    <label for="people-new-username">New person</label>
+                    <input id="people-new-username" name="username"
+                           maxlength="30" required autocomplete="username">
+                    <input id="people-new-password" name="password"
+                           type="password" minlength="4" maxlength="128"
+                           required placeholder="Password (4+ characters)"
+                           autocomplete="new-password">
+                    <button type="submit" class="btn-text">Add</button>
+                </form>
+                <p id="people-error" class="action-error" role="alert" hidden></p>
+                <ul id="people-list" class="portfolio-manage-list"></ul>
+                <form id="password-change" class="portfolio-create">
+                    <label for="change-current">Your current password</label>
+                    <input id="change-current" name="current_password"
+                           type="password" required
+                           autocomplete="current-password">
+                    <label for="change-new">New password</label>
+                    <input id="change-new" name="new_password" type="password"
+                           minlength="4" maxlength="128" required
+                           autocomplete="new-password">
+                    <label for="change-confirm">Confirm new password</label>
+                    <input id="change-confirm" name="confirm_password"
+                           type="password" minlength="4" maxlength="128"
+                           required autocomplete="new-password">
+                    <button type="submit" class="btn-text">Change password
+                    </button>
+                </form>
+                <p id="password-error" class="action-error" role="alert" hidden></p>
             </div>
 
             <!-- Theme setting. Light/Dark/System — the same three options

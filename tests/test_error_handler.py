@@ -33,13 +33,15 @@ def test_unhandled_exception_becomes_json_500(client, monkeypatch):
         app_module.app.config, "PROPAGATE_EXCEPTIONS", False
     )
 
-    def broken_get_symbols():
+    def broken_get_symbols(user_id):
         raise RuntimeError("simulated bug — deliberately not an HTTP error")
 
     monkeypatch.setattr(db, "get_symbols", broken_get_symbols)
 
-    # GET /api/watchlist calls db.get_symbols() OUTSIDE any try/except,
-    # so the RuntimeError escapes the route and reaches the handler.
+    # GET /api/watchlist calls db.get_symbols(user_id) OUTSIDE any
+    # try/except, so the RuntimeError escapes the route and reaches the
+    # handler. (The route now passes the session user's id first; the
+    # fake accepts it like the real function would.)
     response = client.get("/api/watchlist")
 
     assert response.status_code == 500

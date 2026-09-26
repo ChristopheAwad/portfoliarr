@@ -1,15 +1,25 @@
 """SQLite persistence layer.
 
-Stores two things: the watchlist symbol list, and the transaction ledger
-(every BUY/SELL the user records).
+Stores five things: the user accounts (multi-user auth), the per-boot
+app settings (one row: the session secret), each user's watchlist symbol
+list, each user's named portfolios, and the transaction ledger (every
+BUY/SELL the user records).
 
 The ledger's design rule: store IMMUTABLE FACTS ONLY. Any value that
 depends on the live market price (total value, gain $/%) would freeze
 stale the moment it was stored, so those are computed at display time
 from live quotes instead — never written here.
 
+OWNERSHIP is the schema's spine: every portfolio row carries the user who
+owns it (transactions ride along through their portfolio's foreign key),
+and every watchlist row is one user's. Every function that touches this
+data takes that owner EXPLICITLY — there is no silent default that could
+hand somebody else's ledger to a caller.
+
 This module knows nothing about Flask or yfinance — routes decide WHAT the
 data means; this file only knows HOW to store and retrieve rows.
+Password hashing (werkzeug) is route-layer policy too: this file stores
+the finished hash and verifies nothing.
 
 The database file lives in instance/ (gitignored, per Flask convention) so
 data survives dev-server restarts — unlike the in-memory quote cache, which
@@ -55,33 +65,129 @@ def init():
     """Create every table this app needs, if it doesn't already exist.
 
     CREATE TABLE IF NOT EXISTS is idempotent — safe to run on every startup.
+    Migrations follow the same rule: each asks PRAGMA table_info what the
+    table already has and ALTERs only the missing column (or rebuilds the
+    table once). Running init() on an already-migrated DB changes nothing.
+
+    The WHOLE thing is one explicit transaction (BEGIN IMMEDIATE at the
+    top): in modern Python's sqlite3 the DDL statements (CREATE/ALTER/
+    DROP) run in AUTOCOMMIT whenever no transaction is open — and this
+    function's DDL all come before its only DML — so without the explicit
+    BEGIN, a failed migration would leave HALF-committed schema behind
+    (the rebuild's shadow table surviving a failed copy, say). With it,
+    a failure anywhere rolls the complete schema back: either the whole
+    migration happened, or none of it did.
     """
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         # `with conn:` commits the change if the block succeeds and rolls
         # back on error — same idea as a transaction in any database.
 
-        # The watchlist table is deliberately tiny: the symbol IS the
-        # identity, and making it the PRIMARY KEY means the database itself
-        # rejects duplicates (a second line of defence behind the 409 check
-        # in the route).
+        # Key/value table for server-level settings. One value today: the
+        # session secret (generated once and persisted, so a container
+        # restart doesn't invalidate every signed-in session).
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS watchlist (
-                symbol TEXT PRIMARY KEY
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
             """
         )
+
+        # The user accounts. Multi-user auth is ownership, not roles: a
+        # username + a password hash (the ROUTE layer hashes passwords;
+        # this table stores the finished string). The username CHECK is
+        # defence in depth behind route validation, in the same spirit as
+        # the portfolios name CHECK below: 1-30 characters, no leading or
+        # trailing whitespace. UNIQUE + COLLATE NOCASE makes "amy" and
+        # "AMY" the same account (case-insensitive uniqueness, case-kept
+        # display).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY,
+                username      TEXT NOT NULL COLLATE NOCASE UNIQUE
+                    CHECK (length(username) BETWEEN 1 AND 30
+                           AND username = trim(username)),
+                password_hash TEXT NOT NULL
+            )
+            """
+        )
+
+        # The watchlist: one user's symbols to watch, not a global list.
+        # (user_id, symbol) is the identity, so two users can watch the
+        # same ticker without knowing or caring about each other.
+        watchlist_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(watchlist)").fetchall()
+        }
+        if not watchlist_columns:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS watchlist (
+                    user_id INTEGER REFERENCES users(id),
+                    symbol  TEXT NOT NULL,
+                    PRIMARY KEY (user_id, symbol)
+                )
+                """
+            )
+        elif "user_id" not in watchlist_columns:
+            # Migration: the single-user watchlist becomes one user's list.
+            # SQLite can't change a table's PRIMARY KEY in place, so
+            # rebuild. Legacy rows land with a NULL user — the setup
+            # route's claim_unowned_data() assigns them to the first
+            # account. NULLs in a composite PRIMARY KEY are distinct, so
+            # unclaimed rows can't collide either.
+            conn.execute("""CREATE TABLE watchlist_user (
+                user_id INTEGER REFERENCES users(id),
+                symbol  TEXT NOT NULL,
+                PRIMARY KEY (user_id, symbol))""")
+            conn.execute(
+                "INSERT INTO watchlist_user (user_id, symbol)"
+                " SELECT NULL, symbol FROM watchlist"
+            )
+            conn.execute("DROP TABLE watchlist")
+            conn.execute("ALTER TABLE watchlist_user RENAME TO watchlist")
+
+        # The portfolios table: WHICH user each portfolio belongs to is
+        # now part of the row. Public rules this preserves:
+        #   * per-user "Main" — two people can both have a portfolio
+        #     called Main, so the old GLOBAL name index must go;
+        #   * at least one portfolio per user — enforced at the db
+        #     function layer, not the schema (COUNT check);
+        #   * 1-60 characters, trimmed — the CHECK stays.
         conn.execute("""CREATE TABLE IF NOT EXISTS portfolios (
-            id INTEGER PRIMARY KEY, name TEXT NOT NULL
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL
                 CHECK (length(name) BETWEEN 1 AND 60 AND name = trim(name)),
-            sort_order INTEGER NOT NULL)""")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS portfolio_name_unique ON portfolios(name COLLATE NOCASE)")
-        if not conn.execute("SELECT 1 FROM portfolios LIMIT 1").fetchone():
-            conn.execute("INSERT INTO portfolios (name, sort_order) VALUES ('Main', 0)")
+            sort_order INTEGER NOT NULL,
+            user_id INTEGER REFERENCES users(id))""")
+        portfolio_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(portfolios)").fetchall()
+        }
+        if "user_id" not in portfolio_columns:
+            # Adding a NULLable FK column is legal in SQLite (only NOT NULL
+            # FK additions are not). Legacy rows stay user-owned... by
+            # nobody — user_id NULL — until the setup route claims them,
+            # and every read below filters WHERE user_id = ?, so nobody
+            # sees unclaimed data through the app.
+            conn.execute(
+                "ALTER TABLE portfolios ADD COLUMN user_id INTEGER"
+                " REFERENCES users(id)"
+            )
+        conn.execute("DROP INDEX IF EXISTS portfolio_name_unique")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS portfolio_name_unique"
+            " ON portfolios(user_id, name COLLATE NOCASE)"
+        )
 
         # The transaction ledger. Stores IMMUTABLE FACTS ONLY — nothing that
         # depends on a live market price (such values would freeze stale the
-        # moment they were stored). Each column's type choice:
+        # moment they were stored). Ownership is TRANSITIVE: the row belongs
+        # to the user who owns its portfolio, so itself carries no user_id
+        # column. Each column's type choice:
         #
         #   id               SQLite convention: INTEGER PRIMARY KEY is an
         #                    alias for the hidden rowid, so it auto-numbers
@@ -154,7 +260,18 @@ def init():
                 fx_rate REAL, transaction_type TEXT NOT NULL
                     CHECK (transaction_type IN ('BUY', 'SELL')),
                 portfolio_id INTEGER NOT NULL REFERENCES portfolios(id))""")
-            main_id = conn.execute("SELECT id FROM portfolios WHERE name = 'Main'").fetchone()[0]
+            main_row = conn.execute(
+                "SELECT id FROM portfolios WHERE name = 'Main'").fetchone()
+            if main_row is None:
+                # A pre-#23 install had NO portfolios table: create the Main
+                # ledger this rebuild copies rows into. No user exists yet,
+                # so it starts unclaimed (user_id NULL) and the setup
+                # route's claim hands it to the first account.
+                main_id = conn.execute(
+                    "INSERT INTO portfolios (name, sort_order, user_id)"
+                    " VALUES ('Main', 0, NULL)").lastrowid
+            else:
+                main_id = main_row[0]
             conn.execute("""INSERT INTO transactions_scoped
                 (id, ticker, transaction_date, price, qty, fee, currency,
                  fx_rate, transaction_type, portfolio_id)
@@ -177,52 +294,242 @@ def init():
         )
 
 
-def get_portfolios():
+# ---------------------------------------------------------------------------
+# SERVER SETTINGS — one key/value row today: the session secret. Settings
+# live HERE (not Flask config) because they must survive container restarts
+# exactly like the ledger, and the route layer reads them at boot.
+# ---------------------------------------------------------------------------
+
+def get_setting(key):
+    """Return one setting's value, or None when it was never stored."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_setting(key, value):
+    """Insert or replace one setting. REPLACE also updates the rowid,
+    which is fine — settings have no meaningful order."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+# ---------------------------------------------------------------------------
+# USERS — the auth spine. Hashing is ROUTE policy (werkzeug lives there);
+# these functions store and look up the finished hash. get_user deliberately
+# includes password_hash (the login path needs it), while get_users() — the
+# People-list reply — omits it: hashes must never leave the server.
+# ---------------------------------------------------------------------------
+def get_users():
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(
-            "SELECT id, name, sort_order FROM portfolios ORDER BY sort_order, id")]
+            "SELECT id, username FROM users ORDER BY id")]
 
 
-def get_portfolio(portfolio_id):
+def get_user(user_id):
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT id, name, sort_order FROM portfolios WHERE id = ?",
-                           (portfolio_id,)).fetchone()
-        return dict(row) if row else None
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM users WHERE id = ?",
+            (user_id,)).fetchone()
+    return dict(row) if row else None
 
 
-def default_portfolio_id():
+def get_user_by_username(username):
+    """Exact-string username lookup — NOCASE comes from the column's
+    declared COLLATE, so the caller may pass any casing; what it may NOT
+    pass is an untrimmed name (that's route policy, and the CHECK agrees)."""
     with _connect() as conn:
-        return conn.execute("SELECT id FROM portfolios ORDER BY sort_order, id LIMIT 1").fetchone()[0]
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM users"
+            " WHERE username = ?", (username,)).fetchone()
+    return dict(row) if row else None
 
 
-def create_portfolio(name):
+def count_users():
+    with _connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+
+def create_user(username, password_hash, seed_main=True):
+    """Insert one account AND, by default, its first portfolio ('Main')
+    in one write.
+
+    Both statements run in one BEGIN IMMEDIATE block, so a username
+    collision rolls EVERYTHING back — an account can never exist without
+    its Main portfolio. Duplicate usernames raise IntegrityError (the
+    UNIQUE + NOCASE constraint catches case-insensitive repeats); the
+    route turns that into its 'taken' reply.
+
+    Setup calls this with seed_main=False: the legacy there has to be
+    CLAIMED first (an old install's 'Main' portfolio must be adopted, not
+    doubled), and claim_unowned_data is what seeds Main when there is
+    nothing legitimately to adopt.
+    """
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username, password_hash),
+            )
+        except sqlite3.IntegrityError:
+            raise
+        user_id = cursor.lastrowid
+        if seed_main:
+            conn.execute(
+                "INSERT INTO portfolios (name, sort_order, user_id)"
+                " VALUES ('Main', 0, ?)", (user_id,)
+            )
+        return user_id
+
+
+def set_password(user_id, password_hash):
+    """Store a NEW hash (verification of the old password already happened
+    in the route). False means no such user."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (password_hash, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_user(user_id, confirmation):
+    """Delete one account and EVERYTHING it owns, in one transaction:
+    its portfolios, those portfolios' transactions, and its watchlist
+    rows. Same outcome vocabulary as delete_portfolio:
+
+        "missing"   no such user id
+        "mismatch"  typed username != stored username (exact match)
+        "last"      refusing to delete the only account (it's the one
+                    thing keeping the server reachable at all)
+        "deleted"   done
+
+    Deleting the account you're signed in as is the ROUTE layer's rule
+    (it knows the session); this layer only refuses the LAST user.
+    """
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT username FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            return "missing"
+        if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1:
+            return "last"
+        if confirmation != row[0]:
+            return "mismatch"
+        conn.execute("""DELETE FROM transactions WHERE portfolio_id IN
+            (SELECT id FROM portfolios WHERE user_id = ?)""", (user_id,))
+        conn.execute("DELETE FROM portfolios WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM watchlist WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return "deleted"
+
+
+def claim_unowned_data(user_id):
+    """Adopt every owner-less portfolio/watchlist row into one account.
+
+    Only the SETUP route calls this, exactly once, while the users table
+    is empty: legacy rows carry user_id NULL from the migration, and this
+    UPDATE is what turns 'nobody owns it' into 'the first account does'.
+    If the claim finds no portfolio at all (a fresh install), it seeds
+    the account's Main — create_user's usual guarantee.
+    """
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE portfolios SET user_id = ? WHERE user_id IS NULL",
+            (user_id,))
+        conn.execute(
+            "UPDATE watchlist SET user_id = ? WHERE user_id IS NULL",
+            (user_id,))
+        owned = conn.execute(
+            "SELECT 1 FROM portfolios WHERE user_id = ? LIMIT 1",
+            (user_id,)).fetchone()
+        if owned is None:
+            conn.execute(
+                "INSERT INTO portfolios (name, sort_order, user_id)"
+                " VALUES ('Main', 0, ?)", (user_id,))
+
+
+def get_portfolios(user_id):
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(row) for row in conn.execute(
+            "SELECT id, name, sort_order FROM portfolios"
+            " WHERE user_id = ? ORDER BY sort_order, id", (user_id,))]
+
+
+def get_portfolio(portfolio_id, user_id):
+    """One portfolio, but only when ITS OWNER signs: an id owned by
+    somebody else is indistinguishable from a made-up id (None)."""
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, name, sort_order, user_id FROM portfolios"
+            " WHERE id = ? AND user_id = ?",
+            (portfolio_id, user_id)).fetchone()
+    return dict(row) if row else None
+
+
+def default_portfolio_id(user_id):
+    """The user's first ordered portfolio — the fallback for API requests
+    that omit portfolio_id. Returns None when the user owns nothing (the
+    route answers 409 rather than guessing another person's ledger)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM portfolios WHERE user_id = ?"
+            " ORDER BY sort_order, id LIMIT 1", (user_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def create_portfolio(name, user_id):
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if any(row[0].casefold() == name.casefold() for row in
-               conn.execute("SELECT name FROM portfolios")):
+               conn.execute("SELECT name FROM portfolios WHERE user_id = ?",
+                            (user_id,))):
             raise sqlite3.IntegrityError("portfolio name already exists")
-        cursor = conn.execute("INSERT INTO portfolios (name, sort_order) VALUES (?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM portfolios))", (name,))
+        cursor = conn.execute(
+            "INSERT INTO portfolios (name, sort_order, user_id)"
+            " VALUES (?, (SELECT COALESCE(MAX(sort_order), -1) + 1"
+            " FROM portfolios WHERE user_id = ?), ?)",
+            (name, user_id, user_id))
         return cursor.lastrowid
 
 
-def rename_portfolio(portfolio_id, name):
+def rename_portfolio(portfolio_id, user_id, name):
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if any(row[0] != portfolio_id and row[1].casefold() == name.casefold()
-               for row in conn.execute("SELECT id, name FROM portfolios")):
+               for row in conn.execute(
+                   "SELECT id, name FROM portfolios"
+                   " WHERE id != ? AND user_id = ?",
+                   (portfolio_id, user_id))):
             raise sqlite3.IntegrityError("portfolio name already exists")
-        return conn.execute("UPDATE portfolios SET name = ? WHERE id = ?",
-                            (name, portfolio_id)).rowcount > 0
+        return conn.execute(
+            "UPDATE portfolios SET name = ? WHERE id = ? AND user_id = ?",
+            (name, portfolio_id, user_id)).rowcount > 0
 
 
-def move_portfolio(portfolio_id, direction):
+def move_portfolio(portfolio_id, user_id, direction):
     """Swap adjacent display positions in one write transaction."""
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         ids = [row[0] for row in conn.execute(
-            "SELECT id FROM portfolios ORDER BY sort_order, id")]
+            "SELECT id FROM portfolios WHERE user_id = ?"
+            " ORDER BY sort_order, id", (user_id,))]
         if portfolio_id not in ids:
             return None
         index = ids.index(portfolio_id)
@@ -230,33 +537,38 @@ def move_portfolio(portfolio_id, direction):
         if not 0 <= neighbor < len(ids):
             return False
         ids[index], ids[neighbor] = ids[neighbor], ids[index]
-        conn.executemany("UPDATE portfolios SET sort_order = ? WHERE id = ?",
-                         [(order, pid) for order, pid in enumerate(ids)])
+        conn.executemany(
+            "UPDATE portfolios SET sort_order = ? WHERE id = ? AND user_id = ?",
+            [(order, pid, user_id) for order, pid in enumerate(ids)])
         return True
 
 
-def delete_portfolio(portfolio_id, confirmation):
+def delete_portfolio(portfolio_id, user_id, confirmation):
     """Return deleted, missing, last, or mismatch; never leave orphan trades."""
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT name FROM portfolios WHERE id = ?",
-                           (portfolio_id,)).fetchone()
+        row = conn.execute("SELECT name FROM portfolios WHERE id = ? AND user_id = ?",
+                           (portfolio_id, user_id)).fetchone()
         if row is None:
             return "missing"
-        if conn.execute("SELECT COUNT(*) FROM portfolios").fetchone()[0] == 1:
+        if conn.execute("SELECT COUNT(*) FROM portfolios WHERE user_id = ?",
+                        (user_id,)).fetchone()[0] == 1:
             return "last"
         if confirmation != row[0]:
             return "mismatch"
         conn.execute("DELETE FROM transactions WHERE portfolio_id = ?", (portfolio_id,))
-        conn.execute("DELETE FROM portfolios WHERE id = ?", (portfolio_id,))
-        ids = [r[0] for r in conn.execute("SELECT id FROM portfolios ORDER BY sort_order, id")]
-        conn.executemany("UPDATE portfolios SET sort_order = ? WHERE id = ?",
-                         [(order, pid) for order, pid in enumerate(ids)])
+        conn.execute("DELETE FROM portfolios WHERE id = ? AND user_id = ?",
+                     (portfolio_id, user_id))
+        ids = [r[0] for r in conn.execute("SELECT id FROM portfolios WHERE user_id = ? ORDER BY sort_order, id",
+                                          (user_id,))]
+        conn.executemany("UPDATE portfolios SET sort_order = ? WHERE id = ? AND user_id = ?",
+                         [(order, pid, user_id) for order, pid in enumerate(ids)])
         return "deleted"
 
 
-def get_symbols():
-    """Return the watchlist as a list of symbol strings, in insertion order.
+def get_symbols(user_id):
+    """Return the user's watchlist as a list of symbol strings, in
+    insertion order.
 
     Every SQLite table has a hidden `rowid` that counts up as rows are
     inserted, so ORDER BY rowid = "oldest watchlist entry first" — a stable,
@@ -264,28 +576,33 @@ def get_symbols():
     """
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT symbol FROM watchlist ORDER BY rowid"
+            "SELECT symbol FROM watchlist WHERE user_id = ? ORDER BY rowid",
+            (user_id,),
         ).fetchall()
     # fetchall() returns a list of one-value tuples: [("AAPL",), ("MSFT",)].
     # Unpack each tuple to get the plain string out.
     return [row[0] for row in rows]
 
 
-def add_symbol(symbol):
-    """Insert a symbol. Raises sqlite3.IntegrityError if it already exists
-    (PRIMARY KEY violation) — the route layer turns that into a 409."""
+def add_symbol(symbol, user_id):
+    """Insert a symbol into the user's watchlist. Raises
+    sqlite3.IntegrityError if it already exists (PRIMARY KEY violation;
+    the (user_id, symbol) pair is the identity, so two users may watch
+    the same ticker) — the route layer turns that into a 409."""
     with _connect() as conn:
         # The ? placeholder passes the value SEPARATELY from the SQL text,
         # so the database engine treats it as data only. Building SQL by
         # string formatting would let a crafted symbol execute extra SQL —
         # the classic "SQL injection" hole. Always parameterize.
         conn.execute(
-            "INSERT INTO watchlist (symbol) VALUES (?)", (symbol,)
+            "INSERT INTO watchlist (user_id, symbol) VALUES (?, ?)",
+            (user_id, symbol),
         )
 
 
-def is_watched(symbol):
-    """Membership check: is this exact symbol on the watchlist?
+def is_watched(symbol, user_id):
+    """Membership check FOR ONE USER: is this exact symbol on their
+    watchlist?
 
     Deliberately an EXACT match (no strip/upper here) — normalizing is the
     route layer's job (it does it for add/remove too), and a silent
@@ -296,20 +613,24 @@ def is_watched(symbol):
     """
     with _connect() as conn:
         row = conn.execute(
-            "SELECT 1 FROM watchlist WHERE symbol = ? LIMIT 1", (symbol,)
+            "SELECT 1 FROM watchlist WHERE symbol = ? AND user_id = ?"
+            " LIMIT 1", (symbol, user_id),
         ).fetchone()
     return row is not None
 
 
-def remove_symbol(symbol):
-    """Delete a symbol's row. Returns True if a row was actually removed,
-    False if the symbol wasn't in the watchlist (route turns that into 404).
+def remove_symbol(symbol, user_id):
+    """Delete the user's row for one symbol. Returns True if a row was
+    actually removed, False if it wasn't on THIS user's watchlist (route
+    turns that into 404 — the same symbol watched by someone else is a
+    different row that this statement never touches).
 
     cursor.rowcount reports how many rows the last statement touched.
     """
     with _connect() as conn:
         cursor = conn.execute(
-            "DELETE FROM watchlist WHERE symbol = ?", (symbol,)
+            "DELETE FROM watchlist WHERE symbol = ? AND user_id = ?",
+            (symbol, user_id),
         )
         return cursor.rowcount > 0
 
@@ -323,7 +644,7 @@ def remove_symbol(symbol):
 # ---------------------------------------------------------------------------
 
 def add_transaction(ticker, transaction_date, price, qty, currency,
-                    transaction_type, fx_rate, fee=None, portfolio_id=None):
+                    transaction_type, fx_rate, fee=None, *, portfolio_id):
     """Insert one BUY or SELL row. Returns the new row's auto-numbered id.
 
     Validation has already happened in the route layer (fields checked,
@@ -337,11 +658,13 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
     constraint raises IntegrityError here: defence in depth means BOTH
     layers would have to fail.
 
+    portfolio_id is REQUIRED and KEYWORD-ONLY: ownership is never
+    guessed. The route layer always has it (the portfolio-resolution
+    hook verified it against the signed-in user first).
+
     Same ? placeholder rule as add_symbol: values travel separately from
     SQL text, so even hostile input is inert data, never executable SQL.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -359,8 +682,9 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
         return cursor.lastrowid
 
 
-def get_transactions(portfolio_id=None):
-    """Return every transaction, newest first, as a list of plain dicts.
+def get_transactions(portfolio_id):
+    """Return every transaction of ONE portfolio, newest first, as a list
+    of plain dicts.
 
     Newest first because a ledger is read like a bank statement: the most
     recent event is what you check first. Two keys sort it — transaction_date
@@ -371,9 +695,11 @@ def get_transactions(portfolio_id=None):
     column names. dict(row) then turns each row into {"ticker": "AAPL", ...}
     — exactly the shape jsonify needs. Setting row_factory on the connection
     switches every fetch from that connection to Row objects.
+
+    portfolio_id is required (no fallback): the hook that verified
+    ownership always supplies it, and a silent default here could only
+    ever leak the wrong person's ledger.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -388,16 +714,16 @@ def get_transactions(portfolio_id=None):
     return [dict(row) for row in rows]
 
 
-def get_transaction(tx_id, portfolio_id=None):
-    """Return ONE transaction as a dict, or None if that id doesn't exist.
+def get_transaction(tx_id, portfolio_id):
+    """Return ONE transaction as a dict, or None if that id doesn't exist
+    IN THAT PORTFOLIO (an id owned by another portfolio — or another
+    user — reads exactly as 'not found').
 
     Routes use this for the 404-before-validation check: when a PUT/DELETE
     names an id, "no transaction with that id" is the most useful error —
     far better than validating fields for a row that was never there.
     Same SELECT shape as get_transactions, narrowed to one id.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -413,7 +739,7 @@ def get_transaction(tx_id, portfolio_id=None):
 
 
 def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
-                       fx_rate, fee=None, portfolio_id=None):
+                       fx_rate, fee=None, *, portfolio_id):
     """Correct the user-editable facts of one transaction.
 
     The SET list names SIX columns — date, price, qty, type, fx_rate, fee.
@@ -428,11 +754,9 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
 
     Validation has already happened in the route layer (same rules as
     logging a new transaction — they share one helper). Returns True if a
-    row was actually updated, False if the id doesn't exist (rowcount 0),
-    which the route turns into a 404.
+    row was actually updated, False if the id doesn't exist in this
+    portfolio (rowcount 0), which the route turns into a 404.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             """
@@ -447,17 +771,16 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
         return cursor.rowcount > 0
 
 
-def delete_transaction(tx_id, portfolio_id=None):
+def delete_transaction(tx_id, portfolio_id):
     """Remove one transaction permanently. Returns True if a row was
-    actually deleted, False if the id doesn't exist (route turns that
-    into a 404 — e.g. a second DELETE after the first one succeeded).
+    actually deleted, False if the id doesn't exist in this portfolio
+    (route turns that into a 404 — e.g. a second DELETE after the first
+    one succeeded).
 
     Deletion is IMMEDIATE and unrecoverable: this is the immutable-facts
     table's one destructive verb, which is exactly why the UI gates it
     behind a confirm() dialog.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             "DELETE FROM transactions WHERE id = ? AND portfolio_id = ?",
@@ -466,20 +789,18 @@ def delete_transaction(tx_id, portfolio_id=None):
         return cursor.rowcount > 0
 
 
-def delete_transactions_for_ticker(ticker, portfolio_id=None):
-    """Delete EVERY transaction of one ticker — the ledger's one BULK
-    verb, sitting next to delete_transaction's single-row verb. Returns
-    the number of rows actually deleted: 0 means no row carried this
-    ticker (the route turns that into a 404 — "no such group", which is
-    also what an empty ledger looks like).
+def delete_transactions_for_ticker(ticker, portfolio_id):
+    """Delete EVERY transaction of one ticker IN ONE PORTFOLIO — the
+    ledger's one BULK verb, sitting next to delete_transaction's
+    single-row verb. Returns the number of rows actually deleted: 0 means
+    no row carried this ticker (the route turns that into a 404 — "no
+    such group", which is also what an empty ledger looks like).
 
     The WHERE clause is an exact match on the canonical UPPERCASE ticker,
     on purpose: "AAPL" (NYSE, USD) and "AAPL.TO" (TSX, CAD) are different
     securities that must never wipe each other. Parameterized like every
     query here — the ticker travels as data, never as SQL text.
     """
-    if portfolio_id is None:
-        portfolio_id = default_portfolio_id()
     with _connect() as conn:
         cursor = conn.execute(
             "DELETE FROM transactions WHERE ticker = ? AND portfolio_id = ?",
