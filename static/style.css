@@ -166,6 +166,15 @@ h2, h3 {
     letter-spacing: -0.01em;
 }
 
+/* Card titles: the browser's default h3 (~18.7px) sat OFF the app's scale
+   — nothing anywhere sized them, so the Allocation, Transactions, Closed
+   sales, and Stats card heads rendered a hair too large and off-scale
+   between the dashboard's 22px h2 and the 15px preference heads (the
+   preferences cards size their own h3s, so they are unaffected here). */
+.card h3 {
+    font-size: 16px;
+}
+
 /* Header & Search Bar */
 .navbar {
     display: flex;
@@ -398,8 +407,11 @@ h2, h3 {
 }
 
 /* The logo is a link (it doubles as "home", see base.html) — strip the
-   browser's default anchor styling so it reads as the brand, not a link. */
-a.logo { text-decoration: none; }
+   browser's default anchor styling so it reads as the brand, not a link.
+   The color matters too: an anchor's own default link blue (#0000EE)
+   paints "Portfoli" if the rule stays decoration-only — the accent belongs
+   to the ".logo-accent" tail alone, the rest is body ink. */
+a.logo { text-decoration: none; color: var(--text-primary); }
 
 .search-container {
     position: absolute;
@@ -908,8 +920,11 @@ a.logo { text-decoration: none; }
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    /* 32px box, not 28: a thumb-sized target the icon can still float in
+       (the 16px glyph is unchanged — only the invisible hit box grows).
+       28x28 was under every touch guideline; iOS HIG alone asks 44. */
+    width: 32px;
+    height: 32px;
     padding: 0;
     border: none;
     border-radius: var(--radius-sm);
@@ -1575,7 +1590,9 @@ a.logo { text-decoration: none; }
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 4px 8px;
+    /* 6px vertical padding, not 4: lifts the button body to ~30px so a
+       finger lands on it (24px-tall buttons miss). Width unchanged. */
+    padding: 6px 8px;
     border-radius: var(--radius-sm);
     background: none;
     border: none;
@@ -3198,6 +3215,10 @@ input[type="date"]::-moz-placeholder {
     color: var(--text-primary); border: 1px solid var(--border-color); }
 .portfolio-picker select:focus-visible, .portfolio-manage-list button:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Boot state: the select ships disabled with two seconds of loading behind
+   it. The disabled control renders dimmer without webkit color rules — the
+   stock grey is easy to miss at tablet widths, so mute it a step. */
+.portfolio-picker select:disabled { opacity: .6; background: var(--bg-hover); color: var(--text-secondary); }
 .portfolio-destination { color: var(--text-secondary); font-size: .85rem; margin: .5rem 0; }
 .portfolio-create { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
 .portfolio-create input, .portfolio-manage-list input { max-width: 16rem; min-width: 0;
@@ -3215,4 +3236,47 @@ input[type="date"]::-moz-placeholder {
 @media (max-width: 640px) {
     .portfolio-picker { max-width: 100%; }
     .portfolio-create label { flex-basis: 100%; }
+}
+
+@media (max-width: 640px) {
+    /* ── Ledger/closed-sales card header, portrait phone ─────────────
+       `.card-header` is a nowrap space-between flex row, and at 390px the
+       three children (title + portfolio picker + actions group) cannot
+       share one 360px line: the title butted flush into "Portfolio", the
+       select crushed to 21px (flex-shrink beat its min(10rem,45vw)
+       width), the eye icon overlapped the select, and the FX toggle
+       wrapped orphaned onto an unaligned second line. Wrap the header
+       into three deliberate rows instead — title, picker, actions — the
+       same stacking the log form's fields already use below 600px. */
+    .ledger-card .card-header {
+        flex-wrap: wrap;
+        row-gap: 10px;
+    }
+
+    /* Title alone on row one (it grows, so the picker can't crowd it). */
+    .ledger-card .card-header h3 { flex: 1 1 auto; }
+
+    /* Portfolio gets its own full row: label LEFT, select RIGHT — the
+       preferences-page settings-row look. flex-basis 100% forces the
+       wrap; space-between spreads picker children across the row so the
+       select keeps its full min(10rem,45vw) width instead of shrinking. */
+    .ledger-card .portfolio-picker {
+        flex: 1 1 100%;
+        justify-content: space-between;
+    }
+    .ledger-card .portfolio-picker select { flex: 1 1 auto; }
+
+    /* Eye + Import + FX back on ONE line, no orphan. The panel is full
+       width, so the auto margin that pushed the FX toggle right on
+       desktop is redundant (and was the orphan's cause). The three
+       controls share one row down to ~370px viewports; below that the
+       pre-existing ≤600px wrap lets the FX label fall to a second line
+       (left-aligned, spread by space-between) — the honest overflow
+       outcome for extreme folds, and cheaper than nowrap, which would
+       clip it outright. */
+    .ledger-card .card-header-actions {
+        flex: 1 1 100%;
+        justify-content: space-between;
+    }
+    .ledger-card .fx-toggle { margin-left: 0; }
 }
