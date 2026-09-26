@@ -217,6 +217,28 @@ No open registration, no roles, no rate limiting (home-LAN trust model).
 
 ---
 
+### 27. Account Recovery + Owner-Controlled Open Sign-Up
+Close the two gaps #26 left on purpose. `python app.py reset-password
+<username>` sets a new password for any account from the server terminal
+(typed twice with hidden input, 4–128 chars, old password dies, so even the
+only user can always get back in). A signed-in toggle in Preferences →
+People ("Allow anyone on this network to sign up") stores `allow_signup`
+in the `app_settings` table so it survives restarts; when on, the login
+page shows a Create-an-account link and `/auth/signup` — a plain form page
+like setup — creates a person with their own Main portfolio and signs them
+in. Same validation ladder and uniform failure messages as setup/login;
+the toggle and forged POSTs are re-checked server-side. Still no email,
+no roles, no rate limiting: home-LAN trust, now owner-opt-in.
+
+**Effort:** 2 days
+**Files:** `app.py`, `templates/login.html`, `templates/signup.html`,
+`templates/preferences.html`, `static/js/preferences.js`,
+`project-brief.md`, `tests/test_auth.py`, `tests/test_users_ui.py`
+**Depends on:** #26 (shipped)
+**Status:** in progress
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout

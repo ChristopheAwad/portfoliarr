@@ -262,6 +262,7 @@
 
     async function loadPeople() {
         reportPeople("");
+        loadSignupSetting();
         const response = await request("/api/users", { method: "GET" },
             reportPeople);
         if (!response || !response.ok) return;
@@ -294,6 +295,36 @@
         el.disabled = disabled;
         return el;
     }
+
+    // The open sign-up switch: read once per card boot, flip on change.
+    // A failed toggle reports in the note line and reverts the checkbox
+    // so the picture never lies about the server's state.
+    function loadSignupSetting() {
+        request("/api/auth/signup-toggle", { method: "GET" },
+            reportPeople).then((response) => {
+            if (response && response.ok) {
+                response.json().then((payload) => {
+                    signupToggle.checked = payload.allow === true;
+                });
+            }
+        });
+    }
+
+    const signupToggle = document.getElementById("allow-signup");
+    signupToggle.addEventListener("change", async () => {
+        const on = signupToggle.checked;
+        const response = await request("/api/auth/signup-toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ allow: on }),
+        }, reportPeople);
+        if (response && response.ok) {
+            showToast(on ? "Open sign-up is on" : "Open sign-up is off",
+                "success");
+        } else {
+            signupToggle.checked = !on;
+        }
+    });
 
     form.addEventListener("submit", async (event) => {
         event.preventDefault();

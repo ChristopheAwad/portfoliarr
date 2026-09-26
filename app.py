@@ -1,3 +1,4 @@
+import getpass
 import logging
 import math
 import os
@@ -5,6 +6,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import sys
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
 import time
@@ -338,7 +340,8 @@ def start_request_timer():
 # Endpoint names (Flask derives them from the route functions) that a
 # signed-out request may still reach. `static` is exempt so the login
 # page can load its stylesheet, fonts, and favicon.
-AUTH_EXEMPT_ENDPOINTS = frozenset({"auth_login", "auth_setup", "static"})
+AUTH_EXEMPT_ENDPOINTS = frozenset(
+    {"auth_login", "auth_setup", "auth_signup", "static"})
 
 
 @app.before_request
@@ -555,7 +558,95 @@ def auth_login():
                 g.request_id, user["id"], username,
             )
             return redirect(_safe_next(request.args.get("next")))
-    return render_template("login.html", error=error), (400 if error else 200)
+    return render_template("login.html", error=error,
+                           signup_allowed=signup_allowed()), (
+        400 if error else 200)
+
+
+# ── Owner-controlled open sign-up ─────────────────────────────────────
+#
+# A home server has no open registration by default (#26): a signed-in
+# person adds people one at a time. This toggle makes ONLY that case
+# optional — the owner flips it on, and while it is on the login page
+# carries a Create-an-account link and the signup page accepts new
+# people. The setting lives in app_settings (SQLite), so it survives
+# restarts alongside the session secret.
+
+SIGNUP_KEY = "allow_signup"
+
+
+def signup_allowed():
+    """True only when a signed-in owner explicitly opted in. Anything but
+    the stored string "true" is off — absence, None, or a tampered value
+    all read as disabled."""
+    return db.get_setting(SIGNUP_KEY) == "true"
+
+
+@app.route("/auth/signup", methods=["GET", "POST"])
+def auth_signup():
+    """Self-serve account creation, reachable ONLY while BOTH hold: some
+    user already exists (setup mode wins otherwise) and the owner's
+    toggle is on. The page re-checks what the gate cannot know — the
+    exempt-list inclusion only lets signed-out requests REACH the
+    decision. Success creates the person WITH their Main portfolio
+    (db.create_user's default seed; there is no legacy data to claim)
+    and signs the new session in, exactly like setup does.
+    """
+    if db.count_users() == 0:
+        return redirect(url_for("auth_setup"))
+    if request.method == "GET" and g.user is not None:
+        return redirect(_safe_next(url_for("index")))
+    if not signup_allowed():
+        if request.method == "POST":
+            return jsonify({"error": "sign-up is disabled"}), 409
+        return redirect(url_for("auth_login"))
+
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
+        if not 1 <= len(username) <= USERNAME_MAX:
+            error = "Usernames are 1 to 30 characters."
+        elif not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
+            error = "Passwords are 4 to 128 characters."
+        elif password != confirm:
+            error = "Passwords do not match."
+        else:
+            try:
+                user_id = db.create_user(
+                    username, generate_password_hash(password))
+            except sqlite3.IntegrityError:
+                error = "That username is taken."
+            else:
+                _stamp_session(user_id)
+                app.logger.info(
+                    "event=user_created source=signup request_id=%s "
+                    "user_id=%d username=%r", g.request_id, user_id,
+                    username,
+                )
+                return redirect(_safe_next(url_for("index")))
+    return render_template("signup.html", error=error), (
+        400 if error else 200)
+
+
+@app.route("/api/auth/signup-toggle", methods=["GET", "POST"])
+def signup_toggle_api():
+    """Read/flip the open sign-up switch. Any signed-in user may (the
+    People card's trust level: the owner states the policy, everyone at
+    the server shares it). GET answers the current boolean; POST demands
+    a strict boolean "allow" and stores the get_setting string form.
+    Toggle events are logged so the audit trail keeps up."""
+    if request.method == "GET":
+        return jsonify({"allow": signup_allowed()})
+    body = request.get_json(silent=True)
+    if not (isinstance(body, dict) and isinstance(body.get("allow"), bool)):
+        return jsonify(
+            {"error": "body must carry a boolean 'allow'"}), 400
+    db.set_setting(SIGNUP_KEY, "true" if body["allow"] else "false")
+    app.logger.info("event=signup_toggled allow=%r user_id=%d",
+                    body["allow"], g.user["id"])
+    return "", 204
 
 
 @app.route("/auth/logout", methods=["POST"])
@@ -3854,12 +3945,76 @@ def stock_history(symbol):
     })
 
 
+# ---------------------------------------------------------------------------
+# CLI — one maintenance command for the person at the server's terminal.
+#
+#   python app.py reset-password <username>
+#
+# This is the ONLY "forgot password" recovery path: it runs where the
+# owner runs (the machine the dev server lives on), so no web-facing
+# reset, no email, no questions. It is deliberately usable even when the
+# person is signed out and is the ONLY user — the exact case the web
+# routes cannot help with.
+# ---------------------------------------------------------------------------
+
+def perform_password_reset(username, new_password):
+    """Set a NEW password for one account. Returns (ok, message).
+
+    Same rules the web forms enforce: trim the username, 4..128
+    character passwords, uniform wording. The old hash is simply
+    overwritten; there is nothing session-side to invalidate that the
+    next request would not re-resolve from the database anyway.
+    """
+    user = db.get_user_by_username((username or "").strip())
+    if user is None:
+        return False, "No account with that name on this server."
+    if not PASSWORD_MIN <= len(new_password or "") <= PASSWORD_MAX:
+        return False, "Passwords are 4 to 128 characters."
+    db.set_password(user["id"], generate_password_hash(new_password))
+    app.logger.info(
+        "event=password_reset user_id=%d username=%r",
+        user["id"], user["username"],
+    )
+    return True, f"Password updated for {user['username']}."
+
+
+def run_reset_password_command(username):
+    """Terminal entry for reset-password: typed-twice hidden input."""
+    first = getpass.getpass("New password: ")
+    confirm = getpass.getpass("Confirm password: ")
+    if first != confirm:
+        print("Passwords do not match.", file=sys.stderr)
+        return 1
+    ok, message = perform_password_reset(username, first)
+    print(message, file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
+
+
+def main(argv=None):
+    """The `python app.py` entry. argv=None means the REAL command line:
+    zero arguments boots the dev server, anything else is dispatch. A
+    LIST argument never boots the server — tests call main(["app.py",
+    ...]) to exercise the dispatch without Flask. Returns an int exit
+    status."""
+    real = argv is None
+    argv = list(argv if argv is not None else sys.argv)
+    if len(argv) <= 1:
+        if real:
+            app.run(debug=True, host="0.0.0.0")
+        return 0
+    return _dispatch(argv)
+
+
+def _dispatch(argv):
+    args = argv[1:]
+    if len(args) != 2 or args[0] != "reset-password":
+        print("usage: python app.py reset-password <username>",
+              file=sys.stderr)
+        return 1
+    return run_reset_password_command(args[1])
+
+
 # This guard only runs the block when app.py is executed directly, not
 # when it is imported by another module.
 if __name__ == "__main__":
-    # Start the built-in Flask development server, with debug mode enabled
-    # (auto-reloads on code changes and shows detailed error pages).
-    # host="0.0.0.0" means "listen on ALL network interfaces", so the server
-    # is reachable from other machines on the LAN via this machine's IP
-    # (e.g. http://<machine-ip>:5000), not just from this machine itself.
-    app.run(debug=True, host="0.0.0.0")
+    sys.exit(main())
