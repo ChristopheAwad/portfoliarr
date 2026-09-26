@@ -213,7 +213,7 @@ No open registration, no roles, no rate limiting (home-LAN trust model).
 **Effort:** 5 days
 **Files:** `db.py`, `app.py`, `templates/base.html`, `templates/login.html`, `templates/setup.html`, `templates/preferences.html`, `static/js/common.js`, `static/js/preferences.js`, `static/style.css`, `conftest.py`, `project-brief.md`, `tests/test_users.py`, `tests/test_auth.py`, `tests/test_multiuser_scoping.py`, `tests/test_users_ui.py`, existing fixture/db/route tests
 **Depends on:** Nothing; preserves #23's portfolio contracts per user
-**Status:** in progress
+**Status:** shipped 2026-09-26 (PR #88)
 
 ---
 
