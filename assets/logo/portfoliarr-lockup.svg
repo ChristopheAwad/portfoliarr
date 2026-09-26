@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 96" width="340" height="96">
+  <g transform="translate(8,18) scale(2.4)" color="#1c3a5e">
+    <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"/>
+    <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"/>
+  </g>
+  <text x="72" y="63" font-family="Fraunces, Georgia, serif" font-size="46" font-weight="600" fill="#171a20">Portfoli<tspan fill="#1c3a5e">arr</tspan></text>
+</svg>

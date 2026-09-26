@@ -1,0 +1,6 @@
+<svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+

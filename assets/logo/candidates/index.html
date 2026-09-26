@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portfoliarr logo options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Instrument+Sans:wght@400..700&display=swap">
+<style>
+  :root {
+    --paper: #f7f7f5; --ink: #171a20; --accent: #1c3a5e;
+    --dark-paper: #101318; --dark-ink: #e7e8ea; --gold: #d0a959;
+    --font: "Instrument Sans", system-ui, sans-serif;
+    --display: "Fraunces", Georgia, serif;
+  }
+  body { margin: 0; padding: 32px; font-family: var(--font); color: var(--ink); background: #fff; }
+  h1 { font-family: var(--display); font-weight: 600; font-size: 26px; margin: 0 0 4px; }
+  p.note { color: #5c6370; font-size: 14px; margin: 0 0 28px; }
+  .option { max-width: 900px; border: 1px solid #e5e4df; border-radius: 16px; overflow: hidden; margin-bottom: 22px; }
+  .opt-head { padding: 14px 20px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .letter { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .name { font-size: 15px; font-weight: 600; }
+  .note { font-size: 13px; color: #5c6370; }
+  .row { display: flex; align-items: center; gap: 40px; padding: 24px 22px; flex-wrap: wrap; background: var(--paper); }
+  .row.dark { background: var(--dark-paper); border-top: 1px solid #262b36; }
+  .lockup-wrap { min-width: 220px; }
+  .lockup { display: inline-flex; align-items: center; gap: 9px; font-family: var(--display); font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+  .row:not(.dark) .lockup { color: var(--ink); }
+  .row.dark .lockup { color: var(--dark-ink); }
+  .row:not(.dark) .tail { color: var(--accent); }
+  .row.dark .tail { color: var(--gold); }
+  .row:not(.dark) .mark { color: var(--accent); }
+  .row.dark .mark { color: var(--gold); }
+  .sizes { display: flex; align-items: flex-end; gap: 24px; }
+  .size-item { text-align: center; font-size: 11px; color: #5c6370; }
+  .row.dark .size-item { color: #9aa1ad; }
+  .size-item .box { display: flex; align-items: center; justify-content: center; margin-bottom: 6px; }
+  .mark.big { width: 34px; height: 34px; }
+  .mark.med { width: 24px; height: 24px; }
+  .mark.sml { width: 16px; height: 16px; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1px solid #e5e4df; border-radius: 8px 8px 0 0; padding: 6px 12px; font-size: 12px; }
+  .row.dark .tab { background: #181c24; border-color: #262b36; }
+</style>
+</head>
+<body>
+  <h1>Portfoliarr logo options</h1>
+  <p class="note">Each option: light screen (top) and dark screen (bottom). Left = beside the name. Right = 34px, 24px, 16px, and a fake browser tab. Pick a letter and tell me what to change.</p>
+  <section class="option">
+      <div class="opt-head"><span class="letter">Option A</span> <span class="name">Filled step-block</span><span class="note">Solid steps going up.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 20 V15 H8 V11 H13 V7 H18 V3 H21 V20 Z" fill="#1c3a5e"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option B</span> <span class="name">Outlined steps</span><span class="note">Thin outlined staircase.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option C</span> <span class="name">Outlined + ledger rules</span><span class="note">Staircase over faint ledger lines.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#1c3a5e" stroke-width="0.75" opacity="0.3">
+    <line x1="2" y1="17" x2="22" y2="17"/>
+    <line x1="2" y1="12.5" x2="22" y2="12.5"/>
+    <line x1="2" y1="8" x2="22" y2="8"/>
+  </g>
+  <path d="M3 19 H8 V15 H13 V11 H18 V7 H21" fill="none" stroke="#1c3a5e" stroke-width="2.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option D</span> <span class="name">Coin stack</span><span class="note">Stacked coins with a growth arrow.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 6.4 V2 M9.6 4.2 L12 1.8 L14.4 4.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="12" cy="11" rx="8.6" ry="3.2" fill="currentColor"/>
+  <ellipse cx="12" cy="17" rx="8.6" ry="3.2" fill="currentColor"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option E</span> <span class="name">Portfolio ring + arrow</span><span class="note">Allocation ring with an upward arrow.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M4.5 16.5 A8 8 0 0 1 19.5 16.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="12" y1="16.5" x2="16.4" y2="9.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="12" cy="16.5" r="1.9" fill="currentColor"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option F</span> <span class="name">Monogram P</span><span class="note">A bold P with a round bowl.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M7 4.5 A5 5 0 0 1 7 14.5" fill="none" stroke="currentColor" stroke-width="2.6"/>
+  <path d="M7 3.5 V20.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option G</span> <span class="name">Banknote chart</span><span class="note">A banknote frame holding rising bars.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.2" y="5" width="19.6" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  <g fill="currentColor">
+    <rect x="6.2" y="12.6" width="2.4" height="3.4" rx="1"/>
+    <rect x="10.8" y="10.2" width="2.4" height="5.8" rx="1"/>
+    <rect x="15.4" y="7.8" width="2.4" height="8.2" rx="1"/>
+  </g>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+<section class="option">
+      <div class="opt-head"><span class="letter">Option H</span> <span class="name">Ledger P</span><span class="note">A P built beside ledger rules.</span></div>
+      <div class="row light"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+      <div class="row dark"><div class="lockup-wrap"><span class="lockup"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+<span>Portfoli<span class="tail">arr</span></span></span></div><div class="sizes">
+        <div class="size-item"><div class="box"><svg class="mark big" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>34px</div>
+        <div class="size-item"><div class="box"><svg class="mark med" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>24px</div>
+        <div class="size-item"><div class="box"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</div>16px</div>
+        <div class="size-item"><div class="tab"><svg class="mark sml" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="currentColor" stroke-width="0.75" opacity="0.3">
+    <line x1="3" y1="19" x2="21" y2="19"/>
+    <line x1="3" y1="14.5" x2="21" y2="14.5"/>
+    <line x1="3" y1="10" x2="21" y2="10"/>
+  </g>
+  <path d="M7 20 V4 H12.5 A4 4 0 0 1 12.5 12 H7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+Portfoliarr</div>tab</div>
+      </div></div>
+    </section>
+</body>
+</html>
