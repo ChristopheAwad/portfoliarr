@@ -3,12 +3,17 @@
 import sqlite3
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 import db
 from conftest import make_quote
 
 
-def test_legacy_rows_migrate_once_with_facts_and_global_watchlist(tmp_path, monkeypatch):
+def test_legacy_rows_migrate_once_then_the_first_user_claims(tmp_path, monkeypatch):
+    """Pre-multi-user install: no users table at all. init() migrates the
+    schema WITHOUT inventing a user (nothing owns the migrated portfolio
+    or watchlist row yet); the setup route's claim hands both to the first
+    created account, and the facts are intact the whole way through."""
     path = tmp_path / "old.db"
     monkeypatch.setattr(db, "DB_PATH", path)
     with sqlite3.connect(path) as conn:
@@ -23,11 +28,19 @@ def test_legacy_rows_migrate_once_with_facts_and_global_watchlist(tmp_path, monk
             (42, 'AAPL', '2026-01-01', 12.5, 2, 'USD', 1.31, 3.5, 'BUY')""")
     db.init()
     db.init()
-    assert db.get_portfolios() == [{"id": 1, "name": "Main", "sort_order": 0}]
+    # Migration created the Main ledger for the legacy rows (id 1) but the
+    # rows are unowned until someone claims the server:
+    assert db.get_portfolios(1) == []
+    assert db.get_symbols(1) == []
     row = db.get_transaction(42, 1)
     assert (row["id"], row["portfolio_id"], row["fee"], row["fx_rate"]) == (
         42, 1, 3.5, 1.31)
-    assert db.get_symbols() == ["AAPL"]
+    uid = db.create_user("owner", generate_password_hash("pw-1234"),
+                         seed_main=False)
+    db.claim_unowned_data(uid)
+    assert db.get_portfolios(uid) == [
+        {"id": 1, "name": "Main", "sort_order": 0}]
+    assert db.get_symbols(uid) == ["AAPL"]
     with pytest.raises(sqlite3.IntegrityError):
         db.add_transaction("AAPL", "2026-01-02", 1, 1, "CAD", "BUY", 1,
                            portfolio_id=999)
@@ -46,10 +59,10 @@ def test_oldest_schema_migrates_missing_fee_and_fx(tmp_path, monkeypatch):
         conn.execute("INSERT INTO transactions VALUES (8, 'CM', '2026-01-02', 20, 1, 'CAD', 'BUY')")
     db.init()
     db.init()
-    assert db.get_transaction(7)["fee"] is None
-    assert db.get_transaction(7)["fx_rate"] is None
-    assert db.get_transaction(8)["fx_rate"] == 1.0
-    assert [row["id"] for row in db.get_transactions()] == [8, 7]
+    assert db.get_transaction(7, 1)["fee"] is None
+    assert db.get_transaction(7, 1)["fx_rate"] is None
+    assert db.get_transaction(8, 1)["fx_rate"] == 1.0
+    assert [row["id"] for row in db.get_transactions(1)] == [8, 7]
 
 
 def test_failed_rebuild_rolls_back_legacy_table(tmp_path, monkeypatch):
@@ -110,11 +123,11 @@ def test_same_ticker_is_isolated_in_summary_ledger_and_deletion(client, fake_mar
 
 def test_shared_watchlist_survives_portfolio_removal(client):
     other = client.post("/api/portfolios", json={"name": "Other"}).json["id"]
-    db.add_symbol("AAPL")
+    db.add_symbol("AAPL", 1)
     db.add_transaction("AAPL", "2026-01-01", 1, 1, "CAD", "BUY", 1,
                        portfolio_id=other)
     assert client.delete(f"/api/portfolios/{other}", json={"name": "Other"}).status_code == 204
-    assert db.get_symbols() == ["AAPL"]
+    assert db.get_symbols(1) == ["AAPL"]
     assert db.get_transactions(other) == []
 
 
@@ -160,7 +173,7 @@ def test_cross_portfolio_edit_and_import_destination(client, fake_market):
 @pytest.mark.parametrize("name", ["", "   ", 4, None, "x" * 61])
 def test_invalid_names_do_not_create_portfolios(client, name):
     assert client.post("/api/portfolios", json={"name": name}).status_code == 400
-    assert len(db.get_portfolios()) == 1
+    assert len(db.get_portfolios(1)) == 1
 
 
 def test_names_trim_and_duplicate_on_rename(client):
@@ -170,7 +183,7 @@ def test_names_trim_and_duplicate_on_rename(client):
                         json={"name": "  Retirement "}).json["name"] == "Retirement"
     assert client.patch(f"/api/portfolios/{first}",
                         json={"name": "retirement"}).status_code == 409
-    assert db.get_portfolio(first)["name"] == "Épargne"
+    assert db.get_portfolio(first, 1)["name"] == "Épargne"
     assert client.post("/api/portfolios", json={"name": "éPARGNE"}).status_code == 409
 
 

@@ -25,6 +25,14 @@ import sqlite3
 import pytest
 
 import db
+from conftest import seed_user
+
+
+@pytest.fixture(autouse=True)
+def owner(fresh_db):
+    """Every test in this file writes user-owned rows (user id 1
+    whose Main is portfolio id 1), so the owner exists first."""
+    return seed_user("owner")
 
 
 # ── init ──────────────────────────────────────────────────────────────
@@ -40,10 +48,10 @@ def test_init_is_idempotent(fresh_db):
 
 def test_watchlist_round_trip_preserves_insertion_order(fresh_db):
     """get_symbols() returns oldest-first — the UI's stable row order."""
-    db.add_symbol("MSFT")
-    db.add_symbol("AAPL")
-    db.add_symbol("BTC-USD")
-    assert db.get_symbols() == ["MSFT", "AAPL", "BTC-USD"]
+    db.add_symbol("MSFT", 1)
+    db.add_symbol("AAPL", 1)
+    db.add_symbol("BTC-USD", 1)
+    assert db.get_symbols(1) == ["MSFT", "AAPL", "BTC-USD"]
 
 
 def test_watchlist_duplicate_rejected_by_primary_key(fresh_db):
@@ -51,29 +59,29 @@ def test_watchlist_duplicate_rejected_by_primary_key(fresh_db):
     (sqlite3.IntegrityError) — the route translates that into a 409.
     Testing the raw raise proves the constraint exists at this layer,
     independent of any route code."""
-    db.add_symbol("AAPL")
+    db.add_symbol("AAPL", 1)
     with pytest.raises(sqlite3.IntegrityError):
-        db.add_symbol("AAPL")
+        db.add_symbol("AAPL", 1)
 
 
 def test_watchlist_remove_reports_whether_it_deleted(fresh_db):
     """remove_symbol returns True if a row was really removed, False if
     the symbol wasn't there — the route turns False into a 404."""
-    db.add_symbol("AAPL")
-    assert db.remove_symbol("AAPL") is True
-    assert db.remove_symbol("AAPL") is False   # already gone
-    assert db.get_symbols() == []
+    db.add_symbol("AAPL", 1)
+    assert db.remove_symbol("AAPL", 1) is True
+    assert db.remove_symbol("AAPL", 1) is False   # already gone
+    assert db.get_symbols(1) == []
 
 
 def test_is_watched_answers_membership(fresh_db):
     """is_watched is a pure membership question — the stock page uses it at
     render time to ship the watch button's initial state, so False on an
     empty DB, True after add, False again after remove."""
-    assert db.is_watched("AAPL") is False
-    db.add_symbol("AAPL")
-    assert db.is_watched("AAPL") is True
-    db.remove_symbol("AAPL")
-    assert db.is_watched("AAPL") is False
+    assert db.is_watched("AAPL", 1) is False
+    db.add_symbol("AAPL", 1)
+    assert db.is_watched("AAPL", 1) is True
+    db.remove_symbol("AAPL", 1)
+    assert db.is_watched("AAPL", 1) is False
 
 
 def test_is_watched_is_an_exact_match(fresh_db):
@@ -81,10 +89,10 @@ def test_is_watched_is_an_exact_match(fresh_db):
     calling db, so this layer deliberately does NOT — 'aapl' ≠ 'AAPL' here.
     Testing the raw behaviour proves no silent normalization is hiding in
     db.py that a sloppy caller could come to depend on."""
-    db.add_symbol("AAPL")
-    assert db.is_watched("AAPL") is True
-    assert db.is_watched("aapl") is False
-    assert db.is_watched("MSFT") is False
+    db.add_symbol("AAPL", 1)
+    assert db.is_watched("AAPL", 1) is True
+    assert db.is_watched("aapl", 1) is False
+    assert db.is_watched("MSFT", 1) is False
 
 
 # ── Transactions: write & read ────────────────────────────────────────
@@ -98,11 +106,11 @@ def test_transaction_round_trip(fresh_db):
     tx_id = db.add_transaction(
         ticker="AAPL", transaction_date="2026-08-31",
         price=229.5, qty=10, currency="USD", transaction_type="BUY",
-        fx_rate=1.3821,
+        fx_rate=1.3821, portfolio_id=1,
     )
     # lastrowid: SQLite hands back the auto-numbered id of THIS insert.
     assert isinstance(tx_id, int)
-    assert db.get_transaction(tx_id) == {
+    assert db.get_transaction(tx_id, 1) == {
         "id": tx_id,
         "ticker": "AAPL",
         "transaction_date": "2026-08-31",
@@ -120,17 +128,20 @@ def test_transactions_read_newest_first(fresh_db):
     """The ledger is read like a bank statement: newest event first.
     Sort key is (transaction_date DESC, id DESC) — same-day rows keep
     insertion order, reversed."""
-    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
-    db.add_transaction("MSFT", "2026-08-31", 200.0, 1, "USD", "BUY", 1.39)
-    db.add_transaction("TSLA", "2026-08-31", 300.0, 1, "USD", "BUY", 1.39)
-    tickers = [row["ticker"] for row in db.get_transactions()]
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40,
+                       portfolio_id=1)
+    db.add_transaction("MSFT", "2026-08-31", 200.0, 1, "USD", "BUY", 1.39,
+                       portfolio_id=1)
+    db.add_transaction("TSLA", "2026-08-31", 300.0, 1, "USD", "BUY", 1.39,
+                       portfolio_id=1)
+    tickers = [row["ticker"] for row in db.get_transactions(1)]
     assert tickers == ["TSLA", "MSFT", "AAPL"]
 
 
 def test_get_transaction_missing_id_returns_none(fresh_db):
     """Unknown id → None (not a crash) — routes rely on this for their
     404-before-validation check."""
-    assert db.get_transaction(999) is None
+    assert db.get_transaction(999, 1) is None
 
 
 # ── Migration: the fx_rate column on pre-feature databases ───────────
@@ -176,7 +187,7 @@ def test_init_migrates_legacy_ledger_and_backfills_cad(tmp_path, monkeypatch):
     db.init()  # the migration under test
     db.init()  # ...and it must survive a second run (idempotent)
 
-    by_ticker = {row["ticker"]: row for row in db.get_transactions()}
+    by_ticker = {row["ticker"]: row for row in db.get_transactions(1)}
     assert by_ticker["AAPL"]["fx_rate"] is None   # unknown → live fallback
     assert by_ticker["RY.TO"]["fx_rate"] == 1.0   # the true CAD "rate"
 
@@ -191,10 +202,10 @@ def test_update_changes_user_fields_and_the_date_derived_fx_rate(fresh_db):
     documented exception). Ticker (identity) and currency (the yfinance
     fact derived from IT) still can never move."""
     tx_id = db.add_transaction("AAPL", "2026-08-01", 100.0, 5, "USD", "BUY",
-                               1.40)
+                               1.40, portfolio_id=1)
     assert db.update_transaction(tx_id, "2026-08-02", 110.0, 7, "SELL",
-                                 1.39) is True
-    row = db.get_transaction(tx_id)
+                                 1.39, portfolio_id=1) is True
+    row = db.get_transaction(tx_id, 1)
     # The user-typed fields DID change...
     assert row["transaction_date"] == "2026-08-02"
     assert row["price"] == 110.0
@@ -210,7 +221,7 @@ def test_update_changes_user_fields_and_the_date_derived_fx_rate(fresh_db):
 def test_update_missing_id_returns_false(fresh_db):
     """rowcount 0 → False — the route turns that into a 404."""
     assert db.update_transaction(999, "2026-08-02", 1.0, 1, "BUY",
-                                 1.0) is False
+                                 1.0, portfolio_id=1) is False
 
 
 # ── Transactions: delete ──────────────────────────────────────────────
@@ -219,10 +230,10 @@ def test_delete_reports_whether_it_deleted(fresh_db):
     """True on the real delete, False on the repeat (double-click case:
     route turns the second one into a 404, and the UI refreshes anyway)."""
     tx_id = db.add_transaction("AAPL", "2026-08-31", 229.5, 10, "USD", "BUY",
-                               1.39)
-    assert db.delete_transaction(tx_id) is True
-    assert db.delete_transaction(tx_id) is False
-    assert db.get_transaction(tx_id) is None
+                               1.39, portfolio_id=1)
+    assert db.delete_transaction(tx_id, 1) is True
+    assert db.delete_transaction(tx_id, 1) is False
+    assert db.get_transaction(tx_id, 1) is None
 
 
 # ── Transactions: delete by ticker (the bulk verb) ────────────────────
@@ -231,32 +242,38 @@ def test_delete_transactions_for_ticker_removes_only_that_ticker(fresh_db):
     """The bulk verb: every row of ONE ticker goes, every other ticker's
     rows survive untouched. The return value is the number of rows
     actually deleted (the route's success/404 signal)."""
-    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
-    db.add_transaction("AAPL", "2026-08-02", 101.0, 2, "USD", "SELL", 1.39)
-    db.add_transaction("MSFT", "2026-08-03", 200.0, 3, "USD", "BUY", 1.38)
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40,
+                       portfolio_id=1)
+    db.add_transaction("AAPL", "2026-08-02", 101.0, 2, "USD", "SELL", 1.39,
+                       portfolio_id=1)
+    db.add_transaction("MSFT", "2026-08-03", 200.0, 3, "USD", "BUY", 1.38,
+                       portfolio_id=1)
 
-    assert db.delete_transactions_for_ticker("AAPL") == 2
-    assert [row["ticker"] for row in db.get_transactions()] == ["MSFT"]
+    assert db.delete_transactions_for_ticker("AAPL", 1) == 2
+    assert [row["ticker"] for row in db.get_transactions(1)] == ["MSFT"]
 
 
 def test_delete_transactions_for_ticker_returns_zero_for_unknown(fresh_db):
     """Nothing matched → rowcount 0 → the route serves 404 ("no such
     group"), never a silent success."""
-    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40,
+                       portfolio_id=1)
 
-    assert db.delete_transactions_for_ticker("NOPE") == 0
-    assert len(db.get_transactions()) == 1  # untouched
+    assert db.delete_transactions_for_ticker("NOPE", 1) == 0
+    assert len(db.get_transactions(1)) == 1  # untouched
 
 
 def test_delete_transactions_for_ticker_is_exact_match(fresh_db):
     """`AAPL` and `AAPL.TO` are DIFFERENT securities (NYSE vs TSX) —
     deleting one must never touch the other. SQL `=` is an exact match,
     not a prefix match; this pins that property."""
-    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40)
-    db.add_transaction("AAPL.TO", "2026-08-01", 50.0, 1, "CAD", "BUY", 1.0)
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40,
+                       portfolio_id=1)
+    db.add_transaction("AAPL.TO", "2026-08-01", 50.0, 1, "CAD", "BUY", 1.0,
+                       portfolio_id=1)
 
-    assert db.delete_transactions_for_ticker("AAPL") == 1
-    assert [row["ticker"] for row in db.get_transactions()] == ["AAPL.TO"]
+    assert db.delete_transactions_for_ticker("AAPL", 1) == 1
+    assert [row["ticker"] for row in db.get_transactions(1)] == ["AAPL.TO"]
 
 
 # ── Transactions: defence in depth ────────────────────────────────────
@@ -268,7 +285,7 @@ def test_check_constraint_rejects_bad_transaction_type(fresh_db):
     even though layer one (validate_tx_fields) is what we normally trust."""
     with pytest.raises(sqlite3.IntegrityError):
         db.add_transaction("AAPL", "2026-08-31", 100.0, 1, "USD", "HOLD",
-                           1.39)
+                           1.39, portfolio_id=1)
 
 
 # ── Fresh-checkout self-healing ───────────────────────────────────────
@@ -285,7 +302,9 @@ def test_init_creates_missing_instance_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", fresh_path)
     db.init()  # used to raise sqlite3.OperationalError
     assert fresh_path.exists()
-    # The schema is real and usable, not just a file on disk.
+    # The schema is real and usable, not just a file on disk: seed the
+    # owner the way any first run does, then write and read one row.
+    seed_user("owner")
     tx_id = db.add_transaction("AAPL", "2026-08-31", 229.5, 10, "USD",
-                               "BUY", 1.39)
-    assert db.get_transaction(tx_id) is not None
+                               "BUY", 1.39, portfolio_id=1)
+    assert db.get_transaction(tx_id, 1) is not None

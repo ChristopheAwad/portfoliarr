@@ -119,7 +119,8 @@
         </div>
         <!-- Right side of navbar: profile/preferences button. common.js
              wires the dropdown toggle; clicking "Preferences" navigates
-             to the dedicated preferences page. -->
+             to the dedicated preferences page. g.user is guaranteed by
+             the auth gate for every page that renders this template. -->
         <div class="nav-right">
             <button id="profile-btn" class="profile-btn" type="button"
                     title="Preferences" aria-label="Preferences"
@@ -133,9 +134,24 @@
                 </svg>
             </button>
             <div id="profile-dropdown" class="profile-dropdown" hidden>
+                <div class="profile-dropdown-user">
+                    <span class="sub-text">Signed in as</span>
+                    <strong id="nav-username">{{ g.user.username }}</strong>
+                </div>
                 <a href="{{ url_for('preferences_page') }}" class="profile-dropdown-link">
                     Preferences
                 </a>
+                <!-- Log out is a FORM (POST), not a link: no URL-fetch,
+                     prefetcher, or accelerator can log anyone out by
+                     "helpfully" following a GET /auth/logout. Works with
+                     JavaScript disabled; common.js only toggles this
+                     dropdown's visibility. -->
+                <form method="post" action="{{ url_for('auth_logout') }}">
+                    <button type="submit"
+                            class="profile-dropdown-link profile-logout">
+                        Log out
+                    </button>
+                </form>
             </div>
         </div>
         <div class="search-container">

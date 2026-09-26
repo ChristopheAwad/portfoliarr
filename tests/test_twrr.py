@@ -44,7 +44,7 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
                      qty=10, tx_type="BUY", currency="USD", fx_rate=None):
     """Insert a ledger row through the db layer (never raw SQL)."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 # ── The shape of the reply ────────────────────────────────────────────

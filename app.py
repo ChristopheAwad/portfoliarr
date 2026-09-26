@@ -3,11 +3,13 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
 import time
 import uuid
+from datetime import timedelta
 from logging.config import dictConfig
 
 # ThreadPoolExecutor runs one callable across MANY OS threads and
@@ -23,12 +25,19 @@ from concurrent.futures import ThreadPoolExecutor
 # incoming HTTP request's data — we need its JSON body for the add route),
 # and g (per-request scratch storage — the timing hook stashes its start
 # time there).
-from flask import Flask, g, has_request_context, jsonify, render_template, request
+from flask import Flask, g, has_request_context, jsonify, redirect, \
+    render_template, request, session, url_for
 
 # HTTPException is the base class of Flask/werkzeug's OWN errors (404,
 # 405...). The top-level error handler below must let these pass through
 # untouched — it exists to catch genuine bugs, not Flask's normal replies.
 from werkzeug.exceptions import HTTPException
+# Password hashing is AUTH policy, so it lives in the route layer — db.py
+# stores whatever hash string it is handed and verifies nothing.
+# generate_password_hash: scrypt by default in Werkzeug 3, salted and
+# self-describing ("scrypt:N:r:p:salt$hash"), so no extra dependency and
+# no crypto code here.
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # Import our data layers. This file is the "route layer": it decides WHICH
 # symbols the page needs and HOW answers map to HTTP; market_data.py handles
@@ -127,6 +136,32 @@ except Exception:
 app.logger.info(
     "event=application_started log_level=%s database=initialized", LOG_LEVEL
 )
+
+
+def _bootstrap_session_secret():
+    """Get-or-create the key that signs auth session cookies.
+
+    The key must live across restarts (the ledger volume's job: it is
+    stored in the app_settings table): if it regenerates on every boot,
+    every signed-in browser's cookie is rejected and everyone must log
+    in again after each PM/update. Generated exactly once with
+    secrets.token_hex(32) — 256 bits, no human-chosen weakness possible.
+    """
+    secret = db.get_setting("secret_key")
+    if secret is None:
+        secret = secrets.token_hex(32)
+        db.set_setting("secret_key", secret)
+    return secret
+
+
+app.secret_key = _bootstrap_session_secret()
+# SameSite=Lax + JSON-only bodies on the mutating API routes = the CSRF
+# stance for this home-LAN server (a cross-site form cannot send JSON, and
+# Lax cookies don't ride cross-site navigations). 30-day sessions: the
+# cookie outlives app restarts on the phone and needs a re-login about
+# monthly — a deliberate trade against fat-fingering credentials again.
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 # The dashboard's market overview is TABBED: one category on screen at a
 # time, so /api/indices fetches only that category. This is a product
@@ -282,23 +317,371 @@ def start_request_timer():
     g.request_started_at = time.perf_counter()
 
 
+# ---------------------------------------------------------------------------
+# AUTH — the one gate in front of everything, plus the login/logout/setup
+# routes and the People management API.
+#
+# The shape of the design: a signed session cookie identifies the user; a
+# before_request hook resolves it ONCE per request into g.user, and the
+# permission decision is binary — either the request belongs to a signed-in
+# user, or it is answered with a redirect (pages) / 401 JSON (API). There is
+# no per-route permission list to forget: ownership is enforced at exactly
+# two places, the resolve_portfolio_request hook (portfolio IDs, verified
+# against g.user below) and the watchlist/stock routes (always the session
+# user's own rows).
+#
+# Exempt endpoints...: the two auth pages themselves + static files. A
+# page render never leaks data; g.user is None for every signed-out
+# request and something only a real, existing user can name otherwise.
+# ---------------------------------------------------------------------------
+
+# Endpoint names (Flask derives them from the route functions) that a
+# signed-out request may still reach. `static` is exempt so the login
+# page can load its stylesheet, fonts, and favicon.
+AUTH_EXEMPT_ENDPOINTS = frozenset({"auth_login", "auth_setup", "static"})
+
+
+@app.before_request
+def require_authentication():
+    """Resolve the session's user once, before ANY data work.
+
+    Ordering contract: this hook MUST be registered before
+    resolve_portfolio_request (same file order), because that hook already
+    treats "a portfolio id owned by whom?" as a per-request question
+    g.user answers.
+
+    Three-way decision for a request without a valid user:
+      * setup mode (zero users exist — the very first boot of a fresh
+        server, or the first boot after upgrading): only the setup page
+        and static files are reachable; everything else is redirected
+        there (pages) or 401 (API).
+      * normal mode: only login/static are reachable; pages redirect with
+        ?next= so the browser ends up back where it was aiming; /api/*
+        answers JSON 401 (a fetch() redirect would hand HTML to the
+        browser's JSON parser).
+    A bad or stale cookie (logout elsewhere, deleted account) lands in the
+    same three-way branch: session.get() gives None or an id that
+    db.get_user cannot find — g.user, and the gate decides again.
+    """
+    user_id = session.get("user_id")
+    g.user = db.get_user(user_id) if user_id is not None else None
+    if g.user is not None:
+        return
+
+    endpoint = request.endpoint
+    setup_mode = db.count_users() == 0
+    if endpoint in AUTH_EXEMPT_ENDPOINTS:
+        if endpoint == "auth_setup" and not setup_mode:
+            # Setup exists only while empty: once an owner exists, the
+            # page must never claim more data.
+            return redirect(url_for("auth_login"))
+        return
+
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "authentication required"}), 401
+    return redirect(url_for("auth_login", next=request.path))
+
+
 @app.before_request
 def resolve_portfolio_request():
-    """Validate ownership before any portfolio route fetches prices or writes."""
+    """Validate ownership before any portfolio route fetches prices or writes.
+
+    The portfolio id is SELF-OFFERED by the browser (the query string),
+    so trusting it directly would let any signed-in user read any other
+    user's ledger. This hook re-resolves it through ownership instead:
+    `db.get_portfolio(id, g.user["id"])` answers None for a missing id
+    AND for somebody else's id — both are simply 404 "portfolio not
+    found", with no fallback and no information leak. Omitted ids resolve
+    inside the CALLER's own portfolios (the compatibility rule from #23).
+    """
     if not (request.path.startswith("/api/portfolio/") or
             request.path.startswith("/api/transactions")):
         return
     raw = request.args.get("portfolio_id")
     if raw is None:
-        # Older API clients use the first displayed portfolio. New browser
-        # requests always provide an ID; an explicit bad ID never falls back.
-        g.portfolio_id = db.default_portfolio_id()
+        # Older API clients use the caller's first displayed portfolio. New
+        # browser requests always provide an ID; an explicit bad ID never
+        # falls back.
+        g.portfolio_id = db.default_portfolio_id(g.user["id"])
+        if g.portfolio_id is None:
+            # Unreachable through the app (every user always owns one
+            # portfolio), so this is a corrupted-database report, not
+            # client behavior: log it where it can be found.
+            app.logger.warning(
+                "event=user_without_portfolio request_id=%s user_id=%r",
+                g.request_id, g.user["id"],
+            )
+            return jsonify({"error": "no portfolio for user"}), 409
     elif not raw.isdecimal() or int(raw) < 1:
         return jsonify({"error": "portfolio_id must be a positive integer"}), 400
-    elif not db.get_portfolio(int(raw)):
+    elif not db.get_portfolio(int(raw), g.user["id"]):
         return jsonify({"error": "portfolio not found"}), 404
     else:
         g.portfolio_id = int(raw)
+
+
+# ---------------------------------------------------------------------------
+# AUTH ROUTES — setup (first run), login, logout, and the People API.
+#
+# The pages are PLAIN server-rendered FORMS (templates/login.html and
+# templates/setup.html): no JavaScript, no fetch, no common. Failure
+# re-renders the same page with a message and a 400 status. The browser's
+# password manager owns the credentials' UX; server side, one comparison
+# decides everything.
+#
+# CSRF stance (see the session config at the top): SameSite=Lax plus
+# JSON-only bodies on the mutating API routes. The two FORM routes (setup,
+# login) accept form bodies by design — a cross-site login-form post is a
+# nuisance, not a data risk, on a home server with no open registration.
+# ---------------------------------------------------------------------------
+
+USERNAME_MAX = 30
+PASSWORD_MAX = 128
+PASSWORD_MIN = 4
+
+
+def _safe_next(next_value):
+    """The login redirect target — ONLY when it is a local path.
+
+    A ?next= from an attacker could otherwise send the freshly-registered
+    session somewhere hostile. The rule: a string that starts with "/"
+    and not "//" (protocol-relative URLs are NOT local). Everything else
+    — None, whitespace, "http://evil.com" — lands safely on the dashboard.
+    """
+    if isinstance(next_value, str) and next_value.startswith("/") \
+            and not next_value.startswith("//"):
+        return next_value
+    return "/"
+
+
+def _stamp_session(user_id):
+    """Install a fresh signed-in session for one user id.
+
+    session.clear() FIRST: an attacker-supplied cookie's other keys never
+    survive a privilege change. permanent=True extends the cookie's own
+    expiry (30 days, set in PERMANENT_SESSION_LIFETIME) instead of dying
+    with the browser session — the Android WebView and desktop tabs keep
+    their login across restarts.
+    """
+    session.clear()
+    session.permanent = True
+    session["user_id"] = user_id
+
+
+@app.route("/auth/setup", methods=["GET", "POST"])
+def auth_setup():
+    """First-run page: create the server's first account.
+
+    Reachable only while the users table is EMPTY — signed-in or once
+    someone exists, the gate redirects a GET to login, and this route
+    adds its own re-check so a directly-forged POST is answered 409.
+
+    Success does THREE things in order: creates the account WITHOUT a
+    seeded Main portfolio (seed_main=False), CLAIMS every owner-less row
+    a legacy migration left behind (the claim seeds Main itself when
+    nothing legitimately owned exists), and stamps the session in — the
+    person who installs the server is signed in at the dashboard
+    immediately.
+    """
+    if db.count_users() != 0:
+        if request.method == "POST":
+            return jsonify({"error": "setup already complete"}), 409
+        return redirect(url_for("auth_login"))
+
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
+        if not 1 <= len(username) <= USERNAME_MAX:
+            error = "Usernames are 1 to 30 characters."
+        elif not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
+            error = "Passwords are 4 to 128 characters."
+        elif password != confirm:
+            error = "Passwords do not match."
+        else:
+            try:
+                user_id = db.create_user(
+                    username, generate_password_hash(password),
+                    seed_main=False)
+            except sqlite3.IntegrityError:
+                # A unique-named race (two setup tabs) — route defence in
+                # depth; essentially unreachable through this page.
+                error = "That username is taken."
+            else:
+                db.claim_unowned_data(user_id)
+                _stamp_session(user_id)
+                app.logger.info(
+                    "event=user_created request_id=%s user_id=%d username=%r",
+                    g.request_id, user_id, username,
+                )
+                return redirect(_safe_next(url_for("index")))
+    return render_template("setup.html", error=error), (400 if error else 200)
+
+
+@app.route("/auth/login", methods=["GET", "POST"])
+def auth_login():
+    """The login page (plain form; zero JavaScript required).
+
+    zero users → setup exists FIRST, so this page redirects there (both
+    verbs). A signed-IN user has no business on this page either — to the
+    dashboard. Failure is DELIBERATELY UNIFORM ("Wrong username or
+    password.", 400): whether the username or the password was wrong is
+    information the retrying user already knows and an attacker does not.
+    Success redirects to ?next= when that is safe, otherwise the
+    dashboard.
+    """
+    if db.count_users() == 0:
+        return redirect(url_for("auth_setup"))
+    if request.method == "GET" and g.user is not None:
+        return redirect(_safe_next(url_for("index")))
+
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        user = db.get_user_by_username(username)
+        if user is None or not check_password_hash(
+                user["password_hash"], password):
+            app.logger.warning(
+                "event=login_failed request_id=%s username=%r",
+                g.request_id, username,
+            )
+            error = "Wrong username or password."
+        else:
+            _stamp_session(user["id"])
+            app.logger.info(
+                "event=login_success request_id=%s user_id=%d username=%r",
+                g.request_id, user["id"], username,
+            )
+            return redirect(_safe_next(request.args.get("next")))
+    return render_template("login.html", error=error), (400 if error else 200)
+
+
+@app.route("/auth/logout", methods=["POST"])
+def auth_logout():
+    """End the server's opinion of this browser: forget the session. A
+    POST (not a GET link) so no prefetch/web accelerator can log someone
+    out by following a URL. The cookie stays in the browser's jar but its
+    contents are cleared, so the next request hits the gate's redirect."""
+    app.logger.info(
+        "event=logout request_id=%s user_id=%d", g.request_id, g.user["id"]
+    )
+    session.clear()
+    return redirect(url_for("auth_login"))
+
+
+@app.route("/api/users", methods=["GET"])
+def list_users_api():
+    """People list for the Preferences card — id + username ONLY (never
+    a password hash, enforced at the db boundary by get_users itself)."""
+    return jsonify(db.get_users())
+
+
+@app.route("/api/users", methods=["POST"])
+def create_user_api():
+    """Create another person (Preferences People card). No open
+    registration: the endpoint requires a signed-in session, which is
+    exactly the trust model of a home server."""
+    body = request.get_json(silent=True)
+    if not (isinstance(body, dict)
+            and isinstance(body.get("username"), str)
+            and isinstance(body.get("password"), str)):
+        return jsonify(
+            {"error": "expected JSON body with username and password"}), 400
+    username = body["username"].strip()
+    password = body["password"]
+    if not 1 <= len(username) <= USERNAME_MAX:
+        return jsonify(
+            {"error": "username must contain 1 to 30 characters"}), 400
+    if not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
+        return jsonify(
+            {"error": "password must contain 4 to 128 characters"}), 400
+    try:
+        user_id = db.create_user(username, generate_password_hash(password))
+    except sqlite3.IntegrityError:
+        # The case-insensitive UNIQUE constraint: "TESTER" vs "tester".
+        return jsonify({"error": "username is already taken"}), 409
+    app.logger.info(
+        "event=user_created request_id=%s new_user_id=%d username=%r",
+        g.request_id, user_id, username,
+    )
+    return jsonify({"id": user_id, "username": username}), 201
+
+
+@app.route("/api/users/<int:user_id>", methods=["DELETE"])
+def delete_user_api(user_id):
+    """Delete ANOTHER person and all their data (one transaction). The
+    three rules are route-enforced here, db-enforced there:
+
+      * self-delete is 400 — the session its own boot relies on must not
+        vanish under it (the db layer can't know the session);
+      * typed-username confirmation, EXACT match, like portfolio delete;
+      * the last user is refused by db.delete_user (unreachable here,
+        because a non-self delete implies a second user exists — but the
+        layer's guarantee stands on its own for direct db callers).
+    """
+    if user_id == g.user["id"]:
+        return jsonify(
+            {"error": "you cannot delete the account you are signed in as"}
+        ), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("username"), str):
+        return jsonify({"error": "type the username to confirm"}), 400
+    # The username comes from BEFORE the delete: after the cascade the
+    # row is gone, and the audit line must still name who left.
+    deleted_user = db.get_user(user_id)
+    outcome = db.delete_user(user_id, body["username"])
+    if outcome == "missing":
+        return jsonify({"error": "user not found"}), 404
+    if outcome == "mismatch":
+        return jsonify({"error": "typed username does not match"}), 409
+    if outcome == "last":
+        return jsonify({"error": "cannot delete the last user"}), 409
+    app.logger.info(
+        "event=user_deleted request_id=%s deleted_user_id=%d username=%r",
+        g.request_id, user_id,
+        deleted_user["username"] if deleted_user else None,
+    )
+    return "", 204
+
+
+@app.route("/api/auth/password", methods=["POST"])
+def change_own_password_api():
+    """Change the SIGNED-IN user's password, only theirs.
+
+    Verifying the CURRENT password is required even on a home server:
+    a bystander at an unlocked desk shouldn't own the account in two
+    keystrokes. Deleting other people's SEPARATE accounts is someone
+    else's operation (delete_user_api); here, only one's own session is
+    involved. Other signed-in sessions are NOT invalidated and the reason
+    is documented in the design decisions (rework trigger: first public
+    exposure).
+    """
+    body = request.get_json(silent=True)
+    if not (isinstance(body, dict)
+            and isinstance(body.get("current_password"), str)
+            and isinstance(body.get("new_password"), str)):
+        return jsonify(
+            {"error": "expected JSON body with current_password and"
+                      " new_password"}), 400
+    current = body["current_password"]
+    new_password = body["new_password"]
+    if not check_password_hash(g.user["password_hash"], current):
+        app.logger.info(
+            "event=password_change_failed request_id=%s user_id=%d",
+            g.request_id, g.user["id"],
+        )
+        return jsonify({"error": "current password does not match"}), 400
+    if not PASSWORD_MIN <= len(new_password) <= PASSWORD_MAX:
+        return jsonify(
+            {"error": "password must contain 4 to 128 characters"}), 400
+    db.set_password(g.user["id"], generate_password_hash(new_password))
+    app.logger.info(
+        "event=password_changed request_id=%s user_id=%d",
+        g.request_id, g.user["id"],
+    )
+    return "", 204
 
 
 @app.after_request
@@ -384,17 +767,20 @@ def _portfolio_name(body):
 @app.route("/api/portfolios", methods=["GET", "POST"])
 def portfolios_api():
     if request.method == "GET":
-        return jsonify(db.get_portfolios())
+        # ONLY the signed-in user's own list — the base of the whole
+        # ownership model: the browser's selection UI must never even
+        # see another person's portfolio names, let alone ids.
+        return jsonify(db.get_portfolios(g.user["id"]))
     name = _portfolio_name(request.get_json(silent=True))
     if name is None:
         return jsonify({"error": "name must contain 1 to 60 characters"}), 400
     try:
-        pid = db.create_portfolio(name)
+        pid = db.create_portfolio(name, g.user["id"])
     except sqlite3.IntegrityError:
         return jsonify({"error": "portfolio name already exists"}), 409
     app.logger.info("event=portfolio_created request_id=%s portfolio_id=%d",
                     g.request_id, pid)
-    return jsonify(db.get_portfolio(pid)), 201
+    return jsonify(db.get_portfolio(pid, g.user["id"])), 201
 
 
 @app.route("/api/portfolios/<int:portfolio_id>", methods=["PATCH", "DELETE"])
@@ -404,18 +790,18 @@ def portfolio_api(portfolio_id):
         if name is None:
             return jsonify({"error": "name must contain 1 to 60 characters"}), 400
         try:
-            changed = db.rename_portfolio(portfolio_id, name)
+            changed = db.rename_portfolio(portfolio_id, g.user["id"], name)
         except sqlite3.IntegrityError:
             return jsonify({"error": "portfolio name already exists"}), 409
         if not changed:
             return jsonify({"error": "portfolio not found"}), 404
         app.logger.info("event=portfolio_renamed request_id=%s portfolio_id=%d",
                         g.request_id, portfolio_id)
-        return jsonify(db.get_portfolio(portfolio_id))
+        return jsonify(db.get_portfolio(portfolio_id, g.user["id"]))
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or not isinstance(body.get("name"), str):
         return jsonify({"error": "type the portfolio name to confirm"}), 400
-    outcome = db.delete_portfolio(portfolio_id, body["name"])
+    outcome = db.delete_portfolio(portfolio_id, g.user["id"], body["name"])
     if outcome == "missing":
         return jsonify({"error": "portfolio not found"}), 404
     if outcome != "deleted":
@@ -431,14 +817,14 @@ def move_portfolio_api(portfolio_id):
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or body.get("direction") not in ("up", "down"):
         return jsonify({"error": "direction must be up or down"}), 400
-    outcome = db.move_portfolio(portfolio_id, body["direction"])
+    outcome = db.move_portfolio(portfolio_id, g.user["id"], body["direction"])
     if outcome is None:
         return jsonify({"error": "portfolio not found"}), 404
     if outcome is False:
         return jsonify({"error": "portfolio is already at the edge"}), 409
     app.logger.info("event=portfolio_moved request_id=%s portfolio_id=%d",
                     g.request_id, portfolio_id)
-    return jsonify(db.get_portfolio(portfolio_id))
+    return jsonify(db.get_portfolio(portfolio_id, g.user["id"]))
 
 
 # JSON endpoint that powers the dashboard's tabbed market overview. The
@@ -1983,8 +2369,10 @@ def portfolio_allocation():
 # overview's gap-fill).
 @app.route("/api/watchlist")
 def watchlist_quotes():
-    # The DB read is the source of truth for what should be displayed.
-    symbols = db.get_symbols()
+    # The DB read is the source of truth for what should be displayed —
+    # and of WHOM: every read/write below belongs to the signed-in user.
+    user_id = g.user["id"]
+    symbols = db.get_symbols(user_id)
     if not symbols:
         return jsonify({"symbols": [], "quotes": []})
 
@@ -2082,10 +2470,11 @@ def add_to_watchlist():
         return jsonify({"error": f"unknown or unquotable symbol: {symbol}"}), 404
 
     try:
-        db.add_symbol(symbol)
+        db.add_symbol(symbol, g.user["id"])
     except sqlite3.IntegrityError:
-        # The watchlist symbol is its primary key, so this specific database
-        # error means the normalized ticker already exists. Operational
+        # The (user_id, symbol) pair is the watchlist's primary key, so
+        # this specific database error means THIS USER already watches
+        # the normalized ticker. Operational
         # failures (locked/full/unwritable DB) must escape to the JSON 500
         # handler instead of being mislabeled as a harmless duplicate.
         return jsonify({"error": f"{symbol} is already on the watchlist"}), 409
@@ -2102,7 +2491,7 @@ def add_to_watchlist():
 def remove_from_watchlist(symbol):
     # Same normalization as add, so lookups match what we stored.
     symbol = symbol.strip().upper()
-    if not db.remove_symbol(symbol):
+    if not db.remove_symbol(symbol, g.user["id"]):
         return jsonify({"error": f"{symbol} is not on the watchlist"}), 404
     app.logger.info(
         "event=watchlist_removed request_id=%s symbol=%r", g.request_id, symbol
@@ -3166,14 +3555,15 @@ def stock_page(symbol):
     stamp <body data-symbol> (stock.js's identity hook) and <title>.
 
     One DB read rides along (never Yahoo): whether this symbol is already
-    on the watchlist. Stamping the answer into the HTML (data-watched)
-    lets stock.js paint the button's check mark at load — the alternative,
-    a fetch on boot, would flicker and put a network call on the critical
-    path. The symbol is uppercased FIRST so the lookup matches what the
-    watchlist routes stored."""
+    on the SESSION USER's watchlist. Stamping the answer into the HTML
+    (data-watched) lets stock.js paint the button's check mark at load —
+    the alternative, a fetch on boot, would flicker and put a network call
+    on the critical path. The symbol is uppercased FIRST so the lookup
+    matches what the watchlist routes stored."""
     symbol = symbol.strip().upper()
     return render_template(
-        "stock.html", symbol=symbol, watched=db.is_watched(symbol)
+        "stock.html", symbol=symbol,
+        watched=db.is_watched(symbol, g.user["id"])
     )
 
 

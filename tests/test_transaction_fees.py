@@ -11,7 +11,7 @@ from conftest import make_quote
 def seed(price, qty, side="BUY", fee=None, date="2026-08-01",
          currency="CAD", fx=1.0, ticker="ABC"):
     return db.add_transaction(ticker, date, price, qty, currency, side, fx,
-                              fee=fee)
+                              fee=fee, portfolio_id=1)
 
 
 def test_fee_schema_and_old_database_migration(tmp_path, monkeypatch):
@@ -33,17 +33,17 @@ def test_fee_schema_and_old_database_migration(tmp_path, monkeypatch):
             "PRAGMA table_info(transactions)")}
     assert columns["fee"][2] == "REAL"
     assert columns["fee"][3] == 0
-    old = db.get_transaction(1)
+    old = db.get_transaction(1, 1)
     assert old["fee"] is None
     assert old["fx_rate"] == 1.0
     assert (old["price"], old["qty"], old["transaction_date"]) == (
         10, 2, "2026-08-01")
     new_id = seed(10, 2, fee=1.25)
-    assert db.get_transaction(new_id)["fee"] == 1.25
+    assert db.get_transaction(new_id, 1)["fee"] == 1.25
     assert db.update_transaction(new_id, "2026-08-02", 11, 2,
-                                 "SELL", 1.0, fee=0.0)
-    assert db.get_transaction(new_id)["fee"] == 0.0
-    assert db.get_transactions()[0]["fee"] == 0.0
+                                 "SELL", 1.0, fee=0.0, portfolio_id=1)
+    assert db.get_transaction(new_id, 1)["fee"] == 0.0
+    assert db.get_transactions(1)[0]["fee"] == 0.0
 
 
 @pytest.mark.parametrize("bad", [True, "1", -1, [], {}, float("nan"),
@@ -55,11 +55,11 @@ def test_invalid_fee_never_changes_a_row(client, fake_market, bad):
     response = client.post("/api/transactions", json=body)
     assert response.status_code == 400
     assert "fee" in response.get_json()["error"]
-    assert db.get_transactions() == []
+    assert db.get_transactions(1) == []
     tx_id = seed(10, 2, fee=1.25)
     response = client.put(f"/api/transactions/{tx_id}", json=body)
     assert response.status_code == 400
-    assert db.get_transaction(tx_id)["fee"] == 1.25
+    assert db.get_transaction(tx_id, 1)["fee"] == 1.25
 
 
 def test_post_put_and_import_legacy_fee(client, fake_market):
@@ -69,7 +69,7 @@ def test_post_put_and_import_legacy_fee(client, fake_market):
     first = client.post("/api/transactions", json=body)
     assert first.status_code == 201
     assert first.get_json()["fee"] is None
-    assert db.get_transaction(first.get_json()["id"])["fee"] is None
+    assert db.get_transaction(first.get_json()["id"], 1)["fee"] is None
     second = client.post("/api/transactions", json={**body, "fee": 0})
     assert second.get_json()["fee"] == 0
     change = client.put(f"/api/transactions/{first.get_json()['id']}",
@@ -85,10 +85,10 @@ def test_post_put_and_import_legacy_fee(client, fake_market):
                           json={"text": text})
     assert preview.status_code == 200
     assert preview.get_json()["rows"][0]["transaction_type"] == "BUY"
-    assert len(db.get_transactions()) == 2
+    assert len(db.get_transactions(1)) == 2
     assert client.post("/api/transactions/import/commit",
                        json={"text": text}).get_json()["imported"] == 1
-    assert db.get_transactions()[-1]["fee"] is None
+    assert db.get_transactions(1)[-1]["fee"] is None
 
 
 def test_summary_ledger_and_history_include_fees(client, fake_market):
@@ -167,9 +167,9 @@ def test_fee_changes_costs_but_not_price_only_twr(client, fake_market):
                                      "2026-08-04": 130}
     before = client.get("/api/portfolio/history?period=1M").get_json()
     assert db.update_transaction(buy, "2026-08-01", 100, 2, "BUY", 1,
-                                 fee=4)
+                                 fee=4, portfolio_id=1)
     assert db.update_transaction(sell, "2026-08-02", 120, 1, "SELL", 1,
-                                 fee=3)
+                                 fee=3, portfolio_id=1)
     after = client.get("/api/portfolio/history?period=1M").get_json()
     assert after["costs"] == [204, 87, 87]  # weekend sell lands on Monday
     for key in ("labels", "values", "index_values", "twrr_pct"):

@@ -208,3 +208,170 @@
     document.addEventListener("portfoliolistchange", render);
     portfolioReady.then(render);
 })();
+
+// ---------------------------------------------------------------------------
+// PEOPLE — user accounts for this server (the People card above the
+// About card). Same shapes as managePortfolios on purpose: one fetch
+// helper per form, one error element per form, and typed-confirmation
+// prompts for anything destructive. The SERVER re-checks every rule
+// (self-delete, last user, confirming name); the JS simply never shows
+// the controls that would be refused — you only see Delete on OTHER
+// people's rows, because deleting your own signed-in account is always
+// refused.
+//
+// 401s never reach our handlers: common.js's fetch hook bounces the
+// browser to /auth/login the moment the session is gone.
+// ---------------------------------------------------------------------------
+(function managePeople() {
+    const card = document.getElementById("people-card");
+    if (!card) return;
+    // The signed-in person's id (stamped by the template): the owner of
+    // THIS session's rows. It drives which rows get a Delete control.
+    const currentUid = Number(card.dataset.currentUid);
+
+    const list = document.getElementById("people-list");
+    const form = document.getElementById("people-create");
+    const peopleError = document.getElementById("people-error");
+    const passwordForm = document.getElementById("password-change");
+    const passwordError = document.getElementById("password-error");
+
+    function reportPeople(message) {
+        peopleError.textContent = message;
+        peopleError.hidden = !message;
+    }
+    function reportPassword(message) {
+        passwordError.textContent = message;
+        passwordError.hidden = !message;
+    }
+
+    async function request(path, options, onFail) {
+        try {
+            const response = await fetch(path, options);
+            if (!response.ok && response.status !== 401) {
+                const payload = await response.json().catch(() => null);
+                onFail(payload?.error
+                    || `Could not update people (HTTP ${response.status})`);
+                return null;
+            }
+            return response;
+        } catch {
+            onFail("Could not reach the server.");
+            return null;
+        }
+    }
+
+    async function loadPeople() {
+        reportPeople("");
+        const response = await request("/api/users", { method: "GET" },
+            reportPeople);
+        if (!response || !response.ok) return;
+        const users = await response.json();
+        list.replaceChildren();
+        for (const user of users) {
+            const row = document.createElement("li");
+            row.dataset.id = user.id;
+            const name = document.createElement("span");
+            name.textContent = user.id === currentUid
+                ? `${user.username} (you)` : user.username;
+            row.append(name);
+            // Only OTHER people's rows carry a Delete control — the
+            // signed-in account is its own (the server would refuse a
+            // self-delete with 400 anyway). Self sign-out is the
+            // navbar's Log out button.
+            if (user.id !== currentUid) {
+                row.append(button("Delete", `Delete ${user.username}`));
+            }
+            list.append(row);
+        }
+    }
+
+    function button(text, label, disabled = false) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.dataset.action = "delete";
+        el.textContent = text;
+        el.setAttribute("aria-label", label);
+        el.disabled = disabled;
+        return el;
+    }
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const username = form.elements.username.value.trim();
+        const password = form.elements.password.value;
+        const response = await request("/api/users", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        }, reportPeople);
+        if (response && response.ok) {
+            form.reset();
+            await loadPeople();
+            showToast(`${username} is added`, "success");
+        }
+    });
+
+    // The typed-confirmation delete: one round trip, one prompt. Both
+    // fetches ride the same request() helper as everything else in the
+    // card, so a dropped connection reports "Could not reach the
+    // server." like every other action.
+    list.addEventListener("click", async (event) => {
+        const target = event.target.closest("button[data-action]");
+        const row = target?.closest("li[data-id]");
+        if (!row) return;
+        const id = Number(row.dataset.id);
+        const response = await request("/api/users", { method: "GET" },
+            reportPeople);
+        if (!response || !response.ok) return;
+        const users = await response.json();
+        const person = users.find((item) => item.id === id);
+        if (!person) return;
+        const typed = await showPrompt({
+            title: `Delete ${person.username}?`,
+            message: `Type ${person.username} to delete this person and ALL their portfolios, transactions, and watchlist. This cannot be undone.`,
+            placeholder: person.username, confirmLabel: "Delete",
+            danger: true });
+        if (typed === null) return;
+        if (typed !== person.username) {
+            reportPeople("The typed username does not match.");
+            return;
+        }
+        const response2 = await request(`/api/users/${id}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: person.username }),
+        }, reportPeople);
+        if (response2 && response2.status === 204) {
+            await loadPeople();
+            showToast(`${person.username} is deleted`, "success");
+        } else if (response2 && response2.status !== 401) {
+            const payload = await response2.json().catch(() => null);
+            reportPeople(payload?.error
+                || `Could not delete ${person.username}.`);
+        }
+    });
+
+    passwordForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const current = passwordForm.elements.current_password.value;
+        const next = passwordForm.elements.new_password.value;
+        const confirm = passwordForm.elements.confirm_password.value;
+        if (next !== confirm) {
+            reportPassword("The two new passwords do not match.");
+            return;
+        }
+        const response = await request("/api/auth/password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ current_password: current,
+                                   new_password: next }),
+        }, reportPassword);
+        if (response && response.status === 204) {
+            passwordForm.reset();
+            reportPassword("");
+            showToast("Password changed", "success");
+        }
+    });
+
+    loadPeople();
+})();

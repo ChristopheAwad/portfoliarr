@@ -1,0 +1,23 @@
+{% extends "_auth_head.html" %}
+
+{% block auth_title %}Log in — Portfoliarr{% endblock %}
+
+{% block auth_card %}
+    <h1 class="auth-title">Log in</h1>
+    {% if error %}
+        <p class="action-error" role="alert">{{ error }}</p>
+    {% endif %}
+    <!-- A PLAIN HTML form, on purpose: login must survive with JavaScript
+         off (browser password managers, WebView edge cases). The server
+         replies 302 on success, or re-renders this page with `error`
+         and a 400 status — no fetch, no client-side handling to get right. -->
+    <form method="post" class="auth-form">
+        <label for="login-username">Username</label>
+        <input id="login-username" name="username" autocomplete="username"
+               maxlength="30" required autofocus>
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password"
+               autocomplete="current-password" required>
+        <button type="submit" class="btn btn-primary">Log in</button>
+    </form>
+{% endblock %}

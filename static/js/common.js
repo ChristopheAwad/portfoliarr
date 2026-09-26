@@ -18,6 +18,33 @@
 // touches Yahoo.
 const REFRESH_MS = 60000;
 
+// ---------------------------------------------------------------------------
+// AUTH REDIRECT — the ONE hook that notices "your session ended".
+//
+// When the server answers 401 (the auth gate's standard reply for /api/*
+// requests), the SESSION is gone: logged out, expired (30-day cookie), or
+// the account was deleted. Every page's polls and fetches must bring the
+// browser back to /auth/login — otherwise every section just degrades to
+// fetch errors and the person thinks the app is broken instead of
+// signed out.
+//
+// ONE wrapper around window.fetch instead of per-callsite checks: every
+// existing and future fetch inherits the redirect for free. The pathname
+// guard matters because /auth/login itself NEVER sees a 401 (its form
+// failures are 400 re-renders) — but if it someday did, redirecting a
+// login page to itself would loop forever. The wrapper re-exports the
+// same Response object, so no caller changes shape.
+// ---------------------------------------------------------------------------
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (response.status === 401
+        && !window.location.pathname.startsWith("/auth/")) {
+        window.location.assign("/auth/login");
+    }
+    return response;
+};
+
 // A selection belongs to this browser, but portfolio data belongs to SQLite.
 // Resolve the saved ID against the server's list before making scoped requests.
 let activePortfolioId = null;

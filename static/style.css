@@ -332,6 +332,78 @@ h2, h3 {
     background-color: var(--bg-hover);
 }
 
+/* "Signed in as <name>" line at the top of the dropdown. */
+.profile-dropdown-user {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 16px 6px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+/* Log out button (inside the form in the dropdown). The .profile-dropdown-link
+   class gives it the shared padding/hover; the reset below turns the
+   button element itself into a quiet link-shaped control. */
+.profile-dropdown button.profile-dropdown-link {
+    width: 100%;
+    font: inherit;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+/* Auth pages (login + setup): a small centered card on a quiet page.
+   .auth-page centers its column; the card keeps the shared .card look.
+   No JS is involved with these pages at all. */
+.auth-page {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 1.5rem;
+}
+
+.auth-logo {
+    margin-bottom: 1.25rem;
+    font-size: 1.4rem;
+}
+
+.auth-card {
+    width: min(26rem, 100%);
+    padding: 1.75rem;
+}
+
+.auth-title {
+    font-size: 1.15rem;
+    margin: 0 0 1rem;
+}
+
+.auth-note {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin: 0 0 1rem;
+}
+
+.auth-form {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.auth-form label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+}
+
+.auth-form button {
+    margin-top: 1rem;
+}
+
+.auth-card .action-error {
+    margin: 0 0 1rem;
+}
+
 /* Preferences page layout. */
 .preferences-page {
     max-width: 560px;

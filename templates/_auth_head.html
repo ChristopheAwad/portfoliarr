@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<!-- templates/_auth_head.html — the WHOLE document skeleton of the auth
+     pages: login.html and setup.html only extend this and fill two
+     blocks (the tab title and the card's content). Sharing one skeleton
+     means the two pages cannot drift apart on viewport, favicon,
+     stylesheet, the brand typefaces, or the dark-mode head script.
+
+     DEFINITELY no common.js here: the auth pages run with NO JavaScript
+     of their own. common.js on a login page would fetch /api/portfolios,
+     watch the 401 land, and redirect back to /auth/login forever. The
+     script IN THE HEAD is not the same thing — it only prevents the
+     light-then-dark theme flash. -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block auth_title %}Portfoliarr{% endblock %}</title>
+
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Instrument+Sans:wght@400..700&display=swap">
+
+    <!-- The same dark-mode theme bootstrap base.html runs in its head:
+         without it the auth pages would flash light-mode behind a saved
+         dark preference — the login suddenly feels like its own foreign
+         app. Kept in step with base.html's version. -->
+    <script>
+        (function() {
+            var saved = localStorage.getItem('theme');
+            var mql = window.matchMedia('(prefers-color-scheme: dark)');
+            var prefersDark = mql.matches;
+            if (saved === 'dark' || (!saved && prefersDark)) {
+                document.documentElement.classList.add('dark');
+            }
+            mql.addEventListener('change', function(e) {
+                if (!localStorage.getItem('theme')) {
+                    document.documentElement.classList.toggle('dark', e.matches);
+                }
+            });
+        })();
+    </script>
+</head>
+<body>
+    <main class="auth-page">
+        <!-- The wordmark, shared with base.html's navbar (same inline SVG
+             coin stack; class .auth-logo re-sizes it for the quiet page). -->
+        <a href="/" class="logo auth-logo">
+            <svg class="logo-mark" viewBox="0 0 24 24" width="28" height="28"
+                 aria-hidden="true">
+                <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8"
+                      fill="none" stroke="currentColor" stroke-width="2.2"
+                      stroke-linecap="round" stroke-linejoin="round"></path>
+                <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
+                <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
+            </svg>
+            <span>Portfoli<span class="logo-accent">arr</span></span>
+        </a>
+        <div class="card auth-card">
+            {% block auth_card %}{% endblock %}
+        </div>
+    </main>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{% extends "_auth_head.html" %}
+
+{% block auth_title %}Create your account — Portfoliarr{% endblock %}
+
+{% block auth_card %}
+    <h1 class="auth-title">Create your account</h1>
+    <p class="auth-note">This server is brand new. Create the first
+        account — anything a previous, pre-login version of this app
+        already stored (portfolios, transactions, watchlist) is claimed
+        by this account automatically.</p>
+    {% if error %}
+        <p class="action-error" role="alert">{{ error }}</p>
+    {% endif %}
+    <!-- A PLAIN HTML form, same rule as login.html: no JavaScript. -->
+    <form method="post" class="auth-form">
+        <label for="setup-username">Username</label>
+        <input id="setup-username" name="username" autocomplete="username"
+               maxlength="30" required autofocus>
+        <label for="setup-password">Password</label>
+        <input id="setup-password" name="password" type="password"
+               autocomplete="new-password" minlength="4" maxlength="128"
+               required>
+        <label for="setup-confirm">Confirm password</label>
+        <input id="setup-confirm" name="confirm_password" type="password"
+               autocomplete="new-password" minlength="4" maxlength="128"
+               required>
+        <button type="submit" class="btn btn-primary">Create account</button>
+    </form>
+{% endblock %}

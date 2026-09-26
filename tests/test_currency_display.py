@@ -34,7 +34,7 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
     """Insert a ledger row through the db layer. Defaults model the
     common USD case: bought @100 when USDCAD was 1.40."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 def seed_usd_market(fake_market, price=105.0, previous_close=100.0):
@@ -218,7 +218,7 @@ def test_watchlist_quotes_stay_native(client, fake_market):
     """THE scope decision: the watchlist is market data, not portfolio
     value — its USD quotes display natively no matter what the ledger
     toggle does. No ?currency= exists on this endpoint."""
-    db.add_symbol("AAPL")
+    db.add_symbol("AAPL", 1)
     fake_market.quotes["AAPL"] = make_quote("AAPL", price=229.5,
                                             previous_close=225.0,
                                             currency="USD")

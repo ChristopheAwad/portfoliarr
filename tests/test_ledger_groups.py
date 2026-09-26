@@ -85,7 +85,7 @@ def seed_transaction(ticker="AAPL", date="2026-08-01", price=100.0,
     is the stored currency fact: 1.0 for CAD rows, the USDCAD close on
     `date` for USD rows."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
-                              fx_rate)
+                              fx_rate, portfolio_id=1)
 
 
 def rows_of(client, ticker):
