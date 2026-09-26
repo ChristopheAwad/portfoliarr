@@ -1,0 +1,29 @@
+{% extends "_auth_head.html" %}
+
+{% block auth_title %}Create an account — Portfoliarr{% endblock %}
+
+{% block auth_card %}
+    <h1 class="auth-title">Create an account</h1>
+    <p class="auth-note">Your own portfolios, transactions, and
+        watchlist start here. Make up a username and password.</p>
+    {% if error %}
+        <p class="action-error" role="alert">{{ error }}</p>
+    {% endif %}
+    <!-- A PLAIN HTML form, same rule as login.html and setup.html:
+         no JavaScript. Visible only while the owner allows sign-up. -->
+    <form method="post" class="auth-form">
+        <label for="signup-username">Username</label>
+        <input id="signup-username" name="username"
+               autocomplete="username" maxlength="30" required autofocus>
+        <label for="signup-password">Password</label>
+        <input id="signup-password" name="password" type="password"
+               autocomplete="new-password" minlength="4" maxlength="128"
+               required>
+        <label for="signup-confirm">Confirm password</label>
+        <input id="signup-confirm" name="confirm_password" type="password"
+               autocomplete="new-password" minlength="4" maxlength="128"
+               required>
+        <button type="submit" class="btn btn-primary">Create an account
+        </button>
+    </form>
+{% endblock %}

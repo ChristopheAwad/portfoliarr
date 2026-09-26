@@ -439,6 +439,15 @@ h2, h3 {
     color: var(--text-primary);
 }
 
+/* Checkbox switch used by the People card's open sign-up toggle. */
+.pref-check {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent, #4a7dff);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
 .app-version {
     font-size: 14px;
     color: var(--text-secondary);

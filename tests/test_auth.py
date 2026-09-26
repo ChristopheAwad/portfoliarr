@@ -8,11 +8,13 @@
 # for Yahoo wherever a route body would fetch quotes.
 
 import logging
+import sys
 
 import pytest
-from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash
 
-from app import app
+import app as app_module
+from app import app, perform_password_reset, run_reset_password_command
 import db
 from conftest import make_legacy_db, make_quote, seed_user, TESTER_PASSWORD
 
@@ -336,3 +338,212 @@ def test_auth_events_are_logged_without_secrets(client, caplog):
     # No password, guessed or real, ever reached the log:
     for password in ("bad-pass", "kid-key-1", "new-key-9", TESTER_PASSWORD):
         assert password not in text
+
+
+# ── CLI password reset (roadmap #27, part 1) ──────────────────────────
+
+def test_perform_password_reset_unknown_username(fresh_db):
+    ok, message = perform_password_reset("ghost", "brand-new-key-7")
+    assert ok is False
+    assert "No account" in message
+
+
+def test_perform_password_reset_trimmed_casing_lookup(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    ok, _ = perform_password_reset("  TestEr ", "brand-new-key-7")
+    assert ok is True
+
+
+def test_perform_password_reset_rejects_out_of_range(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    for password in ("abc", "y" * 129):
+        ok, message = perform_password_reset("tester", password)
+        assert ok is False, password
+        assert message == "Passwords are 4 to 128 characters.", password
+
+
+def test_perform_password_reset_round_trip(fresh_db):
+    uid = seed_user("tester", TESTER_PASSWORD)
+    ok, message = perform_password_reset("tester", "brand-new-key-7")
+    assert ok is True
+    hash_now = db.get_user(uid)["password_hash"]
+    assert check_password_hash(hash_now, "brand-new-key-7")
+    assert not check_password_hash(hash_now, TESTER_PASSWORD)
+    assert "Password updated" in message
+
+
+def test_perform_password_reset_event_has_no_password(fresh_db, caplog):
+    seed_user("tester", TESTER_PASSWORD)
+    with caplog.at_level(logging.INFO):
+        perform_password_reset("tester", "brand-new-key-7")
+    lines = [record.getMessage() for record in caplog.records]
+    assert any("event=password_reset " in line for line in lines)
+    assert "brand-new-key-7" not in "".join(lines)
+
+
+def test_run_reset_password_command_mismatch(fresh_db, monkeypatch, capsys):
+    seed_user("tester", TESTER_PASSWORD)
+    typed = iter(["pw-one-11", "pw-two-99"])
+    monkeypatch.setattr(app_module.getpass, "getpass",
+                        lambda prompt="": next(typed))
+    assert run_reset_password_command("tester") == 1
+    assert "Passwords do not match." in capsys.readouterr().err
+
+
+def test_run_reset_password_command_success(fresh_db, monkeypatch, capsys):
+    uid = seed_user("tester", TESTER_PASSWORD)
+    monkeypatch.setattr(app_module.getpass, "getpass",
+                        lambda prompt="": "brand-new-key-9")
+    assert run_reset_password_command("tester") == 0
+    assert "Password updated" in capsys.readouterr().out
+    assert check_password_hash(
+        db.get_user(uid)["password_hash"], "brand-new-key-9")
+
+
+def test_main_dispatch_reset_and_usage(fresh_db, monkeypatch, capsys):
+    seed_user("tester", TESTER_PASSWORD)
+    monkeypatch.setattr(app_module.getpass, "getpass",
+                        lambda prompt="": "brand-new-key-9")
+    assert app_module.main(["app.py", "reset-password", "tester"]) == 0
+    assert app_module.main(["app.py", "reset-password"]) == 1
+    assert "usage: python app.py reset-password <username>" in (
+        capsys.readouterr().err)
+
+
+def test_main_no_arguments_means_the_dev_server(monkeypatch):
+    booted = []
+    monkeypatch.setattr(sys, "argv", ["app.py"])
+    monkeypatch.setattr(app_module.app, "run",
+                        lambda **options: booted.append(options))
+    assert app_module.main(None) == 0
+    assert len(booted) == 1 and booted[0]["host"] == "0.0.0.0"
+    # A LIST argument never boots the server: tests exercise main() freely.
+    assert app_module.main(["app.py"]) == 0
+    assert len(booted) == 1
+
+
+# ── Open sign-up, owner-controlled (roadmap #27, part 2) ──────────────
+
+def test_signup_toggle_defaults_off(client):
+    assert client.get("/api/auth/signup-toggle").get_json() == {"allow": False}
+
+
+def test_signup_toggle_requires_session(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    web_client = browser()
+    assert web_client.get("/api/auth/signup-toggle").status_code == 401
+    assert web_client.post("/api/auth/signup-toggle",
+                           json={"allow": True}).status_code == 401
+
+
+def test_signup_toggle_round_trip_and_persistence(client):
+    assert client.post("/api/auth/signup-toggle",
+                       json={"allow": True}).status_code == 204
+    assert client.get("/api/auth/signup-toggle").get_json() == {"allow": True}
+    # The setting lives in app_settings (SQLite): a fresh browser sees it.
+    assert db.get_setting("allow_signup") == "true"
+    web_client = browser()
+    assert web_client.get("/auth/signup").status_code == 200
+    assert client.post("/api/auth/signup-toggle",
+                       json={"allow": False}).status_code == 204
+    assert client.get("/api/auth/signup-toggle").get_json() == {"allow": False}
+
+
+def test_signup_toggle_rejects_bad_bodies(client):
+    bad = [None, [1], {"allow": 1}, {"allow": "yes"}, {}]
+    for body in bad:
+        response = client.post("/api/auth/signup-toggle", json=body)
+        assert response.status_code == 400, body
+        assert "boolean" in response.get_data(as_text=True), body
+
+
+def test_signup_page_locked_by_default(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    web_client = browser()
+    response = web_client.get("/auth/signup")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/auth/login")
+    assert "Create an account" not in web_client.get(
+        "/auth/login").get_data(as_text=True)
+
+
+def test_signup_page_unlocked(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    db.set_setting("allow_signup", "true")
+    web_client = browser()
+    page = web_client.get("/auth/signup")
+    assert page.status_code == 200
+    assert 'name="username"' in page.get_data(as_text=True)
+    login_page = web_client.get("/auth/login").get_data(as_text=True)
+    assert 'href="/auth/signup"' in login_page
+    assert "Create an account" in login_page
+
+
+def test_signup_success_creates_main_and_signs_in(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    db.set_setting("allow_signup", "true")
+    web_client = browser()
+    response = web_client.post("/auth/signup", data={
+        "username": "neu", "password": "pw-key-9", "confirm_password":
+        "pw-key-9"})
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
+    assert db.count_users() == 2
+    portfolios = web_client.get("/api/portfolios").get_json()
+    assert [p["name"] for p in portfolios] == ["Main"]
+
+
+def test_signup_validation_ladder(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    db.set_setting("allow_signup", "true")
+    web_client = browser()
+    cases = [
+        ({"username": "x" * 31, "password": "pw-key-9", "confirm_password":
+          "pw-key-9"}, "Usernames are 1 to 30 characters."),
+        ({"username": "kid", "password": "abc", "confirm_password": "abc"},
+         "Passwords are 4 to 128 characters."),
+        ({"username": "kid", "password": "secret-1", "confirm_password":
+          "secret-2"}, "Passwords do not match."),
+        ({"username": "TESTER", "password": "pw-key-9", "confirm_password":
+          "pw-key-9"}, "That username is taken."),
+    ]
+    for form, message in cases:
+        response = web_client.post("/auth/signup", data=form)
+        assert response.status_code == 400, form
+        assert message in response.get_data(as_text=True), form
+    assert db.count_users() == 1
+
+
+def test_signup_refused_when_disabled(fresh_db):
+    seed_user("tester", TESTER_PASSWORD)
+    web_client = browser()
+    assert web_client.post("/auth/signup", data={
+        "username": "neu", "password": "pw-key-9",
+        "confirm_password": "pw-key-9"}).status_code == 409
+    assert db.count_users() == 1
+
+
+def test_signup_setup_mode_redirects_to_setup(fresh_db):
+    assert browser().get("/auth/signup").headers[
+        "Location"].endswith("/auth/setup")
+
+
+def test_signed_in_visitor_redirected_from_signup(client):
+    response = client.get("/auth/signup")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
+
+
+def test_signup_events_logged_without_secrets(fresh_db, caplog):
+    seed_user("tester", TESTER_PASSWORD)
+    db.set_setting("allow_signup", "true")
+    web_client = browser()
+    with caplog.at_level(logging.INFO):
+        output = web_client.post("/auth/signup", data={
+            "username": "neu", "password": "pw-key-9",
+            "confirm_password": "pw-key-9"})
+    assert output.status_code == 302
+    lines = [record.getMessage() for record in caplog.records]
+    assert any("event=user_created " in line and "username='neu'" in line
+               and "source=signup" in line for line in lines)
+    assert "pw-key-9" not in "".join(lines)

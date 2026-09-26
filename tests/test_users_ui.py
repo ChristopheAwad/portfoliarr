@@ -75,3 +75,31 @@ def test_changed_page_scripts_parse_in_javascript_engine():
     engine = MiniRacer()
     for path in ("static/js/common.js", "static/js/preferences.js"):
         engine.eval("new Function(" + json.dumps(source(path)) + ")")
+
+
+# ── Sign-up page and owner toggle (roadmap #27) ───────────────────────
+
+def test_login_page_wires_the_signup_link():
+    page = source("templates/login.html")
+    assert "auth_signup" in page
+    assert "Create an account" in page
+
+
+def test_signup_page_is_a_plain_no_js_form():
+    page = source("templates/signup.html")
+    assert '<form method="post"' in page
+    assert "<script" not in page
+    assert 'name="confirm_password"' in page
+    assert 'autocomplete="new-password"' in page
+
+
+def test_preferences_carries_the_signup_switch():
+    prefs = source("templates/preferences.html")
+    assert 'id="allow-signup"' in prefs
+    assert 'for="allow-signup"' in prefs
+
+
+def test_preferences_js_wires_signup_toggle():
+    js = source("static/js/preferences.js")
+    assert "/api/auth/signup-toggle" in js
+    assert ".checked" in js
