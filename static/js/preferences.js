@@ -319,6 +319,9 @@
             body: JSON.stringify({ allow: on }),
         }, reportPeople);
         if (response && response.ok) {
+            // Re-pin the acknowledged value: a slow boot-time GET could
+            // otherwise repaint the stale (pre-click) state.
+            signupToggle.checked = on;
             showToast(on ? "Open sign-up is on" : "Open sign-up is off",
                 "success");
         } else {

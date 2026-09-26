@@ -77,6 +77,13 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   person may create users or delete OTHER users (self-delete and the
   last user are refused; delete cascades portfolios, transactions, and
   watchlist rows in one transaction; the typed username confirms it).
+  Optionally the signed-in People card can turn `allow_signup` on
+  (app_settings, survives restarts): then the login page carries a
+  Create-an-account link and `/auth/signup` lets anyone on the network
+  self-register — the ONLY path by which a person with no invite gets in.
+  A forgotten password is recovered ONLY from the server terminal:
+  `python app.py reset-password <username>` sets a new hash (typed twice,
+  same length rule; no web or email reset exists).
   Ownership is enforced where identity is resolved — the portfolio hook
   verifies `portfolio_id` against the session user (unknown ID and
   somebody else's ID are the same 404, never a fallback), the watchlist

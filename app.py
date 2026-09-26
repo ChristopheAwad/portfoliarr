@@ -332,7 +332,7 @@ def start_request_timer():
 # against g.user below) and the watchlist/stock routes (always the session
 # user's own rows).
 #
-# Exempt endpoints...: the two auth pages themselves + static files. A
+# Exempt endpoints...: the three auth pages themselves + static files. A
 # page render never leaks data; g.user is None for every signed-out
 # request and something only a real, existing user can name otherwise.
 # ---------------------------------------------------------------------------
@@ -426,16 +426,17 @@ def resolve_portfolio_request():
 # ---------------------------------------------------------------------------
 # AUTH ROUTES — setup (first run), login, logout, and the People API.
 #
-# The pages are PLAIN server-rendered FORMS (templates/login.html and
-# templates/setup.html): no JavaScript, no fetch, no common. Failure
-# re-renders the same page with a message and a 400 status. The browser's
-# password manager owns the credentials' UX; server side, one comparison
-# decides everything.
+# The pages are PLAIN server-rendered FORMS (templates/login.html,
+# templates/setup.html, templates/signup.html): no JavaScript, no fetch,
+# no common. Failure re-renders the same page with a message and a 400
+# status. The browser's password manager owns the credentials' UX; server
+# side, one comparison decides everything.
 #
 # CSRF stance (see the session config at the top): SameSite=Lax plus
-# JSON-only bodies on the mutating API routes. The two FORM routes (setup,
-# login) accept form bodies by design — a cross-site login-form post is a
-# nuisance, not a data risk, on a home server with no open registration.
+# JSON-only bodies on the mutating API routes. The three FORM routes
+# (setup, login, signup) accept form bodies by design — a cross-site
+# login-form post is a nuisance, not a data risk, on a home server whose
+# only open registration is the owner's opt-in sign-up toggle.
 # ---------------------------------------------------------------------------
 
 USERNAME_MAX = 30

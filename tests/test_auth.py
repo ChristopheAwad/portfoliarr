@@ -8,16 +8,14 @@
 # for Yahoo wherever a route body would fetch quotes.
 
 import logging
+import sys
 
 import pytest
-from werkzeug.security import generate_password_hash
-
-import sys
+from werkzeug.security import check_password_hash
 
 import app as app_module
 from app import app, perform_password_reset, run_reset_password_command
 import db
-from werkzeug.security import check_password_hash, generate_password_hash
 from conftest import make_legacy_db, make_quote, seed_user, TESTER_PASSWORD
 
 
@@ -418,7 +416,10 @@ def test_main_no_arguments_means_the_dev_server(monkeypatch):
     monkeypatch.setattr(app_module.app, "run",
                         lambda **options: booted.append(options))
     assert app_module.main(None) == 0
-    assert booted and booted[0]["host"] == "0.0.0.0"
+    assert len(booted) == 1 and booted[0]["host"] == "0.0.0.0"
+    # A LIST argument never boots the server: tests exercise main() freely.
+    assert app_module.main(["app.py"]) == 0
+    assert len(booted) == 1
 
 
 # ── Open sign-up, owner-controlled (roadmap #27, part 2) ──────────────
