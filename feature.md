@@ -1,5 +1,5 @@
 # Password recovery + owner-controlled open sign-up (roadmap #27)
-Status: in progress
+Status: shipped 2026-09-26 (PR #89)
 
 Two parts, both following #26's shape (plain form pages for auth, JSON APIs
 for signed-in management, hashing/trimming stays route policy in `app.py`,

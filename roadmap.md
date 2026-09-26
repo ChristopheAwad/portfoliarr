@@ -235,7 +235,7 @@ no roles, no rate limiting: home-LAN trust, now owner-opt-in.
 `templates/preferences.html`, `static/js/preferences.js`,
 `project-brief.md`, `tests/test_auth.py`, `tests/test_users_ui.py`
 **Depends on:** #26 (shipped)
-**Status:** in progress
+**Status:** shipped 2026-09-26 (PR #89)
 
 ---
 
