@@ -363,7 +363,7 @@ def require_authentication():
     same three-way branch: session.get() gives None or an id that
     db.get_user cannot find — g.user, and the gate decides again.
     """
-    user_id = session.get("user_id") if session is not None else None
+    user_id = session.get("user_id")
     g.user = db.get_user(user_id) if user_id is not None else None
     if g.user is not None:
         return
@@ -2472,8 +2472,9 @@ def add_to_watchlist():
     try:
         db.add_symbol(symbol, g.user["id"])
     except sqlite3.IntegrityError:
-        # The watchlist symbol is its primary key, so this specific database
-        # error means the normalized ticker already exists. Operational
+        # The (user_id, symbol) pair is the watchlist's primary key, so
+        # this specific database error means THIS USER already watches
+        # the normalized ticker. Operational
         # failures (locked/full/unwritable DB) must escape to the JSON 500
         # handler instead of being mislabeled as a harmless duplicate.
         return jsonify({"error": f"{symbol} is already on the watchlist"}), 409

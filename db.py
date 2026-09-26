@@ -376,13 +376,10 @@ def create_user(username, password_hash, seed_main=True):
     """
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (username, password_hash),
-            )
-        except sqlite3.IntegrityError:
-            raise
+        cursor = conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+            (username, password_hash),
+        )
         user_id = cursor.lastrowid
         if seed_main:
             conn.execute(
@@ -472,11 +469,13 @@ def get_portfolios(user_id):
 
 def get_portfolio(portfolio_id, user_id):
     """One portfolio, but only when ITS OWNER signs: an id owned by
-    somebody else is indistinguishable from a made-up id (None)."""
+    somebody else is indistinguishable from a made-up id (None). The
+    reply keeps the pre-#26 reply shape (id, name, sort_order) — the
+    owner check rides in the WHERE clause, not in the payload."""
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT id, name, sort_order, user_id FROM portfolios"
+            "SELECT id, name, sort_order FROM portfolios"
             " WHERE id = ? AND user_id = ?",
             (portfolio_id, user_id)).fetchone()
     return dict(row) if row else None

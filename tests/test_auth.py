@@ -12,7 +12,6 @@ import logging
 import pytest
 from werkzeug.security import generate_password_hash
 
-import app as app_module
 from app import app
 import db
 from conftest import make_legacy_db, make_quote, seed_user, TESTER_PASSWORD

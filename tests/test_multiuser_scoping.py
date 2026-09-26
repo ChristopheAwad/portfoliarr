@@ -103,7 +103,6 @@ def test_omitted_portfolio_id_resolves_within_the_caller(client, fake_market):
 
 
 def test_watchlist_is_per_user(client, fake_market):
-    bert, __ = None, None
     bert_browser = app.test_client()
     bert_id = seed_user("bert")
     with bert_browser.session_transaction() as session:

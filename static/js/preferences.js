@@ -311,13 +311,18 @@
         }
     });
 
-    // The typed-confirmation delete: one round trip, one prompt.
+    // The typed-confirmation delete: one round trip, one prompt. Both
+    // fetches ride the same request() helper as everything else in the
+    // card, so a dropped connection reports "Could not reach the
+    // server." like every other action.
     list.addEventListener("click", async (event) => {
         const target = event.target.closest("button[data-action]");
         const row = target?.closest("li[data-id]");
         if (!row) return;
         const id = Number(row.dataset.id);
-        const response = await fetch("/api/users");
+        const response = await request("/api/users", { method: "GET" },
+            reportPeople);
+        if (!response || !response.ok) return;
         const users = await response.json();
         const person = users.find((item) => item.id === id);
         if (!person) return;
@@ -331,15 +336,15 @@
             reportPeople("The typed username does not match.");
             return;
         }
-        const response2 = await fetch(`/api/users/${id}`, {
+        const response2 = await request(`/api/users/${id}`, {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username: person.username }),
-        });
-        if (response2.status === 204) {
+        }, reportPeople);
+        if (response2 && response2.status === 204) {
             await loadPeople();
             showToast(`${person.username} is deleted`, "success");
-        } else if (response2.status !== 401) {
+        } else if (response2 && response2.status !== 401) {
             const payload = await response2.json().catch(() => null);
             reportPeople(payload?.error
                 || `Could not delete ${person.username}.`);
