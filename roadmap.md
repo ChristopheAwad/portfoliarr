@@ -213,7 +213,7 @@ rows only.
 **Effort:** 1 day
 **Files:** `app.py` (warning helper in the transaction route), `static/js/ledger.js`, `templates/ledger.html`, `static/style.css`, `tests/test_trade_warnings.py`
 **Depends on:** Nothing (#31 covers import rows only)
-**Status:** in progress
+**Status:** shipped 2026-09-27 (PR #91)
 
 ---
 
