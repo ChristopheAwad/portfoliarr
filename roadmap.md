@@ -117,6 +117,19 @@ Gunicorn access-log duplication, or logging inside the pure data layers.
 
 ---
 
+### 30. Holdings Age on the Ledger
+Add a Days Held cell to each ledger ticker group: days elapsed from the current
+open position's first buy to today (the replay is already in `app.py`'s group
+aggregates, so it is a count, not new math). A crossed-then-reopened position
+ages from the reopen buy. SELL-only groups stay blank, and the value sorts as
+a number.
+
+**Effort:** less than 1 day
+**Files:** `app.py`, `static/js/ledger.js`, `templates/ledger.html`, `tests/test_ledger_groups.py`
+**Depends on:** Nothing
+
+---
+
 ### 22. In-App Version Display
 Show the current Portfoliarr release in a quiet About card at the bottom of
 Preferences. Use one root version file for both the Flask UI and Android's
@@ -128,6 +141,35 @@ or build time so the two clients cannot silently drift.
 **Files:** `VERSION`, `app.py`, `templates/preferences.html`, `static/style.css`, `android/app/build.gradle.kts`, `android/gradle.properties`, `project-brief.md`, `tests/test_app_version.py`
 **Depends on:** Nothing
 **Status:** shipped 2026-09-22 (PR #72)
+
+---
+
+### 36. Calendar-Year Realized Gains Report
+The realized replay behind the Closed sales table already computes each sale's
+CAD result from stored facts. Add a yearly grouping on top of it: for each tax
+year, the per-ticker realized total and the year total, shown in a small card
+below Closed sales on the ledger page. The grouping is a pure fold of the
+existing replay, so it makes no quote or FX calls and never goes stale. A year
+whose legs lack a usable rate degrades the same way single rows do, never a
+fake 1:1.
+
+**Effort:** 1–2 days
+**Files:** `app.py` (realized route + pure grouping helper), `static/js/ledger.js`, `templates/ledger.html`, `tests/test_realized_annual.py`
+**Depends on:** Nothing (reuses the shipped realized replay)
+
+---
+
+### 37. Total Return Readout (Realized + Unrealized)
+The dashboard shows unrealized gain and the ledger shows realized-to-date, but
+no single number answers "how much have I made in total". Combine the two into
+one CAD figure (realized + unrealized) with the split shown in a caption. Both
+values come from endpoints already loaded, so nothing new is stored. An
+unpriced holding or a missing rate degrades the figure rather than assuming
+1:1.
+
+**Effort:** 1 day
+**Files:** `app.py` (reuse summary + realized), `static/js/main.js`, `templates/index.html`, `tests/test_total_return.py`
+**Depends on:** Nothing
 
 ---
 
@@ -144,6 +186,48 @@ no bar stays null and is reported with its count. It uses historical bars only
 **Files:** `db.py`, `app.py`, `tests/test_fx_backfill.py`
 **Depends on:** Nothing (#19 shipped the historical-bar path; #27 set the CLI command pattern)
 **Status:** shipped 2026-09-27 (PR #90)
+
+---
+
+### 40. Calendar Returns Table
+The TWR index returned by `/api/portfolio/history` is already flow-adjusted.
+Turn it into a month and year returns table: month rows for roughly the last
+year, year rows for the portfolio's life, each the percentage change of the
+index across that span. The table reads `index_values`; it never re-derives
+returns from raw value deltas, so buys and sells cannot fake a result.
+
+**Effort:** 1–2 days
+**Files:** `app.py` (pure chaining helper + reply field), `static/js/common.js`, `static/js/main.js`, `templates/index.html`, `tests/test_calendar_returns.py`
+**Depends on:** #13 (shipped, provides `index_values`)
+
+---
+
+### 45. Ledger Trade Sanity Warnings
+The ledger form checks field shape only. Add server-computed warnings returned
+with the saved transaction: a date in the future, a SELL larger than the
+position held at that date, and a same-day duplicate (same ticker, type,
+quantity, and price). The write still happens; the form shows the warning so a
+mistake is visible. This is separate from #31, which compares paste-imported
+rows only.
+
+**Effort:** 1 day
+**Files:** `app.py` (warning helper in the transaction route), `static/js/ledger.js`, `templates/ledger.html`, `static/style.css`, `tests/test_trade_warnings.py`
+**Depends on:** Nothing (#31 covers import rows only)
+**Status:** in progress
+
+---
+
+### 47. Database Backup and Restore
+A signed-in action in Preferences downloads the whole SQLite file, and a
+matching upload replaces it after a typed confirmation and a schema check.
+Download uses a consistent snapshot taken while no writes run. Restore is a
+full replacement, not a merge, and refuses a file whose schema is newer than
+the running app. On a home-LAN install any signed-in person may restore; the
+typed confirmation and the schema guard are the only protections.
+
+**Effort:** 1–2 days
+**Files:** `db.py` (backup/restore helpers), `app.py` (routes), `static/js/preferences.js`, `templates/preferences.html`, `tests/test_backup_restore.py`
+**Depends on:** #26 (shipped, for signed-in scope)
 
 ---
 
@@ -233,6 +317,60 @@ No open registration, no roles, no rate limiting (home-LAN trust model).
 
 ---
 
+### 28. Target Allocation with Drift
+Set a target weight per holding inside each portfolio: one form on the ledger
+page lists the portfolio's live tickers and takes whole-number targets that
+sum to exactly 100 (a number input, a clear inline error, and nothing saved
+otherwise). The dashboard allocation view and ledger group rows then show each
+holding's delta CAD and delta percentage points versus target; unallocated
+tickers are marked 0% and drift from the current mix only. Targets are deleted
+with their portfolio and survive ticker changes untouched; clearing the form
+saves a targetless portfolio and removes every mark. The server returns
+`target_pct` per group from ledger data in the reply; the JS paints the delta.
+
+**Effort:** 2 days
+**Files:** `db.py` (new per-portfolio table), `app.py` (routes + drift in
+group aggregates), `static/js/main.js`, `static/js/ledger.js`,
+`templates/index.html`, `templates/ledger.html`, `tests/test_alloc_targets.py`
+
+---
+
+### 32. Server-Side User Preferences
+Move the portable browser state into the user's account so phone and PC agree.
+A `preferences` table keyed by user ID (`json TEXT DEFAULT '{}'`) stores each
+signed-in person's ledger display mode, chart period and view, allocation
+carousel page, and active portfolio choice. One pair of endpoints serves and
+accepts the blob (`GET/PUT /api/preferences`, last write wins, plain enough to
+autosave); `common.js` consults it before any saved localStorage value, and
+the first signed-in run rebuilds the blob from whatever `localStorage` still
+holds on that browser and clears it (no migration). Not carried: the privacy
+toggles stay local-only by design, and Android stays cookie-only.
+
+**Effort:** 1 day
+**Files:** `db.py`, `app.py`, `static/js/common.js`, `static/js/main.js`,
+`static/js/ledger.js`, `static/js/preferences.js`,
+`tests/test_preferences.py`
+
+---
+
+### 33. Watchlist Target Prices
+Add an optional target price to each watchlist row. A small input on the
+watchlist row (and the same field on the stock page for a watched ticker)
+sets it; the row's price cell tints when the live quote crosses the target
+(green at or above a buy target, red at or below a sell target). The tint is
+display-only: the stored fact is the target price, and the hit state is
+computed from live quotes at paint time so it can never go stale. Which side
+a target means (buy or sell) is implicit: a target below your cost basis is
+a buy target, at or above it is a sell target. Nothing is ever sent: no
+email, no push, no Android intent — the tint waits for someone to look.
+
+**Effort:** 1 day
+**Files:** `db.py` (nullable `target_price` on watchlist rows), `app.py`,
+`static/js/main.js`, `static/js/stock.js`, `templates/index.html`,
+`templates/stock.html`, `tests/test_watchlist_targets.py`
+
+---
+
 ### 27. Account Recovery + Owner-Controlled Open Sign-Up
 Close the two gaps #26 left on purpose. `python app.py reset-password
 <username>` sets a new password for any account from the server terminal
@@ -252,6 +390,80 @@ no roles, no rate limiting: home-LAN trust, now owner-opt-in.
 `project-brief.md`, `tests/test_auth.py`, `tests/test_users_ui.py`
 **Depends on:** #26 (shipped)
 **Status:** shipped 2026-09-26 (PR #89)
+
+---
+
+### 29. Transaction Notes and Tags
+Add an optional note and optional tags to each transaction. A NOTE is free
+text the ledger shows on the transaction's detail row and nowhere else ("why
+I bought", "stop-loss plan"). A TAG is a short saved word for grouping
+("RRSP", "speculative"): the ledger form offers the portfolio's existing tag
+names in a datalist (typing exactly the saved spelling), and the detail row
+shows it as a passive chip; clicking a group row's chips filters that
+ledger's detail rows to the tag. Tags live in a nullable text column on the
+transaction row (comma-separated within one row is enough; no tag table). No
+new endpoints beyond a per-portfolio tag list; fees (PR #79) set the
+`ALTER TABLE` migration pattern.
+
+**Effort:** 2 days
+**Files:** `db.py`, `app.py`, `static/js/ledger.js`,
+`templates/ledger.html`, `tests/test_tx_notes_tags.py`
+
+---
+
+### 42. Contribution to Return
+For the selected chart period, show each holding's contribution to the
+portfolio's TWR in percentage points. The `portfolio_history` walk already
+prices every symbol at every bar, so record each symbol's start-of-window value
+and its value change per bar, then divide by the portfolio's start value. A
+reconciliation line shows the gap between the summed contributions and the
+total return, which comes from flow timing. Shown as a small ranked list near
+the chart.
+
+**Effort:** 2–3 days
+**Files:** `app.py` (pure fold helper + reply field), `static/js/main.js`, `templates/index.html`, `static/style.css`, `tests/test_contribution.py`
+**Depends on:** #13 (shipped) for the flow-adjusted index
+
+---
+
+### 46. Stock-Split Adjustment
+A split changes share count and average cost with no trade. Add a `SPLIT`
+transaction type: a row stores the ratio, and the replays fold it by
+multiplying quantity and dividing average cost, with no cash effect. Extend the
+`transaction_type` CHECK constraint, the validator, the ledger form and display,
+and both the average-cost replay (#1) and the realized replay. Existing rows
+never change, and the split folds at its own date like any other fact.
+
+**Effort:** 2–3 days
+**Files:** `db.py` (CHECK constraint + migration), `app.py` (validator + replays), `static/js/ledger.js`, `templates/ledger.html`, `project-brief.md`, `tests/test_splits.py`
+**Depends on:** Nothing (touches the average-cost and realized replays)
+
+---
+
+### 48. Broker-Specific CSV Import Maps
+Paste import expects one generic shape (`parse_import_text`). Add named column
+maps for common broker exports (for example a Questrade or Wealthsimple
+activity CSV), chosen in the import panel. The maps live server-side and feed
+the same `parse_import_text` path, so preview, commit, and duplicate detection
+(#31) keep working. An unrecognized column set falls back to the generic parser
+with a clear message.
+
+**Effort:** 2–3 days
+**Files:** `app.py` (map definitions + parser), `static/js/ledger.js`, `templates/ledger.html`, `tests/test_import_maps.py`
+**Depends on:** Nothing (extends cleanly alongside #31)
+
+---
+
+### 51. Android Home-Screen Widget
+A resizable widget shows one portfolio's total and day change. Since no app
+process runs in a widget, it fetches a small read-only JSON on a WorkManager
+schedule. Add a scoped, revocable read-only token tied to one portfolio when
+the token is created in Preferences; the widget stores it locally. Refresh uses
+Android's minimum interval (about 30 minutes) plus a manual tap.
+
+**Effort:** 3–5 days
+**Files:** `android/app/src/main/java/com/portfoliarr/app/widget/` (new), `android/app/src/main/AndroidManifest.xml`, `android/app/build.gradle.kts`, `android/app/src/main/res/xml/` (widget info), `app.py` (token endpoint), `db.py` (token table), `static/js/preferences.js`, `templates/preferences.html`, `tests/test_widget_token.py`
+**Depends on:** #26 (shipped) for accounts; the token names its own portfolio, so it does not need #32
 
 ---
 
@@ -336,6 +548,48 @@ guards.
 
 ---
 
+### 31. Import Duplicate Detection
+Compare paste-imported rows against the portfolio's existing transactions
+during the preview: a row is a duplicate when symbol, date, type, quantity,
+native price, and fee all match an existing row (fees default to null on both
+sides). The preview marks duplicated rows and adds a count line above the
+commit buttons; commit stays all-or-nothing, so confirming the import of
+flagged duplicates is one visible click. Tests cover a date written with
+digit pairs transposed (the kind of mistype a duplicate check must not
+silently wave through) and the null-fee-on-both-sides comparison.
+
+**Effort:** 1 day
+**Files:** `app.py` (`parse_import_text` reply), `static/js/ledger.js`,
+`static/style.css`, `tests/test_import_duplicates.py`
+
+---
+
+### 34. Quick-Watch Star in Search
+Add a star button to each result in the dashboard search dropdown: one click
+adds the ticker to the signed-in person's watchlist and fills the star; a
+second click removes it. No page navigation, no stock-page round trip, and
+rows you already watch show a filled star from the existing watchlist cache.
+
+**Effort:** less than 1 day
+**Files:** `static/js/main.js`, `templates/index.html`, `static/style.css`,
+`tests/test_search_star_ui.py`
+
+---
+
+### 50. Rebalance Share Counts
+Extends #28. Where #28 shows each holding's drift from its target, this turns
+the drift into a count. Given the portfolio total and each holding's live
+price, show the whole number of shares to buy or sell to reach the target, plus
+the cash to add or withdraw. Display only; the user still logs the trades. Uses
+the target table from #28 and quotes already loaded. Lower priority.
+
+**Effort:** 1 day
+**Files:** `app.py` (share-count math in the allocation reply), `static/js/main.js`, `static/js/ledger.js`, `tests/test_rebalance.py`
+**Depends on:** #28
+**Priority:** Back burner (lower priority per user)
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -376,10 +630,24 @@ they are deferred to a later Android-only change.
 
 ---
 
+### 35. Android Pull-to-Refresh and Share
+Two small native-client touches that keep business logic in the web app and
+Kotlin to WebView lifecycle and navigation. First, swipe-to-refresh: Android
+browsers refresh with a pull from the top of the screen but a WebView does
+not, so wrap the existing WebView in a SwipeRefreshLayout that reloads when
+the pull starts from the top. Second, share: a button on the stock detail
+page opens the Android share sheet with the page's plain URL, so a ticker
+page can be handed to someone through any installed app.
+
+**Effort:** 1 day
+**Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/res/drawable/` for the pull indicator tint, `templates/stock.html`, `static/js/stock.js`, Android tests
+
+---
+
 ## Dependency Graph
 
 ```
-Tier 1 (all independent):
+Tier 1 (all independent; shipped dependencies are noted but do not block):
   1. Average Cost ─────────────────────┐
   2. CSV Export ───────────────────────┤
   3. Transaction Fees ─────────────────┤── can be done in any order
@@ -389,7 +657,14 @@ Tier 1 (all independent):
   18. Ledger Quick Sell ─────────────────┤
   19. Date-Aware Price Auto-Fill ────────┤
   21. High-Value Operational Logging ────┤
-  22. In-App Version Display ─────────────┘
+  22. In-App Version Display ────────────┤
+  30. Holdings Age on the Ledger ────────┤
+  36. Calendar-Year Realized Gains ──────┤
+  37. Total Return Readout ──────────────┤
+  39. Historical FX Backfill ────────────┤
+  40. Calendar Returns Table (#13) ──────┤
+  45. Ledger Trade Sanity Warnings ──────┤
+  47. Database Backup and Restore (#26) ─┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -397,7 +672,13 @@ Tier 2 (all independent of each other):
   8. Multi-Currency ───────────────────┤   (#17 replaces #7)
   17. Comparison Overlays ──────────────┤
   23. Several Named Portfolios ─────────┤
-  26. Multi-User Accounts ──────────────┘
+  26. Multi-User Accounts ──────────────┤
+  28. Target Allocation with Drift ─────┤
+  29. Transaction Notes and Tags ───────┤
+  42. Contribution to Return (#13) ─────┤
+  46. Stock-Split Adjustment ───────────┤
+  48. Broker-Specific CSV Import Maps ──┤
+  51. Android Home-Screen Widget ───────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -407,11 +688,17 @@ Tier 2.5:
   15. Allocation Carousel Pagination ─── independent frontend quick extend
   20. Dashboard Market Tabs ──────────── independent frontend/API quick extend
   24. Parallel Market Tab Preload ────── depends on #20 (shipped)
+  31. Import Duplicate Detection ─────── independent
+  32. Server-Side User Preferences ───── independent
+  33. Watchlist Target Prices ────────── independent
+  50. Rebalance Share Counts ─────────── depends on #28
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
   12. Stats Caching ───────────────────┤── can be done in any order
-  25. Coin-Stack Brand Mark ────────────┘
+  25. Coin-Stack Brand Mark (shipped) ──┤
+  34. Quick-Watch Star in Search ───────┤
+  35. Android Pull-to-Refresh and Share ┘
 ```
 
 ---
@@ -422,17 +709,21 @@ For maximum compounding value:
 
 1. **Transaction Fees** → makes cost basis realistic
 2. **Average Cost** → displays the now-real cost basis (shipped)
+39. **Historical FX Backfill** → repairs old rows so cost and realized math stop degrading
 18. **Ledger Quick Sell** → prepares an exact full-position sale for review from the ledger row
 19. **Date-Aware Ledger Price Auto-Fill** → prices a logged transaction at its actual date
 4. **Sector Breakdown** → deeper allocation insight (shipped)
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app
+46. **Stock-Split Adjustment** → keep quantity and cost honest through a split
 7. **Benchmark Line** → context for performance (superseded by #17)
 8. **Multi-Currency** → international expansion
 17. **Comparison Overlays** → arbitrary ticker/portfolio comparison; replaces #7
 9. **Dashboard Period Return** → shows the selected chart period's TWR without replacing live daily facts
 13. **TWR Performance Chart** → honest performance measurement; builds the rebase-to-100 machinery #7 needs
 14. **TWR Flow Timing** → tightens #13's mirror rule (edge-case correctness)
+40. **Calendar Returns Table** → month and year returns from the TWR index
+42. **Contribution to Return** → which holdings drove the period
 15. **Allocation Carousel Pagination** → clarifies the existing six allocation views
 20. **Dashboard Market Overview Tabs** → puts broad live market context before the portfolio
 21. **High-Value Operational Logging** → makes production failures, slow requests, and data changes diagnosable without exposing financial amounts
@@ -440,11 +731,27 @@ For maximum compounding value:
 23. **Several Named Portfolios** → separates ledgers and portfolio calculations (#26 later scoped them per person, replacing the shared watchlist)
 24. **Parallel Market Tab Preload** → starts all market tabs together and reuses recent results on tab changes
 26. **Multi-User Accounts** → login + ownership, so portfolios and the watchlist belong to a person
+27. **Account Recovery + Sign-Up** → closes #26's two deliberate gaps (shipped)
+28. **Target Allocation with Drift** → you set the mix, the app shows how far each holding has wandered from it
+50. **Rebalance Share Counts** → target drift turned into shares to trade (back burner)
+29. **Transaction Notes and Tags** → record why you traded; filter the ledger by tag
+36. **Calendar-Year Realized Gains** → the tax-year view of results you already compute
+31. **Import Duplicate Detection** → the preview flags rows you already logged so a double paste cannot double your cost basis
+45. **Ledger Trade Sanity Warnings** → a future date, an oversell, or a duplicate surfaces at save
+48. **Broker-Specific CSV Import Maps** → paste a broker export without reshaping it
+32. **Server-Side User Preferences** → phone and PC stop disagreeing about display mode, chart period, and active portfolio
+33. **Watchlist Target Prices** → the row tints when the live quote crosses your target
+37. **Total Return Readout** → realized plus unrealized in one number
+30. **Holdings Age on the Ledger** → days held per group, a count on aggregates that already exist
+34. **Quick-Watch Star in Search** → add to the watchlist without leaving the dropdown
+35. **Android Pull-to-Refresh and Share** → the two gestures phone users expect from a client app
+51. **Android Home-Screen Widget** → the portfolio total on the launcher
+47. **Database Backup and Restore** → a copy of the whole ledger you can put back
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 25. **Coin-Stack Brand Mark** → one consistent brand across web and Android
 
-Back burner (user request): #2 CSV Export and #16 Android Biometric/PIN Lock.
+Back burner (user request): #2 CSV Export, #16 Android Biometric/PIN Lock, and #50 Rebalance Share Counts.
 
 ---
 

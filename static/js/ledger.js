@@ -41,6 +41,7 @@
 // Grab the pieces this section manages, once, at load time.
 const txForm = document.querySelector("#tx-form");
 const txErrorEl = document.querySelector(".tx-error");
+const txWarningsEl = document.querySelector(".tx-warnings");
 const txEditingEl = document.querySelector(".tx-editing");
 const txEditingTextEl = txEditingEl.querySelector(".tx-editing-text");
 const txCancelBtn = txEditingEl.querySelector(".tx-cancel");
@@ -265,6 +266,21 @@ function setLedgerMessage(text) {
     cell.textContent = text;
     row.append(cell);
     ledgerBody.append(row);
+}
+
+// Paint the non-blocking sanity warnings a saved transaction returned
+// (#45). Rebuilt from scratch every save so the block always reflects the
+// LATEST save; hidden when there is nothing to say. textContent only —
+// warning strings are server-authored, but this keeps the no-innerHTML
+// rule the rest of the file follows.
+function setTradeWarnings(messages) {
+    txWarningsEl.textContent = "";
+    for (const message of messages) {
+        const item = document.createElement("li");
+        item.textContent = message;
+        txWarningsEl.append(item);
+    }
+    txWarningsEl.hidden = messages.length === 0;
 }
 
 // Which ledger groups are expanded, keyed by ticker. This lives OUTSIDE
@@ -1492,8 +1508,10 @@ txForm.addEventListener("submit", async (event) => {
         type: fields.type,
     };
 
-    // Fresh attempt, fresh error state.
+    // Fresh attempt, fresh error state (warnings from the previous save
+    // die here too — they describe that trade, not this one).
     txErrorEl.hidden = true;
+    setTradeWarnings([]);
 
     try {
         // Branch on mode: PUT for the row being edited (body is exactly
@@ -1538,6 +1556,12 @@ txForm.addEventListener("submit", async (event) => {
             // group, making the POST look like it did nothing.
             expandedTickers.add(body.ticker);
         }
+        // The write succeeded; surface its non-blocking warnings (if any)
+        // before resetting the form. The reply body may be empty/unparseable
+        // in the worst case, so a failed parse simply means no warnings.
+        const saved = await response.json().catch(() => null);
+        setTradeWarnings(saved?.warnings || []);
+
         // Success: back to log mode (resets the form AND reapplies the
         // today-default date in one place), then pull the truth
         // immediately rather than waiting for the next poll.

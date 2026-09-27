@@ -1925,6 +1925,15 @@ input[type="date"]::-moz-placeholder {
     margin-bottom: 10px;
 }
 
+/* Non-blocking trade warnings (#45) — the accent "state, not error"
+   palette, so red stays reserved for a save that actually failed. */
+.tx-warnings {
+    color: var(--accent);
+    font-size: 13px;
+    margin: 0 0 10px;
+    padding-left: 18px;
+}
+
 /* Import panel (transaction importer). A boxed sub-card inside the ledger
    card: the border sets it apart from the log form above it. */
 .import-panel {

@@ -1,200 +1,296 @@
-# Historical FX backfill (roadmap #39)
+# Ledger Trade Sanity Warnings (roadmap #45)
 
 Status: in progress
 
-A terminal maintenance command, NOT a Preferences button (the button would be a
-one-time no-op). `python app.py backfill-fx <username|--all>` finds every USD
-transaction whose stored `fx_rate` is NULL, re-derives the historical USDCAD
-close on that row's own date, writes it back, and reports fixed/unresolved
-counts. It NEVER guesses: it calls `get_fx_rate_on` (historical bar only) and
-has NO live-rate fallback, so a date with no bar stays NULL.
+The ledger's write routes validate field SHAPE only. This feature adds
+server-computed, NON-BLOCKING sanity warnings returned with a saved
+transaction. The write always happens; the form shows the warnings so a
+mistake is visible. This is deliberately separate from #31 (import duplicate
+detection), which compares paste-imported rows BEFORE writing.
 
-Write every failing test named below FIRST, then implement, then run the FULL
-`python -m pytest` suite. Never commit.
+Three warnings, in this fixed order:
+1. a date in the future,
+2. a SELL larger than the position held on that date,
+3. a same-day duplicate (same ticker, date, type, quantity, AND price).
+
+Write every failing test named below FIRST, then implement, then run the
+FULL `python -m pytest` suite. Never commit.
 
 ## Locked decisions (user-approved)
-- Command name: `backfill-fx`. Flag: `--all`.
-- Exit code `0` when the command ran, even if some rows stay unresolved
-  (a Yahoo gap is honest, not a failure). `1` only for unknown user or bad
-  usage.
-- Historical only. Never reuse `_derive_fx_rate` (it falls back to the live
-  rate).
-- NULL-only. A row that already holds a rate is never rewritten.
-- Scope: one user by name, or every user with `--all`. Each user's own
-  portfolios only. Unclaimed (`user_id NULL`) portfolios are skipped.
+- Duplicate match fields: ticker, date, type, qty, AND price (fee ignored).
+  qty and price compared with the module tolerance `FLAT_QTY_TOL` (1e-9).
+- Warnings are non-blocking: POST still returns 201 and stores; PUT still
+  returns 200 and stores.
+- Display: an inline `.tx-warnings` block under the form (persists until the
+  next submit). Adds `static/style.css` to the roadmap's file list.
+- Import preview/commit replies are NOT touched.
+- No schema change, no new endpoint, no new migration.
 
-## 1. db.py — two new functions (NO schema change)
+## 1. app.py — pure helper `compute_trade_warnings`
 
-Place near `set_password` / `update_transaction`.
+Place immediately AFTER `validate_tx_fields` (so it sits with the other
+transaction-field logic) and BEFORE `_derive_fx_rate`.
 
-1. `get_unrated_usd_transactions(portfolio_id)`:
-   - Returns a list of plain dicts `{"id", "ticker", "transaction_date"}`.
-   - SQL:
-     ```sql
-     SELECT id, ticker, transaction_date FROM transactions
-     WHERE portfolio_id = ? AND currency = 'USD' AND fx_rate IS NULL
-     ORDER BY transaction_date, id
-     ```
-   - Use `conn.row_factory = sqlite3.Row` + `dict(row)`, same as
-     `get_transactions`.
-2. `set_fx_rate(tx_id, fx_rate)`:
-   - SQL `UPDATE transactions SET fx_rate = ? WHERE id = ?`.
-   - Return `cursor.rowcount > 0` (dumb trusted writer, same shape as
-     `set_password`). No portfolio check: the caller selected the id from a
-     portfolio it already resolved.
-   - Docstring must say this is ONLY for the maintenance backfill and that the
-     normal write paths (`add_transaction` / `update_transaction`) still own
-     fx_rate derivation.
-
-## 2. app.py — CLI block next to the reset-password CLI (before `main`)
-
-`get_fx_rate_on` is already imported at app.py line 51. Use `db`, `app.logger`.
-
-### 2a. `perform_fx_backfill(user_id)`
-Returns a summary dict:
 ```python
-{"fixed": int, "unresolved": [{"ticker": str, "date": str, "reason": str}, ...]}
+def compute_trade_warnings(rows, *, ticker, transaction_date, qty, price,
+                           transaction_type, exclude_id, today=None):
+    """Return human-readable, NON-BLOCKING warnings for one saved trade.
+
+    `rows` is db.get_transactions(portfolio_id) — stored facts, newest
+    first (order is irrelevant: the future check is per-field and the
+    oversell fold is a sum). `exclude_id` is the row the route just
+    wrote (POST) or updated (PUT): a row must never flag itself.
+
+    Pure and side-effect free: no DB, no network. The route owns the
+    fetch and the reply. Warnings never block a write.
+    """
+    warnings = []
+    today_iso = (today or date.today()).isoformat()
+
+    if transaction_date > today_iso:
+        warnings.append("date is in the future")
+
+    if transaction_type == "SELL":
+        held = 0.0
+        for row in rows:
+            if row["id"] == exclude_id:
+                continue
+            if row["ticker"] != ticker:
+                continue
+            if row["transaction_date"] > transaction_date:
+                continue
+            if row["transaction_type"] == "BUY":
+                held += row["qty"]
+            else:
+                held -= row["qty"]
+        if qty > held + FLAT_QTY_TOL:
+            warnings.append(
+                f"sell of {qty:g} exceeds the {held:g} shares held on "
+                f"{transaction_date}"
+            )
+
+    for row in rows:
+        if row["id"] == exclude_id:
+            continue
+        if (row["ticker"] == ticker
+                and row["transaction_date"] == transaction_date
+                and row["transaction_type"] == transaction_type
+                and abs(row["qty"] - qty) <= FLAT_QTY_TOL
+                and abs(row["price"] - price) <= FLAT_QTY_TOL):
+            warnings.append(
+                "duplicate: same ticker, date, type, quantity and price "
+                "already logged"
+            )
+            break
+
+    return warnings
 ```
-- `summary = {"fixed": 0, "unresolved": []}`.
-- For each `p in db.get_portfolios(user_id)`:
-  - For each `row in db.get_unrated_usd_transactions(p["id"])`:
-    - `try: rate = get_fx_rate_on("USD", "CAD", row["transaction_date"])`.
-    - Success → `db.set_fx_rate(row["id"], rate)`; `summary["fixed"] += 1`.
-    - `except Exception as exc:` append
-      `{"ticker": row["ticker"], "date": row["transaction_date"],
-        "reason": str(exc)}`. Do NOT increment fixed.
-      - NOTE: catch broadly, exactly like `_derive_fx_rate`, because Yahoo
-        raises `KeyError`/network errors as well as `ValueError`.
-- After the loops, log ONCE at INFO with NO amounts:
-  ```python
-  app.logger.info(
-      "event=fx_backfill user_id=%d fixed=%d unresolved=%d",
-      user_id, summary["fixed"], len(summary["unresolved"]),
-  )
-  ```
-- Return `summary`.
 
-### 2b. `run_backfill_fx_command(target)`
-- Build the user list:
-  - `target == "--all"` → `users = db.get_users()` (list of `{"id","username"}`).
-  - Else → `user = db.get_user_by_username((target or "").strip())`; if `None`:
-    `print("No account with that name on this server.", file=sys.stderr)`;
-    return `1`. Else `users = [user]`.
-- `total_fixed = 0`; `unresolved_lines = []`.
-- For each user: `summary = perform_fx_backfill(user["id"])`;
-  `total_fixed += summary["fixed"]`;
-  print to stdout per user:
-  `f"Fixed {summary['fixed']} rate(s) for {user['username']}; "
-   f"{len(summary['unresolved'])} could not be resolved."`;
-  for each unresolved `u`: append
-  `f"Could not resolve: {u['ticker']} {u['date']} ({u['reason']})"`.
-- Print each unresolved line to stdout after the per-user lines.
-- Return `0`.
+Notes for the implementer:
+- `date` and `FLAT_QTY_TOL` already exist at module scope. Do not add imports.
+- The oversell branch uses `<=` on the date so same-day buys count and
+  same-day other sells subtract. A SELL that opens a short therefore warns
+  by design (shorting is supported; this is a warning, not an error).
+- `{qty:g}` / `{held:g}` format without trailing zeros. `held` may be
+  negative (already short) — the message shows the negative number; that is
+  honest.
 
-### 2c. `_dispatch(argv)` — extend only
-Replace the body so it dispatches two commands:
+## 2. app.py — wire into POST `log_transaction`
+
+After the `tx_id = db.add_transaction(...)` call and the existing INFO log,
+compute warnings and add them to the 201 reply:
+
 ```python
-def _dispatch(argv):
-    args = argv[1:]
-    command = args[0] if args else ""
-    if command == "reset-password" and len(args) == 2:
-        return run_reset_password_command(args[1])
-    if command == "backfill-fx" and len(args) == 2:
-        return run_backfill_fx_command(args[1])
-    print("usage: python app.py reset-password <username>", file=sys.stderr)
-    print("usage: python app.py backfill-fx <username|--all>", file=sys.stderr)
-    return 1
+    warnings = compute_trade_warnings(
+        db.get_transactions(g.portfolio_id),
+        ticker=ticker,
+        transaction_date=fields["transaction_date"],
+        qty=fields["qty"],
+        price=fields["price"],
+        transaction_type=fields["transaction_type"],
+        exclude_id=tx_id,
+    )
 ```
-- `main(argv)` and the `__main__` guard are UNCHANGED.
-- The existing `test_main_dispatch_reset_and_usage` still passes: its exact
-  string is still printed on the bad-arity reset path.
 
-### 2d. No Docker change
-Docker runs `gunicorn app:app`, so the CLI block is unreachable in the
-container. `tests/test_docker.py` must stay green untouched.
+Then add `"warnings": warnings,` to the returned dict (anywhere among the
+keys; put it last for readability).
 
-## 3. NEW tests/test_fx_backfill.py (write first, all must fail)
+## 3. app.py — wire into PUT `edit_transaction`
+
+Immediately before the `return jsonify(stored)`:
+
+```python
+    stored["warnings"] = compute_trade_warnings(
+        db.get_transactions(g.portfolio_id),
+        ticker=stored["ticker"],
+        transaction_date=fields["transaction_date"],
+        qty=fields["qty"],
+        price=fields["price"],
+        transaction_type=fields["transaction_type"],
+        exclude_id=tx_id,
+    )
+```
+
+The reply is still the DB row plus this one added key; the existing
+log line and re-read behavior are unchanged.
+
+## 4. Frontend — inline warning block
+
+### 4a. templates/ledger.html
+
+Immediately after `<p class="tx-error" hidden></p>` (line ~191), add:
+
+```html
+                <!-- Non-blocking sanity warnings for a JUST-SAVED trade
+                     (future date, oversell, same-day duplicate). The write
+                     already happened — this is a notice, not an error. -->
+                <ul class="tx-warnings" hidden></ul>
+```
+
+Keep it INSIDE `#tx-logger-wrap`, directly below the error line.
+
+### 4b. static/js/ledger.js
+
+1. Near the existing `const txErrorEl = document.querySelector(".tx-error");`
+   (line ~43), add:
+   ```js
+   const txWarningsEl = document.querySelector(".tx-warnings");
+   ```
+
+2. Add a small paint helper near `setLedgerMessage` (or just above the
+   submit handler) that wipes and rebuilds the list:
+   ```js
+   function setTradeWarnings(messages) {
+       txWarningsEl.textContent = "";
+       for (const message of messages) {
+           const item = document.createElement("li");
+           item.textContent = message;
+           txWarningsEl.append(item);
+       }
+       txWarningsEl.hidden = messages.length === 0;
+   }
+   ```
+
+3. In the submit handler, at the same place `txErrorEl.hidden = true;`
+   runs (fresh attempt), also clear warnings:
+   `setTradeWarnings([]);`
+
+4. On the SUCCESS branch, BEFORE `exitEditMode();`, read the reply body and
+   paint its warnings. The response body may not be JSON (defensive):
+   ```js
+   const saved = await response.json().catch(() => null);
+   setTradeWarnings(saved?.warnings || []);
+   ```
+   Order matters: `exitEditMode()` resets the FORM fields but must not wipe
+   the warning block, so paint before or after it — the helper only touches
+   `.tx-warnings`, never the form. Keep `exitEditMode(); refreshLedgerViews();`
+   exactly as they are.
+
+### 4c. static/style.css
+
+Directly after the `.tx-error` rule (line ~1922) add:
+
+```css
+/* Non-blocking trade warnings — the amber "state, not error" palette (the
+   write already happened), so red stays reserved for a failed save. */
+.tx-warnings {
+    color: var(--accent);
+    font-size: 13px;
+    margin: 0 0 10px;
+    padding-left: 18px;
+}
+```
+
+Use the existing `--accent` token (no new variable). If `--accent` is a
+link/button color that reads oddly, fall back to the existing warning/state
+token in style.css — pick ONE and keep the class name `.tx-warnings`.
+
+## 5. NEW tests/trade_warnings tests — write FIRST, all must fail
+
+File: `tests/test_trade_warnings.py`.
 
 Imports:
 ```python
-import logging
 import db
 import app as app_module
-from app import perform_fx_backfill, run_backfill_fx_command
-from conftest import seed_user, main_portfolio_id
+from app import compute_trade_warnings
+from conftest import make_quote, seed_user, main_portfolio_id
 ```
-Helpers to define in the file:
-- `def add(pid, ticker="AAPL", date="2026-01-02", currency="USD",
-   fx_rate=None):` → `db.add_transaction(ticker, date, 10.0, 2.0, currency,
-   "BUY", fx_rate, portfolio_id=pid)`; return the new id.
-   `db.add_transaction` signature is `(ticker, transaction_date, price, qty,
-   currency, transaction_type, fx_rate, fee=None, *, portfolio_id)`; it
-   returns `cursor.lastrowid`.
 
-Tests (use `fake_market` for `fx_on`):
-`fake_market.fx_on[("USDCAD", date)] = rate` supplies a bar; an ABSENT key
-raises (models a Yahoo gap). `fake_market.fx_rates["USDCAD"]` is the live rate.
+Helper:
+```python
+def seed(price, qty, side="BUY", date="2026-08-01",
+         currency="CAD", fx=1.0, ticker="ABC", pid=1):
+    return db.add_transaction(ticker, date, price, qty, currency, side, fx,
+                              portfolio_id=pid)
+```
 
-1. `test_backfill_fills_null_usd_row(fresh_db, fake_market)`:
-   - `uid = seed_user("tester")`; `pid = main_portfolio_id(uid)`.
-   - `tx_id = add(pid)`; `fake_market.fx_on[("USDCAD","2026-01-02")] = 1.31`.
-   - `s = perform_fx_backfill(uid)`.
-   - Assert `s["fixed"] == 1`, `s["unresolved"] == []`.
-   - Assert `db.get_transaction(tx_id, pid)["fx_rate"] == 1.31`.
-2. `test_backfill_ignores_cad_and_rated_rows(fresh_db, fake_market)`:
-   - CAD row (`currency="CAD"`, `fx_rate=None`) and USD row with
-     `fx_rate=1.25`; plus one NULL USD row with a bar.
-   - Assert `s["fixed"] == 1`; CAD row's stored fx_rate is `None` (backfill
-     does not invent 1.0 — `db.init`'s migration is a different path);
-     rated USD row still `1.25`.
-3. `test_backfill_unresolved_stays_null(fresh_db, fake_market)`:
-   - One NULL USD row, NO `fx_on` key.
-   - Assert `s["fixed"] == 0`, `len(s["unresolved"]) == 1`,
-     `s["unresolved"][0]["date"] == "2026-01-02"`; stored rate still `None`.
-4. `test_backfill_never_uses_live_rate(fresh_db, fake_market)`:
-   - One NULL USD row, NO historical key, but set
-     `fake_market.fx_rates["USDCAD"] = 1.40`.
-   - Assert `s["fixed"] == 0` and stored rate still `None` (no live fallback).
-5. `test_backfill_covers_all_user_portfolios(fresh_db, fake_market)`:
-   - `uid`; `pid = main_portfolio_id(uid)`;
-     `second = db.create_portfolio("Second", uid)` (returns the new int id).
-   - Add a NULL row in each; both bars present. Assert `s["fixed"] == 2`.
-6. `test_backfill_scoped_to_one_user(fresh_db, fake_market)`:
-   - `a = seed_user("alpha")`, `b = seed_user("bravo")`; row each; bars.
-   - `perform_fx_backfill(a)` fixes alpha's; bravo's row still `None`.
-7. `test_backfill_all_flag_covers_every_user(fresh_db, fake_market)`:
-   - two users with rows, bars present.
-   - `run_backfill_fx_command("--all") == 0`; both rows fixed.
-8. `test_run_backfill_unknown_user(fresh_db, capsys)`:
-   - `run_backfill_fx_command("ghost") == 1`;
-     `"No account"` in `capsys.readouterr().err`.
-9. `test_run_backfill_prints_counts(fresh_db, fake_market, capsys)`:
-   - `seed_user("tester")`; one fixed, one unresolved.
-   - return `0`; out contains `"Fixed 1 rate(s) for tester"` and the
-     unresolved date string.
-10. `test_run_backfill_noop_when_nothing_missing(fresh_db, capsys)`:
-    - `seed_user("tester")`; no NULL rows. return `0`; out contains
-      `"Fixed 0 rate(s) for tester"`.
-11. `test_dispatch_backfill_and_usage(fresh_db, fake_market, capsys)`:
-    - `seed_user("tester")`.
-    - `app_module.main(["app.py", "backfill-fx", "tester"]) == 0`.
-    - `app_module.main(["app.py", "backfill-fx"]) == 1`; stderr contains
-      `"usage: python app.py backfill-fx <username|--all>"`.
-    - `app_module.main(["app.py", "backfill-fx", "tester", "extra"]) == 1`.
-12. `test_backfill_logs_summary_without_amounts(fresh_db, fake_market, caplog)`:
-    - one fix; `with caplog.at_level(logging.INFO): perform_fx_backfill(uid)`.
-    - some record line contains `"event=fx_backfill"` and `"fixed=1"`;
-      `"10.0"` (a price) does NOT appear in `caplog.text`.
+For every route test set a quote so POST accepts the ticker:
+```python
+fake_market.quotes["ABC"] = make_quote("ABC", 12, 11, "CAD")
+```
+
+Route tests use the `client` fixture (signed in as tester, portfolio 1).
+CAD tickers avoid FX fetches (fx_rate derived as 1.0 with no market call).
+
+### Pure-helper tests
+1. `test_helper_future_date_warns` — `today=date(2026,1,1)` and
+   `transaction_date="2026-01-02"` → `["date is in the future"]`; pass the
+   same date as `today` → `[]` (boundary: today is not future).
+   Import `date` from `datetime`.
+2. `test_helper_oversell` — rows = one BUY 10 on 2026-08-01; call with SELL
+   qty 15 date 2026-08-02, exclude_id=999 (the saved row is NOT in rows).
+   Assert one warning containing "exceeds the 10 shares held".
+3. `test_helper_oversell_boundary_and_partial` — hold 10, sell 10 → no
+   oversell warning; hold 10, sell 4 → none.
+4. `test_helper_oversell_tolerance` — hold 0.1+0.2 (two rows), sell 0.3 →
+   no oversell warning (float residue, locked).
+5. `test_helper_oversell_ignores_later_rows` — hold 10 on 2026-08-01, a BUY
+   dated 2026-09-01 must NOT count toward a 2026-08-02 sell.
+6. `test_helper_duplicate_requires_all_five_fields` — a matching row
+   (ticker/date/type/qty/price) warns; then one field changed each time
+   (ticker, date, type, qty, price) does NOT warn.
+7. `test_helper_duplicate_excludes_self` — pass `exclude_id` equal to the
+   matching row's id → no warning.
+8. `test_helper_clean_buy_has_no_warnings` — no rows, BUY qty 5 price 10
+   date in the past → `[]`.
+
+### Route tests
+9. `test_post_returns_empty_warnings_for_clean_buy` — 201, body
+   `"warnings" == []`, row stored.
+10. `test_post_reports_oversell_but_still_writes` — seed BUY 10, POST SELL
+    15 → 201; `body["warnings"]` has one oversell entry; the new row is in
+    `db.get_transactions(1)` (the write happened).
+11. `test_post_reports_future_date_but_still_writes` — POST date
+    "2999-01-01" → 201, warning mentions future, row stored.
+12. `test_post_reports_same_day_duplicate` — happy POST, then POST the SAME
+    body again → second reply has a duplicate warning and the row count is 2.
+13. `test_put_does_not_flag_itself` — seed a row, PUT it with unchanged
+    values → 200 and `body["warnings"] == []` (self is excluded, so no
+    duplicate and no oversell on the edited SELL).
+14. `test_put_reports_warning_and_applies_edit` — seed BUY 10 then a SELL
+    row of qty 4; PUT the SELL to qty 15 → 200, warning mentions oversell,
+    and the stored qty is 15.
+15. `test_import_preview_and_commit_have_no_warnings_field` — import preview
+    reply has no `warnings` key; commit reply has no `warnings` key.
+16. `test_warning_log_does_not_leak_amounts` — optional if caplog is easy;
+    the route log lines (`event=transaction_created`) must not contain the
+    warning text or the qty. If this proves brittle, drop it — the existing
+    logging tests already lock the no-amount rule.
 
 If any assertion about a helper's return shape turns out wrong (e.g.
-`create_portfolio`), read `db.py` and adjust the TEST, never the contract.
+`db.add_transaction` positional args), read `db.py` and adjust the TEST,
+never the contract. `db.add_transaction` signature is
+`(ticker, transaction_date, price, qty, currency, transaction_type, fx_rate,
+fee=None, *, portfolio_id)`.
 
-## 4. Order
-1. Write ALL failing tests → run `python -m pytest tests/test_fx_backfill.py`
-   (expect failures / collection).
-2. Implement db.py helpers.
-3. Implement app.py `perform_fx_backfill`, `run_backfill_fx_command`,
-   `_dispatch`.
-4. Run `python -m pytest tests/test_fx_backfill.py` to green.
-5. Run the FULL `python -m pytest` (Docker test must stay green).
-6. Report; await user commit approval.
+## 6. Order of work
+1. Write ALL failing tests → `python -m pytest tests/test_trade_warnings.py`
+   (expect failures / collection errors).
+2. Implement `compute_trade_warnings`.
+3. Wire POST and PUT.
+4. Implement the frontend block (html, js, css).
+5. `python -m pytest tests/test_trade_warnings.py` to green.
+6. Run the FULL `python -m pytest` (Docker + ledger meta-tests stay green).
+7. Capture a screenshot of the ledger form showing warnings (UI PR rule).
+8. Report; await the user's GUI gate and commit approval. Do not commit.

@@ -2677,6 +2677,76 @@ def validate_tx_fields(body):
     }, None
 
 
+def compute_trade_warnings(rows, *, ticker, transaction_date, qty, price,
+                           transaction_type, exclude_id, today=None):
+    """Return human-readable, NON-BLOCKING sanity warnings for one saved
+    trade.
+
+    `rows` is db.get_transactions(portfolio_id) — stored facts, newest
+    first (order is irrelevant: the future check is per-field and the
+    oversell fold is a sum). `exclude_id` is the row the route just wrote
+    (POST) or updated (PUT): a row must never flag itself.
+
+    Pure and side-effect free: no DB, no network. The route owns the fetch
+    and the reply. Warnings never block a write — POST still stores and
+    returns 201; PUT still stores and returns 200.
+
+    Three warnings, always in this order:
+      1. the date is in the future,
+      2. a SELL exceeds the position held on that date (a shorting strategy
+         warns by design — this is a notice, not a rule),
+      3. a same-day duplicate (same ticker, date, type, qty AND price).
+    """
+    warnings = []
+    today_iso = (today or date.today()).isoformat()
+
+    if transaction_date > today_iso:
+        warnings.append("date is in the future")
+
+    if transaction_type == "SELL":
+        # Net shares held ON that date, excluding the row being judged:
+        # every earlier-or-same-day BUY adds, every earlier-or-same-day
+        # SELL subtracts. Same-day rows count because no intraday order is
+        # stored; a later-dated BUY cannot rescue an earlier oversell.
+        held = 0.0
+        for row in rows:
+            if row["id"] == exclude_id:
+                continue
+            if row["ticker"] != ticker:
+                continue
+            if row["transaction_date"] > transaction_date:
+                continue
+            if row["transaction_type"] == "BUY":
+                held += row["qty"]
+            else:
+                held -= row["qty"]
+        if qty > held + FLAT_QTY_TOL:
+            # Display only: a flat position's binary residue (0.1+0.2-0.3)
+            # would otherwise print as "-5.55e-17 shares held". The
+            # comparison above already treats it as flat.
+            held_display = 0.0 if abs(held) <= FLAT_QTY_TOL else held
+            warnings.append(
+                f"sell of {qty:g} exceeds the {held_display:g} shares held "
+                f"on {transaction_date}"
+            )
+
+    for row in rows:
+        if row["id"] == exclude_id:
+            continue
+        if (row["ticker"] == ticker
+                and row["transaction_date"] == transaction_date
+                and row["transaction_type"] == transaction_type
+                and abs(row["qty"] - qty) <= FLAT_QTY_TOL
+                and abs(row["price"] - price) <= FLAT_QTY_TOL):
+            warnings.append(
+                "duplicate: same ticker, date, type, quantity and price "
+                "already logged"
+            )
+            break
+
+    return warnings
+
+
 def _derive_fx_rate(currency, transaction_date):
     """Derive a transaction's conversion FACT: how many CAD one unit of
     `currency` bought on `transaction_date`.
@@ -2815,6 +2885,18 @@ def log_transaction():
         g.request_id, tx_id, ticker, fields["transaction_type"],
     )
 
+    # Non-blocking sanity warnings (#45). The row is already stored; these
+    # only tell the form what looks off (future date, oversell, duplicate).
+    warnings = compute_trade_warnings(
+        db.get_transactions(g.portfolio_id),
+        ticker=ticker,
+        transaction_date=fields["transaction_date"],
+        qty=fields["qty"],
+        price=fields["price"],
+        transaction_type=fields["transaction_type"],
+        exclude_id=tx_id,
+    )
+
     # 201 Created, echoing the stored row (note the DB's explicit column
     # names in the reply — the browser now learns the ledger's vocabulary).
     return jsonify({
@@ -2828,6 +2910,7 @@ def log_transaction():
         "fx_rate": fx_rate,
         "transaction_type": fields["transaction_type"],
         "portfolio_id": g.portfolio_id,
+        "warnings": warnings,
     }), 201
 
 
@@ -3248,6 +3331,17 @@ def edit_transaction(tx_id):
     app.logger.info(
         "event=transaction_updated request_id=%s tx_id=%d ticker=%r type=%r",
         g.request_id, tx_id, stored["ticker"], stored["transaction_type"],
+    )
+    # Same non-blocking warnings as POST (#45); exclude_id keeps the edited
+    # row from flagging itself as its own duplicate/oversell.
+    stored["warnings"] = compute_trade_warnings(
+        db.get_transactions(g.portfolio_id),
+        ticker=stored["ticker"],
+        transaction_date=fields["transaction_date"],
+        qty=fields["qty"],
+        price=fields["price"],
+        transaction_type=fields["transaction_type"],
+        exclude_id=tx_id,
     )
     return jsonify(stored)
 
