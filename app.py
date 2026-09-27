@@ -2721,9 +2721,13 @@ def compute_trade_warnings(rows, *, ticker, transaction_date, qty, price,
             else:
                 held -= row["qty"]
         if qty > held + FLAT_QTY_TOL:
+            # Display only: a flat position's binary residue (0.1+0.2-0.3)
+            # would otherwise print as "-5.55e-17 shares held". The
+            # comparison above already treats it as flat.
+            held_display = 0.0 if abs(held) <= FLAT_QTY_TOL else held
             warnings.append(
-                f"sell of {qty:g} exceeds the {held:g} shares held on "
-                f"{transaction_date}"
+                f"sell of {qty:g} exceeds the {held_display:g} shares held "
+                f"on {transaction_date}"
             )
 
     for row in rows:

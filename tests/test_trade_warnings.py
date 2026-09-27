@@ -152,6 +152,23 @@ def test_helper_clean_buy_has_no_warnings():
     ) == []
 
 
+def test_helper_all_three_warnings_in_fixed_order():
+    # One saved SELL that is future-dated, oversells (the only other row is
+    # itself a SELL), and duplicates that row's ticker/date/type/qty/price.
+    rows = [row(1, 10, 5, side="SELL", date_="2999-01-01")]
+    warnings = compute_trade_warnings(
+        rows, ticker="ABC", transaction_date="2999-01-01", qty=5,
+        price=10, transaction_type="SELL", exclude_id=999,
+        today=date(2026, 1, 1),
+    )
+    assert warnings == [
+        "date is in the future",
+        "sell of 5 exceeds the -5 shares held on 2999-01-01",
+        "duplicate: same ticker, date, type, quantity and price already "
+        "logged",
+    ]
+
+
 # ── Routes ────────────────────────────────────────────────────────────
 
 def test_post_returns_empty_warnings_for_clean_buy(client, fake_market):

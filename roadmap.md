@@ -205,9 +205,10 @@ returns from raw value deltas, so buys and sells cannot fake a result.
 ### 45. Ledger Trade Sanity Warnings
 The ledger form checks field shape only. Add server-computed warnings returned
 with the saved transaction: a date in the future, a SELL larger than the
-position held at that date, and a same-day duplicate (same ticker, type, and
-quantity). The write still happens; the form shows the warning so a mistake is
-visible. This is separate from #31, which compares paste-imported rows only.
+position held at that date, and a same-day duplicate (same ticker, type,
+quantity, and price). The write still happens; the form shows the warning so a
+mistake is visible. This is separate from #31, which compares paste-imported
+rows only.
 
 **Effort:** 1 day
 **Files:** `app.py` (warning helper in the transaction route), `static/js/ledger.js`, `templates/ledger.html`, `static/style.css`, `tests/test_trade_warnings.py`
