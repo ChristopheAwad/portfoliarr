@@ -3212,6 +3212,14 @@ input[type="date"]::-moz-placeholder {
     margin: 0 0 8px;
 }
 
+/* The company description: prose, so it wraps over the card width instead
+   of the tight stat-cell column. */
+.stats-about {
+    margin: 0;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
 /* 2. Stamp badges (ledger page). BUY/SELL stop being soft pills and
       become rubber stamps on a ledger page: small, bold, uppercase, and
       — the line that actually separates a stamp from a pill — framed by

@@ -128,18 +128,32 @@
              ONCE per page load (not polled): they come from Yahoo's heavy
              profile endpoint, and 60s polling would pay its cost for data
              that can't move. A dl (description list) is the honest element
-             for label:value pairs; CSS grids the pairs. The 18 pairs used
-             to sit in ONE flat grid — an undifferentiated wall of numbers —
-             so they're now grouped into FOUR labelled clusters (Today /
-             Ranges & averages / Valuation / Profile). Each cluster keeps
-             its own dl with the SAME .stats-grid class, so the :empty
-             shimmer and the responsive column rules keep working
-             untouched; the h4 caption sits OUTSIDE the dl because a dl
-             must contain only dt/dd. Every <dd> ships EMPTY (the :empty
-             shimmer fills in while the fetch runs) and keeps its EXACT id
-             (stock.js fills by id); missing fields (an index has no
-             market cap) gap-fill to "—". -->
+             for label:value pairs; CSS grids the pairs. The pairs used to
+             sit in ONE flat grid — an undifferentiated wall of numbers —
+             so they're now grouped into labelled clusters (Today / Ranges
+             & averages / Valuation / Dividends & analysts / Profitability /
+             Balance sheet / Profile). Each cluster keeps its own dl with
+             the SAME .stats-grid class, so the :empty shimmer and the
+             responsive column rules keep working untouched; the h4 caption
+             sits OUTSIDE the dl because a dl must contain only dt/dd.
+             Every <dd> ships EMPTY (the :empty shimmer fills in while the
+             fetch runs) and keeps its EXACT id (stock.js fills by id);
+             missing fields (an index has no market cap) gap-fill to "—".
+             The About paragraph (free text, not a number) leads the card,
+             above the numeric clusters and OUTSIDE any dl. -->
         <div class="card stats-card">
+
+            <!-- Free-text company description from Yahoo's profile. A
+                 paragraph, not a dt/dd pair: it is prose, not a number.
+                 Ships EMPTY (the shimmer rule); stock.js fills it or "—".
+                 It leads the card so the reader meets the company before
+                 its numbers, and the "Stats" heading below introduces the
+                 numeric clusters. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">About</h4>
+                <p class="stats-about" id="stat-about"></p>
+            </div>
+
             <h3>Stats</h3>
 
             <!-- "Today": the numbers that reset every trading day. -->
@@ -166,17 +180,61 @@
                 </dl>
             </div>
 
-            <!-- Size, price-vs-earnings, and what the analysts think. -->
+            <!-- Size and the multiples the price implies. -->
             <div class="stats-cluster">
                 <h4 class="stats-cluster-label">Valuation</h4>
                 <dl class="stats-grid">
                     <div class="stat"><dt>Market Cap</dt><dd id="stat-market-cap"></dd></div>
                     <div class="stat"><dt>P/E</dt><dd id="stat-pe"></dd></div>
+                    <div class="stat"><dt>Forward P/E</dt><dd id="stat-forward-pe"></dd></div>
+                    <div class="stat"><dt>PEG</dt><dd id="stat-peg"></dd></div>
+                    <div class="stat"><dt>Price/Book</dt><dd id="stat-price-to-book"></dd></div>
                     <div class="stat"><dt>EPS</dt><dd id="stat-eps"></dd></div>
-                    <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield"></dd></div>
                     <div class="stat"><dt>Beta</dt><dd id="stat-beta"></dd></div>
+                </dl>
+            </div>
+
+            <!-- Income to shareholders and what the analysts think. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Dividends &amp; analysts</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Div Yield</dt><dd id="stat-dividend-yield"></dd></div>
+                    <div class="stat"><dt>Payout Ratio</dt><dd id="stat-payout-ratio"></dd></div>
                     <div class="stat"><dt>Analyst Target</dt><dd id="stat-target-price"></dd></div>
+                    <div class="stat"><dt>Target Low</dt><dd id="stat-target-low"></dd></div>
+                    <div class="stat"><dt>Target High</dt><dd id="stat-target-high"></dd></div>
+                    <div class="stat"><dt>Target Median</dt><dd id="stat-target-median"></dd></div>
                     <div class="stat"><dt>Rating</dt><dd id="stat-rating"></dd></div>
+                    <div class="stat"><dt>Analysts</dt><dd id="stat-num-analysts"></dd></div>
+                    <div class="stat"><dt>Recommendation Mean</dt><dd id="stat-recommendation-mean"></dd></div>
+                </dl>
+            </div>
+
+            <!-- How much of each sales dollar becomes profit, and how fast
+                 the business is growing. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Profitability</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Gross Margin</dt><dd id="stat-gross-margin"></dd></div>
+                    <div class="stat"><dt>Operating Margin</dt><dd id="stat-operating-margin"></dd></div>
+                    <div class="stat"><dt>Profit Margin</dt><dd id="stat-profit-margin"></dd></div>
+                    <div class="stat"><dt>Return on Equity</dt><dd id="stat-return-on-equity"></dd></div>
+                    <div class="stat"><dt>Revenue Growth</dt><dd id="stat-revenue-growth"></dd></div>
+                    <div class="stat"><dt>Earnings Growth</dt><dd id="stat-earnings-growth"></dd></div>
+                </dl>
+            </div>
+
+            <!-- The balance sheet: what the company holds and owes. -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">Balance sheet</h4>
+                <dl class="stats-grid">
+                    <div class="stat"><dt>Total Cash</dt><dd id="stat-total-cash"></dd></div>
+                    <div class="stat"><dt>Total Debt</dt><dd id="stat-total-debt"></dd></div>
+                    <div class="stat"><dt>Debt/Equity</dt><dd id="stat-debt-to-equity"></dd></div>
+                    <div class="stat"><dt>Free Cash Flow</dt><dd id="stat-free-cash-flow"></dd></div>
+                    <div class="stat"><dt>EBITDA</dt><dd id="stat-ebitda"></dd></div>
+                    <div class="stat"><dt>Shares Out</dt><dd id="stat-shares-out"></dd></div>
+                    <div class="stat"><dt>Float</dt><dd id="stat-float-shares"></dd></div>
                 </dl>
             </div>
 
@@ -186,6 +244,10 @@
                 <dl class="stats-grid">
                     <div class="stat"><dt>Sector</dt><dd id="stat-sector"></dd></div>
                     <div class="stat"><dt>Industry</dt><dd id="stat-industry"></dd></div>
+                    <div class="stat"><dt>Country</dt><dd id="stat-country"></dd></div>
+                    <div class="stat"><dt>Type</dt><dd id="stat-quote-type"></dd></div>
+                    <div class="stat"><dt>Employees</dt><dd id="stat-employees"></dd></div>
+                    <div class="stat"><dt>Website</dt><dd><a id="stat-website" target="_blank" rel="noopener"></a></dd></div>
                 </dl>
             </div>
         </div>

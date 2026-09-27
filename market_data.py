@@ -127,6 +127,19 @@ def _finite_number(value):
     return value if math.isfinite(value) else None
 
 
+def _percent_number(value):
+    """A Yahoo fraction (0.12 = 12%) as a percent number (12.0).
+
+    Returns None for a missing or non-finite value (same rule as
+    _finite_number). NO rounding — the frontend formats. Different fields
+    arrive in different scales from Yahoo: the margins, payoutRatio, ROE
+    and growth come as fractions and need this ×100; debtToEquity and
+    dividendYield ship ALREADY scaled and use _finite_number verbatim.
+    """
+    number = _finite_number(value)
+    return None if number is None else number * 100
+
+
 def _positive_finite_number(value):
     value = _finite_number(value)
     return value if value is not None and value > 0 else None
@@ -322,13 +335,16 @@ def get_stats(symbol):
     stats once per page load, so the cost is one call per visit.
 
     Returns snake_case keys for the grid — the route layer's convention
-    of translating Yahoo's camelCase at this boundary:
+    of translating Yahoo's camelCase at this boundary. The list is long;
+    the returned dict below is the authoritative set of keys. In groups:
         open / day_high / day_low   today's bar so far
         prev_close                  yesterday's last price
         volume                      shares traded today
         week52_low / week52_high    the 52-week range
         market_cap                  shares outstanding × price
-        pe_ratio                    trailing P/E (None when no earnings)
+        pe_ratio / forward_pe       trailing / forward P/E
+        peg_ratio                   price/earnings-to-growth
+        price_to_book               price-to-book multiple
         eps                         trailing earnings per share
         dividend_yield              annual yield as a PERCENT figure, e.g.
                                     2.63 (NOT a fraction! verified live on
@@ -341,8 +357,36 @@ def get_stats(symbol):
         two_hundred_day_average     the 200-day simple moving average price
         avg_volume                  average daily volume (10 trading days)
         target_price                Wall Street's mean price target
+        target_low / target_high    the analyst target range
+        target_median               the median analyst target
         recommendation              analyst consensus key ("buy", "hold"...)
+        recommendation_mean         the numeric consensus (1 = strong buy)
+        num_analyst_opinions        how many analysts cover it
+        payout_ratio                dividend payout share of earnings
+        gross_margin / operating_margin / profit_margin
+                                    profitability margins
+        return_on_equity            return on equity
+        revenue_growth / earnings_growth
+                                    year-over-year growth
+        total_cash / total_debt     balance-sheet cash and debt
+        debt_to_equity              debt/equity, as Yahoo scales it
+        free_cashflow / ebitda      cash generation and operating profit
+        shares_outstanding / float_shares
+                                    share counts
+        employees                   full-time headcount
         sector / industry           classification strings
+        country / quote_type        where and what kind of security
+        website                     company home page (clickable in the UI)
+        business_summary            free-text company description
+
+    Percent fields are already ×100 percent numbers (payout_ratio, the
+    margins, return_on_equity, growth) — the frontend only appends "%".
+    debt_to_equity is passed through exactly as Yahoo scales it (78.445
+    means 78.4%), NEVER multiplied again.
+
+    business_summary is free text and by far the longest field — it is
+    prose (the About paragraph), not a number, and still ships None when
+    Yahoo has no summary.
 
     MISSING FIELDS → None, not an error: different security types
     legitimately lack different figures (an index has no marketCap, a
@@ -355,8 +399,8 @@ def get_stats(symbol):
     info = yf.Ticker(symbol).info
 
     # An empty profile means Yahoo knows nothing about this symbol —
-    # fail loudly with a named error instead of returning nineteen Nones
-    # that would masquerade as "real but empty" stats.
+    # fail loudly with a named error instead of returning a long list of
+    # Nones that would masquerade as "real but empty" stats.
     if not info:
         raise ValueError(f"no stats data for {symbol}")
 
@@ -376,22 +420,58 @@ def get_stats(symbol):
         "week52_high": _finite_number(info.get("fiftyTwoWeekHigh")),
         "market_cap": _finite_number(info.get("marketCap")),
         "pe_ratio": _finite_number(info.get("trailingPE")),
+        "forward_pe": _finite_number(info.get("forwardPE")),
+        "price_to_book": _finite_number(info.get("priceToBook")),
+        "peg_ratio": _finite_number(info.get("pegRatio")),
         "eps": _finite_number(info.get("trailingEps")),
         # Verbatim pass-through: Yahoo ships this already as a percent
         # figure (2.63 → 2.63%), so any ×100 here is the double-scaling
         # bug that showed CM.TO at 263%. "No dividend" → .get() → None →
         # the grid shows "—", never a fabricated 0.0%.
         "dividend_yield": _finite_number(info.get("dividendYield")),
+        "payout_ratio": _percent_number(info.get("payoutRatio")),
         "beta": _finite_number(info.get("beta")),
         "fifty_day_average": _finite_number(info.get("fiftyDayAverage")),
         "two_hundred_day_average": _finite_number(
             info.get("twoHundredDayAverage")
         ),
         "avg_volume": _finite_number(info.get("avgVolume10days")),
+        # Profitability: Yahoo ships every margin and growth figure as a
+        # FRACTION (0.48653 = 48.653%), so _percent_number ×100s them.
+        "gross_margin": _percent_number(info.get("grossMargins")),
+        "operating_margin": _percent_number(info.get("operatingMargins")),
+        "profit_margin": _percent_number(info.get("profitMargins")),
+        "return_on_equity": _percent_number(info.get("returnOnEquity")),
+        "revenue_growth": _percent_number(info.get("revenueGrowth")),
+        "earnings_growth": _percent_number(info.get("earningsGrowth")),
+        # Balance sheet. debtToEquity is the dividend_yield case again:
+        # Yahoo ships it ALREADY scaled (78.445 = 78.4%), so it goes
+        # through _finite_number verbatim — a ×100 here is a bug.
+        "total_cash": _finite_number(info.get("totalCash")),
+        "total_debt": _finite_number(info.get("totalDebt")),
+        "debt_to_equity": _finite_number(info.get("debtToEquity")),
+        "free_cashflow": _finite_number(info.get("freeCashflow")),
+        "ebitda": _finite_number(info.get("ebitda")),
+        "shares_outstanding": _finite_number(info.get("sharesOutstanding")),
+        "float_shares": _finite_number(info.get("floatShares")),
         "target_price": _finite_number(info.get("targetMeanPrice")),
+        "target_low": _finite_number(info.get("targetLowPrice")),
+        "target_high": _finite_number(info.get("targetHighPrice")),
+        "target_median": _finite_number(info.get("targetMedianPrice")),
         "recommendation": info.get("recommendationKey"),
+        "recommendation_mean": _finite_number(info.get("recommendationMean")),
+        "num_analyst_opinions": _finite_number(
+            info.get("numberOfAnalystOpinions")
+        ),
+        "employees": _finite_number(info.get("fullTimeEmployees")),
         "sector": info.get("sector"),
         "industry": info.get("industry"),
+        # Profile facts: plain text, no numeric coercion.
+        "country": info.get("country"),
+        "quote_type": info.get("quoteType"),
+        "website": info.get("website"),
+        # The longest field: the free-text company description.
+        "business_summary": info.get("longBusinessSummary"),
     }
 
 

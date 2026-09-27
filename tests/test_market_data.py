@@ -507,11 +507,14 @@ def test_history_empty_dataframe_returns_empty_dict(fake_yf):
 def test_get_stats_extracts_and_renames_the_grid_fields(fake_yf):
     """Yahoo's camelCase profile → our snake_case grid keys, exactly the
     translation the route layer relies on. Covers the ORIGINAL 8 keys AND
-    the 11 cheap additions (all read out of the same already-fetched
-    profile — no extra network call). dividendYield passes through VERBATIM:
-    Yahoo already ships it as a percent (verified live on CM.TO/RY.TO/AAPL/
-    VZ), so expecting 0.33 → 0.33 pins the pass-through that prevents the
-    double-scaling bug (CM.TO showed 263%)."""
+    every cheap addition read out of the same already-fetched profile (no
+    extra network call, as of roadmap #52). dividendYield passes through
+    VERBATIM: Yahoo already ships it as a percent (verified live on
+    CM.TO/RY.TO/AAPL/VZ), so expecting 0.33 → 0.33 pins the pass-through
+    that prevents the double-scaling bug (CM.TO showed 263%). The new
+    fraction fields (margins, payout, ROE, growth) are the opposite case:
+    Yahoo ships them as fractions, so they arrive ×100. This profile omits
+    them, so they are None here — test_stock_stats.py pins the ×100 path."""
     fake_yf.state["info"] = {
         "open": 148.0, "dayHigh": 152.0, "dayLow": 147.5,
         "regularMarketPreviousClose": 145.0, "volume": 55_000_000,
@@ -528,11 +531,24 @@ def test_get_stats_extracts_and_renames_the_grid_fields(fake_yf):
         "prev_close": 145.0, "volume": 55_000_000,
         "week52_low": 164.0, "week52_high": 237.25,
         "market_cap": 3_500_000_000_000,
-        "pe_ratio": 28.5, "eps": 6.10, "dividend_yield": 0.33,
+        "pe_ratio": 28.5, "forward_pe": None, "price_to_book": None,
+        "peg_ratio": None,
+        "eps": 6.10, "dividend_yield": 0.33, "payout_ratio": None,
         "beta": 1.2, "fifty_day_average": 228.4, "two_hundred_day_average": 210.15,
-        "avg_volume": 42_000_000, "target_price": 260.0,
-        "recommendation": "buy", "sector": "Technology",
-        "industry": "Consumer Electronics",
+        "avg_volume": 42_000_000,
+        "gross_margin": None, "operating_margin": None, "profit_margin": None,
+        "return_on_equity": None, "revenue_growth": None,
+        "earnings_growth": None,
+        "total_cash": None, "total_debt": None, "debt_to_equity": None,
+        "free_cashflow": None, "ebitda": None, "shares_outstanding": None,
+        "float_shares": None,
+        "target_price": 260.0, "target_low": None, "target_high": None,
+        "target_median": None,
+        "recommendation": "buy", "recommendation_mean": None,
+        "num_analyst_opinions": None, "employees": None,
+        "sector": "Technology", "industry": "Consumer Electronics",
+        "country": None, "quote_type": None, "website": None,
+        "business_summary": None,
     }
 
 
