@@ -143,7 +143,7 @@ no bar stays null and is reported with its count. It uses historical bars only
 **Effort:** 1 day
 **Files:** `db.py`, `app.py`, `tests/test_fx_backfill.py`
 **Depends on:** Nothing (#19 shipped the historical-bar path; #27 set the CLI command pattern)
-**Status:** in progress
+**Status:** shipped 2026-09-27 (PR #90)
 
 ---
 
