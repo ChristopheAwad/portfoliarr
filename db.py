@@ -713,6 +713,28 @@ def get_transactions(portfolio_id):
     return [dict(row) for row in rows]
 
 
+def get_unrated_usd_transactions(portfolio_id):
+    """Return the USD rows of ONE portfolio whose stored fx_rate is NULL —
+    the rows the maintenance backfill (`python app.py backfill-fx`) can
+    repair. Only USD matters: CAD rows store exactly 1.0 and other
+    currencies were never supported, so neither is ever "missing".
+
+    Ordered oldest-first because the backfill re-derives each row's rate
+    from its own date; order changes nothing but keeps the read natural.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, ticker, transaction_date
+            FROM transactions
+            WHERE portfolio_id = ? AND currency = 'USD' AND fx_rate IS NULL
+            ORDER BY transaction_date, id
+            """, (portfolio_id,)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_transaction(tx_id, portfolio_id):
     """Return ONE transaction as a dict, or None if that id doesn't exist
     IN THAT PORTFOLIO (an id owned by another portfolio — or another
@@ -766,6 +788,31 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
             """,
             (transaction_date, price, qty, transaction_type, fx_rate, fee, tx_id,
              portfolio_id),
+        )
+        return cursor.rowcount > 0
+
+
+def set_fx_rate(tx_id, fx_rate):
+    """Write a transaction's conversion FACT directly.
+
+    ONLY the maintenance backfill (`python app.py backfill-fx`) calls
+    this. The normal write paths — `add_transaction` and
+    `update_transaction` — still derive fx_rate from the date through
+    `_derive_fx_rate`; nothing else may invent or overwrite the rate.
+    The caller selected tx_id from a portfolio it already resolved, so
+    there is no ownership check here.
+
+    The `AND fx_rate IS NULL` guard enforces NULL-only at the SQL itself:
+    a row that already holds a rate is never rewritten, even if another
+    process rates it between the caller's read and this write. Returns
+    True if a row changed, False for an unknown id or an already-rated
+    row.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "UPDATE transactions SET fx_rate = ?"
+            " WHERE id = ? AND fx_rate IS NULL",
+            (fx_rate, tx_id),
         )
         return cursor.rowcount > 0
 

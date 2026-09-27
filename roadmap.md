@@ -131,6 +131,22 @@ or build time so the two clients cannot silently drift.
 
 ---
 
+### 39. Historical FX Backfill
+Transactions logged before FX capture can carry a null `fx_rate`, which
+degrades their ledger rows and realized legs. Add a terminal maintenance
+command (`python app.py backfill-fx <username|--all>`) that finds USD rows
+missing `fx_rate`, fetches the USDCAD close on each transaction's date through
+the existing historical-FX path, and writes it. It never guesses: a date with
+no bar stays null and is reported with its count. It uses historical bars only
+(no live-rate fallback), so it cannot freeze an approximate rate as a fact.
+
+**Effort:** 1 day
+**Files:** `db.py`, `app.py`, `tests/test_fx_backfill.py`
+**Depends on:** Nothing (#19 shipped the historical-bar path; #27 set the CLI command pattern)
+**Status:** in progress
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 23. Several Named Portfolios

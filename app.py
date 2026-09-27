@@ -3991,6 +3991,80 @@ def run_reset_password_command(username):
     return 0 if ok else 1
 
 
+def perform_fx_backfill(user_id):
+    """Repair one user's USD rows that have no stored fx_rate.
+
+    For every transaction whose currency is USD and whose fx_rate is NULL
+    (pre-feature rows, or rows Yahoo could not answer for at save time),
+    re-derive the USDCAD close on that row's OWN date with
+    `get_fx_rate_on` and store it. HISTORICAL ONLY: there is deliberately
+    NO live-rate fallback here, so a date with no bar stays NULL instead
+    of freezing an approximation as a fact.
+
+    Returns {"fixed": int, "unresolved": [{"ticker", "date",
+    "reason"}, ...]}. Logs one INFO summary with counts and no amounts.
+    """
+    summary = {"fixed": 0, "unresolved": []}
+    for portfolio in db.get_portfolios(user_id):
+        for row in db.get_unrated_usd_transactions(portfolio["id"]):
+            try:
+                rate = get_fx_rate_on("USD", "CAD", row["transaction_date"])
+            except Exception as exc:
+                # Broad catch on purpose: a Yahoo gap raises ValueError,
+                # but network/parse failures raise other types — all of
+                # them mean "the historical fact is unavailable", which
+                # is a NULL row, never a guess.
+                summary["unresolved"].append({
+                    "ticker": row["ticker"],
+                    "date": row["transaction_date"],
+                    "reason": str(exc),
+                })
+                continue
+            db.set_fx_rate(row["id"], rate)
+            summary["fixed"] += 1
+    app.logger.info(
+        "event=fx_backfill user_id=%d fixed=%d unresolved=%d",
+        user_id, summary["fixed"], len(summary["unresolved"]),
+    )
+    return summary
+
+
+def run_backfill_fx_command(target):
+    """Terminal entry for backfill-fx: one named user, or --all users.
+
+    Exit 0 when the command ran (unresolved rows are honest, not a
+    failure); 1 only for an unknown user.
+    """
+    if target == "--all":
+        users = db.get_users()
+        if not users:
+            print("No accounts on this server.")
+            return 0
+    else:
+        user = db.get_user_by_username((target or "").strip())
+        if user is None:
+            print("No account with that name on this server.",
+                  file=sys.stderr)
+            return 1
+        users = [user]
+
+    unresolved_lines = []
+    for user in users:
+        summary = perform_fx_backfill(user["id"])
+        print(
+            f"Fixed {summary['fixed']} rate(s) for {user['username']}; "
+            f"{len(summary['unresolved'])} could not be resolved."
+        )
+        for item in summary["unresolved"]:
+            unresolved_lines.append(
+                f"Could not resolve: {item['ticker']} {item['date']} "
+                f"({item['reason']})"
+            )
+    for line in unresolved_lines:
+        print(line)
+    return 0
+
+
 def main(argv=None):
     """The `python app.py` entry. argv=None means the REAL command line:
     zero arguments boots the dev server, anything else is dispatch. A
@@ -4008,11 +4082,14 @@ def main(argv=None):
 
 def _dispatch(argv):
     args = argv[1:]
-    if len(args) != 2 or args[0] != "reset-password":
-        print("usage: python app.py reset-password <username>",
-              file=sys.stderr)
-        return 1
-    return run_reset_password_command(args[1])
+    command = args[0] if args else ""
+    if command == "reset-password" and len(args) == 2:
+        return run_reset_password_command(args[1])
+    if command == "backfill-fx" and len(args) == 2:
+        return run_backfill_fx_command(args[1])
+    print("usage: python app.py reset-password <username>", file=sys.stderr)
+    print("usage: python app.py backfill-fx <username|--all>", file=sys.stderr)
+    return 1
 
 
 # This guard only runs the block when app.py is executed directly, not
