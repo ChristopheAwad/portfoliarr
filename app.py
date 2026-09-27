@@ -4037,6 +4037,9 @@ def run_backfill_fx_command(target):
     """
     if target == "--all":
         users = db.get_users()
+        if not users:
+            print("No accounts on this server.")
+            return 0
     else:
         user = db.get_user_by_username((target or "").strip())
         if user is None:

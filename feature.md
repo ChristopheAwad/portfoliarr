@@ -113,7 +113,7 @@ def _dispatch(argv):
 Docker runs `gunicorn app:app`, so the CLI block is unreachable in the
 container. `tests/test_docker.py` must stay green untouched.
 
-## 3. NEW tests/tests_fx_backfill.py (write first, all must fail)
+## 3. NEW tests/test_fx_backfill.py (write first, all must fail)
 
 Imports:
 ```python

@@ -800,12 +800,18 @@ def set_fx_rate(tx_id, fx_rate):
     `update_transaction` — still derive fx_rate from the date through
     `_derive_fx_rate`; nothing else may invent or overwrite the rate.
     The caller selected tx_id from a portfolio it already resolved, so
-    there is no ownership check here. Returns True if a row changed,
-    False for an unknown id.
+    there is no ownership check here.
+
+    The `AND fx_rate IS NULL` guard enforces NULL-only at the SQL itself:
+    a row that already holds a rate is never rewritten, even if another
+    process rates it between the caller's read and this write. Returns
+    True if a row changed, False for an unknown id or an already-rated
+    row.
     """
     with _connect() as conn:
         cursor = conn.execute(
-            "UPDATE transactions SET fx_rate = ? WHERE id = ?",
+            "UPDATE transactions SET fx_rate = ?"
+            " WHERE id = ? AND fx_rate IS NULL",
             (fx_rate, tx_id),
         )
         return cursor.rowcount > 0

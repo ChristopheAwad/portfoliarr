@@ -169,3 +169,18 @@ def test_backfill_logs_summary_without_amounts(fresh_db, fake_market, caplog):
                and "fixed=1" in record.getMessage()
                for record in caplog.records)
     assert "10.0" not in caplog.text
+
+
+def test_set_fx_rate_never_overwrites_rated_row(fresh_db):
+    uid = seed_user("tester")
+    pid = main_portfolio_id(uid)
+    tx_id = add(pid, fx_rate=1.25)
+
+    assert db.set_fx_rate(tx_id, 1.99) is False
+
+    assert db.get_transaction(tx_id, pid)["fx_rate"] == 1.25
+
+
+def test_run_backfill_all_on_empty_server(fresh_db, capsys):
+    assert run_backfill_fx_command("--all") == 0
+    assert "No accounts on this server." in capsys.readouterr().out
