@@ -245,7 +245,7 @@ verbatim. No new endpoint, no new network call; a missing field shows "—".
 **Effort:** 1 day
 **Files:** `market_data.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_stats.py`, `project-brief.md`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-27 (PR #92)
 
 ---
 
