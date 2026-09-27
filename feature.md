@@ -1,296 +1,352 @@
-# Ledger Trade Sanity Warnings (roadmap #45)
+# Ticker Page Fundamentals Expansion (roadmap #52)
 
 Status: in progress
 
-The ledger's write routes validate field SHAPE only. This feature adds
-server-computed, NON-BLOCKING sanity warnings returned with a saved
-transaction. The write always happens; the form shows the warnings so a
-mistake is visible. This is deliberately separate from #31 (import duplicate
-detection), which compares paste-imported rows BEFORE writing.
+The stock detail page's stats grid already fetches Yahoo's full company
+profile through `get_stats` (one heavy `Ticker.info` call, once per page
+load) but shows only 18 values. This feature adds the rest of the profile to
+the SAME call. **No new endpoint, no new network call, no cache change.**
+Missing fields degrade to "—", exactly like today.
 
-Three warnings, in this fixed order:
-1. a date in the future,
-2. a SELL larger than the position held on that date,
-3. a same-day duplicate (same ticker, date, type, quantity, AND price).
-
-Write every failing test named below FIRST, then implement, then run the
-FULL `python -m pytest` suite. Never commit.
+This is item 1 of a five-item ticker-page batch (#52–#56). Do NOT touch the
+other four here.
 
 ## Locked decisions (user-approved)
-- Duplicate match fields: ticker, date, type, qty, AND price (fee ignored).
-  qty and price compared with the module tolerance `FLAT_QTY_TOL` (1e-9).
-- Warnings are non-blocking: POST still returns 201 and stores; PUT still
-  returns 200 and stores.
-- Display: an inline `.tx-warnings` block under the form (persists until the
-  next submit). Adds `static/style.css` to the roadmap's file list.
-- Import preview/commit replies are NOT touched.
-- No schema change, no new endpoint, no new migration.
 
-## 1. app.py — pure helper `compute_trade_warnings`
+- **Numeric normalization happens in the DATA layer** (`get_stats`), not the
+  frontend. The frontend only formats.
+- Yahoo sends these as FRACTIONS → multiply by 100 → percent number:
+  `payoutRatio`, `grossMargins`, `operatingMargins`, `profitMargins`,
+  `returnOnEquity`, `revenueGrowth`, `earningsGrowth`.
+  (Verified live on AAPL Sep 2026: `payoutRatio=0.1204`,
+  `grossMargins=0.48653`, `returnOnEquity=1.4875101`.)
+- Yahoo sends `debtToEquity` ALREADY SCALED (AAPL `78.445` = 78.4%) → pass
+  through with `_finite_number`, NEVER ×100. (This is the same class of bug
+  the `dividend_yield` double-scaling note warns about; a test locks it.)
+- Text fields (`country`, `quote_type`, `website`, `business_summary`) pass
+  through with plain `.get()`, no numeric coercion.
+- The stock page stays native-currency and un-polled: stats are still fetched
+  once per page load.
 
-Place immediately AFTER `validate_tx_fields` (so it sits with the other
-transaction-field logic) and BEFORE `_derive_fx_rate`.
+## Exact snake_case keys to add to `get_stats`
+
+Mapping from Yahoo `.info` key → app key → coercion:
+
+| Yahoo `.info` key        | app key                  | coercion                          |
+|--------------------------|--------------------------|-----------------------------------|
+| `forwardPE`              | `forward_pe`             | `_finite_number`                  |
+| `priceToBook`            | `price_to_book`          | `_finite_number`                  |
+| `pegRatio`               | `peg_ratio`              | `_finite_number`                  |
+| `payoutRatio`            | `payout_ratio`           | `_percent_number`                 |
+| `grossMargins`           | `gross_margin`           | `_percent_number`                 |
+| `operatingMargins`       | `operating_margin`       | `_percent_number`                 |
+| `profitMargins`          | `profit_margin`          | `_percent_number`                 |
+| `returnOnEquity`         | `return_on_equity`       | `_percent_number`                 |
+| `revenueGrowth`          | `revenue_growth`         | `_percent_number`                 |
+| `earningsGrowth`         | `earnings_growth`        | `_percent_number`                 |
+| `totalCash`              | `total_cash`             | `_finite_number`                  |
+| `totalDebt`              | `total_debt`             | `_finite_number`                  |
+| `freeCashflow`           | `free_cashflow`          | `_finite_number`                  |
+| `ebitda`                 | `ebitda`                 | `_finite_number`                  |
+| `debtToEquity`           | `debt_to_equity`         | `_finite_number` (verbatim)       |
+| `sharesOutstanding`      | `shares_outstanding`     | `_finite_number`                  |
+| `floatShares`            | `float_shares`           | `_finite_number`                  |
+| `recommendationMean`     | `recommendation_mean`    | `_finite_number`                  |
+| `numberOfAnalystOpinions`| `num_analyst_opinions`   | `_finite_number`                  |
+| `fullTimeEmployees`      | `employees`              | `_finite_number`                  |
+| `targetLowPrice`         | `target_low`             | `_finite_number`                  |
+| `targetHighPrice`        | `target_high`            | `_finite_number`                  |
+| `targetMedianPrice`      | `target_median`          | `_finite_number`                  |
+| `country`                | `country`                | plain `.get()`                    |
+| `quoteType`              | `quote_type`             | plain `.get()`                    |
+| `website`                | `website`                | plain `.get()`                    |
+| `longBusinessSummary`    | `business_summary`       | plain `.get()`                    |
+
+## Exact template ids (new)
+
+- Valuation: `stat-forward-pe`, `stat-price-to-book`, `stat-peg`
+- Dividends & analysts: `stat-payout-ratio`, `stat-target-low`,
+  `stat-target-high`, `stat-target-median`, `stat-num-analysts`,
+  `stat-recommendation-mean`
+- Profitability: `stat-gross-margin`, `stat-operating-margin`,
+  `stat-profit-margin`, `stat-return-on-equity`, `stat-revenue-growth`,
+  `stat-earnings-growth`
+- Balance sheet: `stat-total-cash`, `stat-total-debt`, `stat-debt-to-equity`,
+  `stat-free-cash-flow`, `stat-ebitda`, `stat-shares-out`, `stat-float-shares`
+- Profile: `stat-country`, `stat-quote-type`, `stat-employees`, `stat-website`
+- About: `stat-about`
+
+Existing ids MUST NOT change: `stat-open`, `stat-day-high`, `stat-day-low`,
+`stat-prev-close`, `stat-volume`, `stat-avg-volume`, `stat-week52-range`,
+`stat-50d-avg`, `stat-200d-avg`, `stat-market-cap`, `stat-pe`, `stat-eps`,
+`stat-dividend-yield`, `stat-beta`, `stat-target-price`, `stat-rating`,
+`stat-sector`, `stat-industry`.
+
+## 1. `market_data.py` — helper + `get_stats`
+
+### 1a. New helper `_percent_number`
+Place it immediately after the existing `_finite_number` helper (read the
+file to find it). It must:
+- return `None` when `_finite_number(value)` is `None`,
+- otherwise return the finite float multiplied by 100.
+
+Do NOT round. The frontend owns display rounding.
 
 ```python
-def compute_trade_warnings(rows, *, ticker, transaction_date, qty, price,
-                           transaction_type, exclude_id, today=None):
-    """Return human-readable, NON-BLOCKING warnings for one saved trade.
+def _percent_number(value):
+    """A Yahoo fraction (0.12 = 12%) as a percent number (12.0).
 
-    `rows` is db.get_transactions(portfolio_id) — stored facts, newest
-    first (order is irrelevant: the future check is per-field and the
-    oversell fold is a sum). `exclude_id` is the row the route just
-    wrote (POST) or updated (PUT): a row must never flag itself.
-
-    Pure and side-effect free: no DB, no network. The route owns the
-    fetch and the reply. Warnings never block a write.
+    Returns None for a missing or non-finite value (same rule as
+    _finite_number). No rounding — the frontend formats.
     """
-    warnings = []
-    today_iso = (today or date.today()).isoformat()
-
-    if transaction_date > today_iso:
-        warnings.append("date is in the future")
-
-    if transaction_type == "SELL":
-        held = 0.0
-        for row in rows:
-            if row["id"] == exclude_id:
-                continue
-            if row["ticker"] != ticker:
-                continue
-            if row["transaction_date"] > transaction_date:
-                continue
-            if row["transaction_type"] == "BUY":
-                held += row["qty"]
-            else:
-                held -= row["qty"]
-        if qty > held + FLAT_QTY_TOL:
-            warnings.append(
-                f"sell of {qty:g} exceeds the {held:g} shares held on "
-                f"{transaction_date}"
-            )
-
-    for row in rows:
-        if row["id"] == exclude_id:
-            continue
-        if (row["ticker"] == ticker
-                and row["transaction_date"] == transaction_date
-                and row["transaction_type"] == transaction_type
-                and abs(row["qty"] - qty) <= FLAT_QTY_TOL
-                and abs(row["price"] - price) <= FLAT_QTY_TOL):
-            warnings.append(
-                "duplicate: same ticker, date, type, quantity and price "
-                "already logged"
-            )
-            break
-
-    return warnings
+    number = _finite_number(value)
+    return None if number is None else number * 100
 ```
 
-Notes for the implementer:
-- `date` and `FLAT_QTY_TOL` already exist at module scope. Do not add imports.
-- The oversell branch uses `<=` on the date so same-day buys count and
-  same-day other sells subtract. A SELL that opens a short therefore warns
-  by design (shorting is supported; this is a warning, not an error).
-- `{qty:g}` / `{held:g}` format without trailing zeros. `held` may be
-  negative (already short) — the message shows the negative number; that is
-  honest.
+### 1b. Extend the `get_stats` return dict
+Add every row from the table above to the returned dict, using the exact
+coercion shown. Keep the existing keys and their comments untouched. Insert
+the new keys in logical groups (valuation near `pe_ratio`, profitability and
+balance after `beta`, analysts near `target_price`, profile near `sector`).
 
-## 2. app.py — wire into POST `log_transaction`
+Update the `get_stats` docstring:
+- The line that says the grid gets "nineteen Nones" is now wrong — say the
+  list is long and point to the returned keys.
+- Add a bullet: percent fields are already ×100 percent numbers
+  (`payout_ratio`, the margins, `return_on_equity`, growth); `debt_to_equity`
+  is passed through as Yahoo scales it.
+- Add a bullet: `business_summary` is free text and is the longest field.
 
-After the `tx_id = db.add_transaction(...)` call and the existing INFO log,
-compute warnings and add them to the 201 reply:
+## 2. `templates/stock.html`
 
-```python
-    warnings = compute_trade_warnings(
-        db.get_transactions(g.portfolio_id),
-        ticker=ticker,
-        transaction_date=fields["transaction_date"],
-        qty=fields["qty"],
-        price=fields["price"],
-        transaction_type=fields["transaction_type"],
-        exclude_id=tx_id,
-    )
-```
+Reorganize the FOUR existing clusters and add the new cells + clusters. The
+classification comments above the stats card must be updated to mention the
+new clusters. Rules that MUST hold:
+- Every numeric `<dd>` ships EMPTY (the `:empty` shimmer rule).
+- A `dl` contains only `dt`/`dd`; the cluster `<h4>` stays OUTSIDE the `dl`.
+- Keep the `.stats-grid` class on every `dl`.
 
-Then add `"warnings": warnings,` to the returned dict (anywhere among the
-keys; put it last for readability).
+Final cluster layout:
 
-## 3. app.py — wire into PUT `edit_transaction`
+**Today** (unchanged): Open, Day High, Day Low, Prev Close, Volume,
+Avg Volume.
 
-Immediately before the `return jsonify(stored)`:
+**Ranges & averages** (unchanged): 52W Range, 50-Day Avg, 200-Day Avg.
 
-```python
-    stored["warnings"] = compute_trade_warnings(
-        db.get_transactions(g.portfolio_id),
-        ticker=stored["ticker"],
-        transaction_date=fields["transaction_date"],
-        qty=fields["qty"],
-        price=fields["price"],
-        transaction_type=fields["transaction_type"],
-        exclude_id=tx_id,
-    )
-```
+**Valuation**: Market Cap (`stat-market-cap`), P/E (`stat-pe`),
+Forward P/E (`stat-forward-pe`), PEG (`stat-peg`),
+Price/Book (`stat-price-to-book`), EPS (`stat-eps`), Beta (`stat-beta`).
 
-The reply is still the DB row plus this one added key; the existing
-log line and re-read behavior are unchanged.
+**Dividends & analysts** (new cluster label; moves Div Yield, Analyst Target
+and Rating here from Valuation): Div Yield (`stat-dividend-yield`),
+Payout Ratio (`stat-payout-ratio`), Analyst Target (`stat-target-price`),
+Target Low (`stat-target-low`), Target High (`stat-target-high`),
+Target Median (`stat-target-median`), Rating (`stat-rating`),
+Analysts (`stat-num-analysts`),
+Recommendation Mean (`stat-recommendation-mean`).
 
-## 4. Frontend — inline warning block
+**Profitability** (new): Gross Margin (`stat-gross-margin`),
+Operating Margin (`stat-operating-margin`),
+Profit Margin (`stat-profit-margin`),
+Return on Equity (`stat-return-on-equity`),
+Revenue Growth (`stat-revenue-growth`),
+Earnings Growth (`stat-earnings-growth`).
 
-### 4a. templates/ledger.html
+**Balance sheet** (new): Total Cash (`stat-total-cash`),
+Total Debt (`stat-total-debt`), Debt/Equity (`stat-debt-to-equity`),
+Free Cash Flow (`stat-free-cash-flow`), EBITDA (`stat-ebitda`),
+Shares Out (`stat-shares-out`), Float (`stat-float-shares`).
 
-Immediately after `<p class="tx-error" hidden></p>` (line ~191), add:
+**Profile**: Sector (`stat-sector`), Industry (`stat-industry`),
+Country (`stat-country`), Type (`stat-quote-type`),
+Employees (`stat-employees`), Website (`stat-website`).
 
+**About** (new, AFTER the Profile cluster, OUTSIDE any `dl`):
 ```html
-                <!-- Non-blocking sanity warnings for a JUST-SAVED trade
-                     (future date, oversell, same-day duplicate). The write
-                     already happened — this is a notice, not an error. -->
-                <ul class="tx-warnings" hidden></ul>
+            <!-- Free-text company description from Yahoo's profile. A
+                 paragraph, not a dt/dd pair: it is prose, not a number.
+                 Ships EMPTY (the shimmer rule); stock.js fills it or "—". -->
+            <div class="stats-cluster">
+                <h4 class="stats-cluster-label">About</h4>
+                <p class="stats-about" id="stat-about"></p>
+            </div>
 ```
 
-Keep it INSIDE `#tx-logger-wrap`, directly below the error line.
+Website cell (an anchor so it is clickable, inside a normal `stat` div):
+```html
+                    <div class="stat"><dt>Website</dt><dd><a id="stat-website" target="_blank" rel="noopener"></a></dd></div>
+```
 
-### 4b. static/js/ledger.js
+## 3. `static/js/stock.js`
 
-1. Near the existing `const txErrorEl = document.querySelector(".tx-error");`
-   (line ~43), add:
-   ```js
-   const txWarningsEl = document.querySelector(".tx-warnings");
-   ```
+### 3a. Extend `paintStats`
+Add `setStat` calls using the EXISTING formatter rules:
+- **Percent cells** — `${formatNumber(v)}%`: `stat-payout-ratio`,
+  `stat-gross-margin`, `stat-operating-margin`, `stat-profit-margin`,
+  `stat-return-on-equity`, `stat-revenue-growth`, `stat-earnings-growth`,
+  `stat-debt-to-equity`. Use `stats.key === null ? null : \`${formatNumber(stats.key)}%\``
+  (same pattern as `stat-dividend-yield`).
+- **Plain ratio cells** — `formatNumber`: `stat-forward-pe`,
+  `stat-price-to-book`, `stat-peg`, `stat-recommendation-mean`.
+- **Price cells** — `formatPrice`: `stat-target-low`, `stat-target-high`,
+  `stat-target-median`.
+- **Compact cells** — `compactFormat.format`: `stat-total-cash`,
+  `stat-total-debt`, `stat-free-cash-flow`, `stat-ebitda`,
+  `stat-shares-out`, `stat-float-shares`.
+- **Integer cell** — `integerFormat.format`: `stat-employees`.
+- **Text cells** — `setStat`: `stat-country`, `stat-quote-type`.
+- **Website** — a DEDICATED block (the `setStat` helper only sets text):
+  ```js
+  // Website is a link, so setStat's text-only rule is not enough.
+  if (stats.website == null) {
+      setStat("stat-website", null);
+      document.getElementById("stat-website").removeAttribute("href");
+  } else {
+      const link = document.getElementById("stat-website");
+      link.textContent = stats.website;
+      link.href = stats.website;
+  }
+  ```
+- **About** — `setStat("stat-about", stats.business_summary)`. The shared
+  null rule renders "—" when Yahoo has no summary.
 
-2. Add a small paint helper near `setLedgerMessage` (or just above the
-   submit handler) that wipes and rebuilds the list:
-   ```js
-   function setTradeWarnings(messages) {
-       txWarningsEl.textContent = "";
-       for (const message of messages) {
-           const item = document.createElement("li");
-           item.textContent = message;
-           txWarningsEl.append(item);
-       }
-       txWarningsEl.hidden = messages.length === 0;
-   }
-   ```
+### 3b. Extend `STAT_IDS`
+Add every new id from the "Exact template ids (new)" list, INCLUDING
+`stat-website` and `stat-about`, so a total stats failure degrades them all
+to "—". Organize the array to mirror the template's cluster order.
 
-3. In the submit handler, at the same place `txErrorEl.hidden = true;`
-   runs (fresh attempt), also clear warnings:
-   `setTradeWarnings([]);`
+## 4. `static/style.css`
 
-4. On the SUCCESS branch, BEFORE `exitEditMode();`, read the reply body and
-   paint its warnings. The response body may not be JSON (defensive):
-   ```js
-   const saved = await response.json().catch(() => null);
-   setTradeWarnings(saved?.warnings || []);
-   ```
-   Order matters: `exitEditMode()` resets the FORM fields but must not wipe
-   the warning block, so paint before or after it — the helper only touches
-   `.tx-warnings`, never the form. Keep `exitEditMode(); refreshLedgerViews();`
-   exactly as they are.
-
-### 4c. static/style.css
-
-Directly after the `.tx-error` rule (line ~1922) add:
-
+Add one rule for the About paragraph near the existing `.stats-cluster`
+rules (~line 3200):
 ```css
-/* Non-blocking trade warnings — the amber "state, not error" palette (the
-   write already happened), so red stays reserved for a failed save. */
-.tx-warnings {
-    color: var(--accent);
-    font-size: 13px;
-    margin: 0 0 10px;
-    padding-left: 18px;
+/* The company description: prose, so it wraps over the full card width
+   instead of the tight stat-cell column. */
+.stats-about {
+    grid-column: 1 / -1;
+    margin: 0;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+```
+Use the real secondary-text token in this file if `--text-secondary` is not
+the one in use (check the surrounding rules; pick the existing muted token).
+
+## 5. `project-brief.md`
+
+- Update the `/stock/<symbol>` bullet list to add one line: more fundamentals
+  (margins, multiples, balance-sheet figures, analyst depth, company profile
+  and business summary) plus the position card is a LATER batch item — only
+  mention what #52 ships (fundamentals + About).
+- Update the "Stock-detail stats come from the heavy `Ticker.info` endpoint"
+  Temporary Decision note so its field list includes the new values. The
+  "not polled" rationale stays true and must stay.
+
+## 6. Tests — WRITE FIRST, all must fail before implementation
+
+New file: `tests/test_stock_stats.py`.
+
+Imports (mirror `tests/test_stock.py`):
+```python
+from types import SimpleNamespace
+
+import market_data
+from conftest import make_quote
+```
+
+Fake helper (patch `market_data.yf`, WHERE MARKET_DATA USES IT — the
+`test_stock.py` NaN test is the pattern):
+```python
+class FakeTicker:
+    def __init__(self, info):
+        self.info = info
+
+
+def patch_info(monkeypatch, info):
+    monkeypatch.setattr(
+        market_data, "yf",
+        SimpleNamespace(Ticker=lambda symbol: FakeTicker(info)),
+    )
+```
+
+A full fake `.info` (use these exact values so assertions are exact):
+```python
+FULL_INFO = {
+    "open": 148.0, "dayHigh": 152.0, "dayLow": 147.5,
+    "regularMarketPreviousClose": 145.0, "volume": 55_000_000,
+    "fiftyTwoWeekLow": 164.0, "fiftyTwoWeekHigh": 237.25,
+    "marketCap": 3_500_000_000_000,
+    "trailingPE": 28.5, "trailingEps": 6.10, "dividendYield": 0.57,
+    "beta": 1.2, "fiftyDayAverage": 228.4,
+    "twoHundredDayAverage": 210.15, "avgVolume10days": 42_000_000,
+    "targetMeanPrice": 260.0, "recommendationKey": "buy",
+    "sector": "Technology", "industry": "Consumer Electronics",
+    # new:
+    "forwardPE": 35.5, "priceToBook": 46.3, "pegRatio": 2.74,
+    "payoutRatio": 0.1204, "grossMargins": 0.48653,
+    "operatingMargins": 0.32623, "profitMargins": 0.27619,
+    "returnOnEquity": 1.4875, "revenueGrowth": 0.164,
+    "earningsGrowth": 0.287, "totalCash": 62_399_000_576,
+    "totalDebt": 84_343_996_416, "freeCashflow": 107_721_875_456,
+    "ebitda": 167_959_003_136, "debtToEquity": 78.445,
+    "sharesOutstanding": 14_594_180_000, "floatShares": 14_569_078_010,
+    "recommendationMean": 2.20455, "numberOfAnalystOpinions": 39,
+    "fullTimeEmployees": 150_000, "targetLowPrice": 215.0,
+    "targetHighPrice": 405.0, "targetMedianPrice": 340.0,
+    "country": "United States", "quoteType": "EQUITY",
+    "website": "https://www.apple.com",
+    "longBusinessSummary": "Apple Inc. designs and sells electronics.",
 }
 ```
 
-Use the existing `--accent` token (no new variable). If `--accent` is a
-link/button color that reads oddly, fall back to the existing warning/state
-token in style.css — pick ONE and keep the class name `.tx-warnings`.
+Data-layer tests:
+1. `test_get_stats_returns_new_keys` — patch FULL_INFO; assert every new app
+   key is present and equals its expected value (ratios and text included).
+2. `test_fraction_fields_are_percent_numbers` — assert
+   `payout_ratio == 12.04`, `gross_margin == 48.653`,
+   `operating_margin == pytest.approx(32.623)`,
+   `profit_margin == pytest.approx(27.619)`,
+   `return_on_equity == pytest.approx(148.75)`,
+   `revenue_growth == pytest.approx(16.4)`,
+   `earnings_growth == pytest.approx(28.7)`.
+3. `test_debt_to_equity_verbatim` — `debt_to_equity == 78.445` (NOT 7844.5).
+4. `test_missing_fields_are_none` — patch `{"marketCap": 5}`; every new key
+   is `None`, and `get_stats` does NOT raise.
+5. `test_non_finite_becomes_none` — patch
+   `{"profitMargins": float("nan"), "totalCash": float("inf")}`; both keys
+   `None`.
+6. `test_empty_info_raises` — patch `{}`; `pytest.raises(ValueError)`.
 
-## 5. NEW tests/trade_warnings tests — write FIRST, all must fail
+Route test (uses the `client` + `fake_market` fixtures):
+7. `test_stats_route_passes_new_keys_through` — set
+   `fake_market.stats["AAPL"] = FULL_INFO_in_APP_SHAPE` (any dict with a few
+   new keys is fine); assert `/api/stock/AAPL/stats` returns it UNCHANGED.
 
-File: `tests/test_trade_warnings.py`.
+UI meta-tests (render `client.get("/stock/AAPL")` HTML):
+8. `test_stock_page_has_all_new_stat_ids` — every new id appears as
+   `id="<id>"`.
+9. `test_new_stat_cells_ship_empty` — for each new numeric id, the regex
+   `r'<dd id="<id>">([^<]*)</dd>'` matches and group(1) == ""; for
+   `stat-about`, the regex `r'<p class="stats-about" id="stat-about">([^<]*)</p>'`
+   matches and group(1) == "".
 
-Imports:
-```python
-import db
-import app as app_module
-from app import compute_trade_warnings
-from conftest import make_quote, seed_user, main_portfolio_id
-```
+## 7. Order of work
+1. Write ALL tests in `tests/test_stock_stats.py`.
+2. Run `python -m pytest tests/test_stock_stats.py` — expect failures.
+3. Add `_percent_number` and the new keys in `market_data.py`; update the
+   docstring.
+4. Update `templates/stock.html`.
+5. Update `static/js/stock.js` (`paintStats`, `STAT_IDS`).
+6. Update `static/style.css`.
+7. Update `project-brief.md`.
+8. `python -m pytest tests/test_stock_stats.py` → green.
+9. Run the FULL `python -m pytest` (the suite is ~17s steady state).
+10. Capture a screenshot of the expanded stats card (UI PR rule).
+11. Report; await the user's GUI gate and commit approval. Do NOT commit.
 
-Helper:
-```python
-def seed(price, qty, side="BUY", date="2026-08-01",
-         currency="CAD", fx=1.0, ticker="ABC", pid=1):
-    return db.add_transaction(ticker, date, price, qty, currency, side, fx,
-                              portfolio_id=pid)
-```
-
-For every route test set a quote so POST accepts the ticker:
-```python
-fake_market.quotes["ABC"] = make_quote("ABC", 12, 11, "CAD")
-```
-
-Route tests use the `client` fixture (signed in as tester, portfolio 1).
-CAD tickers avoid FX fetches (fx_rate derived as 1.0 with no market call).
-
-### Pure-helper tests
-1. `test_helper_future_date_warns` — `today=date(2026,1,1)` and
-   `transaction_date="2026-01-02"` → `["date is in the future"]`; pass the
-   same date as `today` → `[]` (boundary: today is not future).
-   Import `date` from `datetime`.
-2. `test_helper_oversell` — rows = one BUY 10 on 2026-08-01; call with SELL
-   qty 15 date 2026-08-02, exclude_id=999 (the saved row is NOT in rows).
-   Assert one warning containing "exceeds the 10 shares held".
-3. `test_helper_oversell_boundary_and_partial` — hold 10, sell 10 → no
-   oversell warning; hold 10, sell 4 → none.
-4. `test_helper_oversell_tolerance` — hold 0.1+0.2 (two rows), sell 0.3 →
-   no oversell warning (float residue, locked).
-5. `test_helper_oversell_ignores_later_rows` — hold 10 on 2026-08-01, a BUY
-   dated 2026-09-01 must NOT count toward a 2026-08-02 sell.
-6. `test_helper_duplicate_requires_all_five_fields` — a matching row
-   (ticker/date/type/qty/price) warns; then one field changed each time
-   (ticker, date, type, qty, price) does NOT warn.
-7. `test_helper_duplicate_excludes_self` — pass `exclude_id` equal to the
-   matching row's id → no warning.
-8. `test_helper_clean_buy_has_no_warnings` — no rows, BUY qty 5 price 10
-   date in the past → `[]`.
-
-### Route tests
-9. `test_post_returns_empty_warnings_for_clean_buy` — 201, body
-   `"warnings" == []`, row stored.
-10. `test_post_reports_oversell_but_still_writes` — seed BUY 10, POST SELL
-    15 → 201; `body["warnings"]` has one oversell entry; the new row is in
-    `db.get_transactions(1)` (the write happened).
-11. `test_post_reports_future_date_but_still_writes` — POST date
-    "2999-01-01" → 201, warning mentions future, row stored.
-12. `test_post_reports_same_day_duplicate` — happy POST, then POST the SAME
-    body again → second reply has a duplicate warning and the row count is 2.
-13. `test_put_does_not_flag_itself` — seed a row, PUT it with unchanged
-    values → 200 and `body["warnings"] == []` (self is excluded, so no
-    duplicate and no oversell on the edited SELL).
-14. `test_put_reports_warning_and_applies_edit` — seed BUY 10 then a SELL
-    row of qty 4; PUT the SELL to qty 15 → 200, warning mentions oversell,
-    and the stored qty is 15.
-15. `test_import_preview_and_commit_have_no_warnings_field` — import preview
-    reply has no `warnings` key; commit reply has no `warnings` key.
-16. `test_warning_log_does_not_leak_amounts` — optional if caplog is easy;
-    the route log lines (`event=transaction_created`) must not contain the
-    warning text or the qty. If this proves brittle, drop it — the existing
-    logging tests already lock the no-amount rule.
-
-If any assertion about a helper's return shape turns out wrong (e.g.
-`db.add_transaction` positional args), read `db.py` and adjust the TEST,
-never the contract. `db.add_transaction` signature is
-`(ticker, transaction_date, price, qty, currency, transaction_type, fx_rate,
-fee=None, *, portfolio_id)`.
-
-## 6. Order of work
-1. Write ALL failing tests → `python -m pytest tests/test_trade_warnings.py`
-   (expect failures / collection errors).
-2. Implement `compute_trade_warnings`.
-3. Wire POST and PUT.
-4. Implement the frontend block (html, js, css).
-5. `python -m pytest tests/test_trade_warnings.py` to green.
-6. Run the FULL `python -m pytest` (Docker + ledger meta-tests stay green).
-7. Capture a screenshot of the ledger form showing warnings (UI PR rule).
-8. Report; await the user's GUI gate and commit approval. Do not commit.
+## 8. Guardrails
+- Do not add a second symbol list, a new endpoint, a cache, or a poll.
+- Do not `round()` percent values in Python; the frontend formats.
+- Do not multiply `debt_to_equity` by 100.
+- Do not change any existing key name or any existing template id.
+- Match the file's existing heavy explanatory-comment style.

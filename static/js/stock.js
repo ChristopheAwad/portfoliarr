@@ -223,17 +223,114 @@ function paintStats(stats) {
             ? null : titleCaseRecommendation(stats.recommendation));
     setStat("stat-sector", stats.sector === null ? null : stats.sector);
     setStat("stat-industry", stats.industry === null ? null : stats.industry);
+
+    // The fundamentals expansion (same already-fetched profile, many more
+    // keys read out of it). Formatter per kind of number:
+    //   ratios (forward P/E, P/B, PEG, rec. mean) → plain
+    //   the percent fields arrive as backend ×100 numbers → "%" appended
+    //   target low/high/median → price-shaped
+    //   cash/debt/EBITDA/shares → compact ("107.72B")
+    //   headcount → integer ("150,000")
+    //   country/type → raw text
+    setStat("stat-forward-pe",
+        stats.forward_pe === null ? null : formatNumber(stats.forward_pe));
+    setStat("stat-price-to-book",
+        stats.price_to_book === null ? null : formatNumber(stats.price_to_book));
+    setStat("stat-peg",
+        stats.peg_ratio === null ? null : formatNumber(stats.peg_ratio));
+    // The percent fields: null stays null (setStat renders "—"); otherwise
+    // the backend already ×100'd the fraction, so this only appends "%".
+    // debt_to_equity is in this list because the backend passes Yahoo's
+    // already-scaled figure through — no ×100 here either.
+    setStat("stat-payout-ratio",
+        stats.payout_ratio === null ? null : `${formatNumber(stats.payout_ratio)}%`);
+    setStat("stat-gross-margin",
+        stats.gross_margin === null ? null : `${formatNumber(stats.gross_margin)}%`);
+    setStat("stat-operating-margin",
+        stats.operating_margin === null
+            ? null : `${formatNumber(stats.operating_margin)}%`);
+    setStat("stat-profit-margin",
+        stats.profit_margin === null ? null : `${formatNumber(stats.profit_margin)}%`);
+    setStat("stat-return-on-equity",
+        stats.return_on_equity === null
+            ? null : `${formatNumber(stats.return_on_equity)}%`);
+    setStat("stat-revenue-growth",
+        stats.revenue_growth === null ? null : `${formatNumber(stats.revenue_growth)}%`);
+    setStat("stat-earnings-growth",
+        stats.earnings_growth === null ? null : `${formatNumber(stats.earnings_growth)}%`);
+    setStat("stat-debt-to-equity",
+        stats.debt_to_equity === null
+            ? null : `${formatNumber(stats.debt_to_equity)}%`);
+    setStat("stat-target-low",
+        stats.target_low === null ? null : formatPrice(stats.target_low));
+    setStat("stat-target-high",
+        stats.target_high === null ? null : formatPrice(stats.target_high));
+    setStat("stat-target-median",
+        stats.target_median === null ? null : formatPrice(stats.target_median));
+    setStat("stat-num-analysts",
+        stats.num_analyst_opinions === null
+            ? null : integerFormat.format(stats.num_analyst_opinions));
+    setStat("stat-recommendation-mean",
+        stats.recommendation_mean === null
+            ? null : formatNumber(stats.recommendation_mean));
+    setStat("stat-total-cash",
+        stats.total_cash === null ? null : compactFormat.format(stats.total_cash));
+    setStat("stat-total-debt",
+        stats.total_debt === null ? null : compactFormat.format(stats.total_debt));
+    setStat("stat-free-cash-flow",
+        stats.free_cashflow === null
+            ? null : compactFormat.format(stats.free_cashflow));
+    setStat("stat-ebitda",
+        stats.ebitda === null ? null : compactFormat.format(stats.ebitda));
+    setStat("stat-shares-out",
+        stats.shares_outstanding === null
+            ? null : compactFormat.format(stats.shares_outstanding));
+    setStat("stat-float-shares",
+        stats.float_shares === null
+            ? null : compactFormat.format(stats.float_shares));
+    setStat("stat-employees",
+        stats.employees === null ? null : integerFormat.format(stats.employees));
+    setStat("stat-country", stats.country === null ? null : stats.country);
+    setStat("stat-quote-type",
+        stats.quote_type === null ? null : stats.quote_type);
+
+    // Website is a link, so setStat's text-only rule is not enough.
+    if (stats.website == null) {
+        setStat("stat-website", null);
+        document.getElementById("stat-website").removeAttribute("href");
+    } else {
+        const link = document.getElementById("stat-website");
+        link.textContent = stats.website;
+        link.href = stats.website;
+    }
+
+    // About: the free-text company description. Prose, so the shared
+    // setStat null rule renders "—" when Yahoo has no summary.
+    setStat("stat-about", stats.business_summary);
 }
 
 // The grid's cell ids — used by the failure path to degrade the whole
 // grid at once ("…" means waiting; "—" means this load couldn't price).
-const STAT_IDS = ["stat-open", "stat-day-high", "stat-day-low",
+// Ordered to mirror the template's cluster order.
+const STAT_IDS = ["stat-about",
+                  "stat-open", "stat-day-high", "stat-day-low",
                   "stat-prev-close", "stat-volume",
-                  "stat-week52-range", "stat-market-cap",
-                  "stat-pe", "stat-eps", "stat-dividend-yield", "stat-beta",
-                  "stat-50d-avg", "stat-200d-avg", "stat-avg-volume",
-                  "stat-target-price", "stat-rating", "stat-sector",
-                  "stat-industry"];
+                  "stat-avg-volume",
+                  "stat-week52-range", "stat-50d-avg", "stat-200d-avg",
+                  "stat-market-cap", "stat-pe", "stat-forward-pe",
+                  "stat-peg", "stat-price-to-book", "stat-eps", "stat-beta",
+                  "stat-dividend-yield", "stat-payout-ratio",
+                  "stat-target-price", "stat-target-low", "stat-target-high",
+                  "stat-target-median", "stat-rating", "stat-num-analysts",
+                  "stat-recommendation-mean",
+                  "stat-gross-margin", "stat-operating-margin",
+                  "stat-profit-margin", "stat-return-on-equity",
+                  "stat-revenue-growth", "stat-earnings-growth",
+                  "stat-total-cash", "stat-total-debt", "stat-debt-to-equity",
+                  "stat-free-cash-flow", "stat-ebitda", "stat-shares-out",
+                  "stat-float-shares",
+                  "stat-sector", "stat-industry", "stat-country",
+                  "stat-quote-type", "stat-employees", "stat-website"];
 
 async function refreshStockStats() {
     try {

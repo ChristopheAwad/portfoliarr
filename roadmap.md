@@ -231,6 +231,85 @@ typed confirmation and the schema guard are the only protections.
 
 ---
 
+### 52. Ticker Page Fundamentals Expansion
+The stock detail page's stats grid already fetches Yahoo's full company profile
+but shows only 18 values. Add the rest to the SAME once-per-load call: forward
+P/E, price/book, PEG, payout ratio; gross/operating/profit margin, return on
+equity, revenue and earnings growth; total cash, total debt, debt/equity, free
+cash flow, EBITDA; shares outstanding and float; target low/high/median,
+analyst count, recommendation mean; country, quote type, website, employees,
+and a business summary. Fraction ratios (payout, margins, ROE, growth) become
+percent numbers at the data boundary; debt/equity is already scaled and stays
+verbatim. No new endpoint, no new network call; a missing field shows "—".
+
+**Effort:** 1 day
+**Files:** `market_data.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_stats.py`, `project-brief.md`
+**Depends on:** Nothing
+**Status:** in progress
+
+---
+
+### 53. Ticker Page Position Card
+Show the signed-in person's holding in the security on its detail page: net
+quantity, average cost, cost basis, live value, unrealized gain $/%, and the
+day move, all in the security's NATIVE currency (matching the page's rule).
+One new route, `GET /api/portfolio/position?symbol=<symbol>`, whose path sits
+under `/api/portfolio/` so the existing ownership hook enforces it. The card
+reads the active portfolio only; a symbol not held hides it, a failed quote
+degrades to facts only, and USD without a rate shows no fake CAD. The ledger
+fold is the same average-cost replay the group aggregates use, computed for
+one symbol.
+
+**Effort:** 1.5 days
+**Files:** `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_position.py`
+**Depends on:** Nothing
+
+---
+
+### 54. Ticker Page Financials Table
+Add a small income-statement table to the stock detail page: Total Revenue,
+Gross Profit, Operating Income, Net Income, and Diluted EPS for the last four
+fiscal years (Yahoo's annual `income_stmt`). A new `get_financials(symbol)` in
+the data layer returns raw native-currency floats and a long-TTL process cache;
+a new `GET /api/stock/<symbol>/financials` route 404s only when the statement
+is empty, and the frontend hides the table for securities with no statement
+(ETFs, crypto, indices).
+
+**Effort:** 2 days
+**Files:** `market_data.py`, `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_financials.py`
+**Depends on:** Nothing
+
+---
+
+### 55. Ticker Page Dividends and Earnings
+Add an "Events" cluster to the stock detail page: the next earnings date, the
+ex-dividend and dividend dates, and the recent dividend history with a
+trailing-12-month total. One new `get_events(symbol)` merges Yahoo's
+`Ticker.calendar` with `Ticker.dividends` behind a process-memory cache; a new
+`GET /api/stock/<symbol>/events` route serves it, and instruments with no
+dividends or calendar (crypto, many growth ETFs) show the cluster hidden or
+degraded, never fake dates.
+
+**Effort:** 1.5 days
+**Files:** `market_data.py`, `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_events.py`
+**Depends on:** Nothing
+
+---
+
+### 56. Ticker Page Volume Bars
+Draw trading volume under the stock page's price line. The stock history reply
+gains a `volumes` array aligned to its labels, fetched without changing the
+shared `get_history` the portfolio chart uses. The chart factory draws volume
+as a bar dataset (on a hidden second y-axis behind the price line) only when a
+reply carries volumes, so the dashboard chart is untouched. Reworked or
+reverted freely if it fights the chart's existing hover/measure/cost plugins.
+
+**Effort:** 2 days
+**Files:** `market_data.py`, `app.py`, `static/js/common.js`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_volume.py`
+**Depends on:** Nothing
+
+---
+
 ## Tier 2 — Core Features (3–5 days each)
 
 ### 23. Several Named Portfolios
@@ -664,7 +743,12 @@ Tier 1 (all independent; shipped dependencies are noted but do not block):
   39. Historical FX Backfill ────────────┤
   40. Calendar Returns Table (#13) ──────┤
   45. Ledger Trade Sanity Warnings ──────┤
-  47. Database Backup and Restore (#26) ─┘
+  47. Database Backup and Restore (#26) ─┤
+  52. Ticker Fundamentals ──────────────┤
+  53. Ticker Position Card ─────────────┤
+  54. Ticker Financials ────────────────┤
+  55. Ticker Dividends/Earnings ────────┤
+  56. Ticker Volume Bars ───────────────┘
 
 Tier 2 (all independent of each other):
   6. Dividend Tracking ────────────────┐
@@ -745,6 +829,11 @@ For maximum compounding value:
 30. **Holdings Age on the Ledger** → days held per group, a count on aggregates that already exist
 34. **Quick-Watch Star in Search** → add to the watchlist without leaving the dropdown
 35. **Android Pull-to-Refresh and Share** → the two gestures phone users expect from a client app
+52. **Ticker Fundamentals Expansion** → the cheap stock-page win: more numbers from the profile call the page already makes
+53. **Ticker Position Card** → turns the page from "this security" into "your stake in this security"
+54. **Ticker Financials Table** → revenue/profit/loss context behind the price
+55. **Ticker Dividends and Earnings** → the dates and payouts a holder watches
+56. **Ticker Volume Bars** → trading activity under the price line
 51. **Android Home-Screen Widget** → the portfolio total on the launcher
 47. **Database Backup and Restore** → a copy of the whole ledger you can put back
 11. **Search Caching** → resilience

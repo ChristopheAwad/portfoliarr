@@ -47,7 +47,10 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
 
 - Large current price display
 - Time-segmented price chart with buttons: 1D · 5D · 1M · 6M · YTD · 1Y · 5Y · MAX
-- Basic stats grid (open, high, low, prev close, volume, 52-week range, market cap)
+- Stats grid grouped into labelled clusters: today's bar, ranges and moving
+  averages, valuation multiples, dividends and analyst targets, profitability
+  margins and growth, balance-sheet figures, and a company profile (sector,
+  industry, country, type, employees, website) with a free-text About summary
 - Buttons to add to watchlist or log a transaction
 
 ## Scope (MVP — Lean)
@@ -310,7 +313,10 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   and the rule moved to Design Rules. Kept here as decision history.
 - **Stock-detail stats come from the heavy `Ticker.info` endpoint,
   fetched once per page load and never polled.** The stats grid's numbers
-  (open, day high/low, prev close, volume, 52-week range, market cap)
+  (today's bar, ranges and averages, valuation multiples — P/E, forward
+  P/E, PEG, price/book — dividends and analyst targets, profitability
+  margins and growth, balance-sheet figures, and the company profile
+  plus business summary)
   reset at most once per trading day, and `.info` is the slowest call
   yfinance offers — polling it every 60s would pay its cost for data that
   cannot move. The quote (fast_info) IS polled; the stats are not.
