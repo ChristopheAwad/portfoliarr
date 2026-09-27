@@ -312,7 +312,8 @@ function paintStats(stats) {
 // The grid's cell ids — used by the failure path to degrade the whole
 // grid at once ("…" means waiting; "—" means this load couldn't price).
 // Ordered to mirror the template's cluster order.
-const STAT_IDS = ["stat-open", "stat-day-high", "stat-day-low",
+const STAT_IDS = ["stat-about",
+                  "stat-open", "stat-day-high", "stat-day-low",
                   "stat-prev-close", "stat-volume",
                   "stat-avg-volume",
                   "stat-week52-range", "stat-50d-avg", "stat-200d-avg",
@@ -329,8 +330,7 @@ const STAT_IDS = ["stat-open", "stat-day-high", "stat-day-low",
                   "stat-free-cash-flow", "stat-ebitda", "stat-shares-out",
                   "stat-float-shares",
                   "stat-sector", "stat-industry", "stat-country",
-                  "stat-quote-type", "stat-employees", "stat-website",
-                  "stat-about"];
+                  "stat-quote-type", "stat-employees", "stat-website"];
 
 async function refreshStockStats() {
     try {

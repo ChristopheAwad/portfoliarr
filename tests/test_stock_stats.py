@@ -29,7 +29,6 @@ import pytest
 from types import SimpleNamespace
 
 import market_data
-from conftest import make_quote
 
 
 class FakeTicker:
