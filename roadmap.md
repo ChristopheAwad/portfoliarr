@@ -269,7 +269,8 @@ one symbol.
 ### 54. Ticker Page Financials Table
 Add a small income-statement table to the stock detail page: Total Revenue,
 Gross Profit, Operating Income, Net Income, and Diluted EPS for the last four
-fiscal years (Yahoo's annual `income_stmt`). A new `get_financials(symbol)` in
+fiscal years (Yahoo's annual `income_stmt`), plus a grouped-bar chart of the
+same rows above the table. A new `get_financials(symbol)` in
 the data layer returns raw native-currency floats and a long-TTL process cache;
 a new `GET /api/stock/<symbol>/financials` route 404s only when the statement
 is empty, and the frontend hides the table for securities with no statement
@@ -278,6 +279,7 @@ is empty, and the frontend hides the table for securities with no statement
 **Effort:** 2 days
 **Files:** `market_data.py`, `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_financials.py`
 **Depends on:** Nothing
+**Status:** shipped 2026-09-28 (PR #93)
 
 ---
 
