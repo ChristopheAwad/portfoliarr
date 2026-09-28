@@ -3946,6 +3946,112 @@ def stock_stats(symbol):
         return jsonify({"error": f"no stats available for {symbol}"}), 404
 
 
+@app.route("/api/portfolio/position")
+def portfolio_position():
+    """The signed-in person's holding in ONE security, in NATIVE money.
+
+    The stock detail page's "your stake" card: net qty, average cost
+    (the same oldest-first replay the ledger group rows use), cost
+    basis, live worth, profit $/%, and the day move. Native currency
+    only — no FX call, so a USD holding never needs a rate.
+
+    A symbol not held returns {"symbol", "held": false} (the frontend
+    hides the card). A held symbol whose quote fails returns facts
+    only (qty, avg_cost, cost_basis); live keys are omitted so the
+    frontend gap-fills "—" instead of a fake number.
+    """
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol is required"}), 400
+
+    rows = [
+        tx for tx in db.get_transactions(g.portfolio_id)
+        if tx["ticker"] == symbol
+    ]
+    if not rows:
+        return jsonify({"symbol": symbol, "held": False})
+
+    pos_qty = 0.0
+    pos_cost = 0.0
+    for tx in reversed(rows):
+        signed = tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
+        px = tx["price"]
+        # Legacy-zero guard (same rule as the other two replays).
+        fee_per_share = ((tx["fee"] or 0) / tx["qty"] * px / tx["price"]
+                         if tx["qty"] and tx["price"] else 0)
+        opening_price = px + fee_per_share if signed > 0 else px - fee_per_share
+        if abs(pos_qty) <= FLAT_QTY_TOL:
+            pos_qty = signed
+            pos_cost = abs(signed) * opening_price
+            continue
+        if (pos_qty > 0) == (signed > 0):
+            pos_qty += signed
+            pos_cost += abs(signed) * opening_price
+            continue
+        pool_avg = pos_cost / abs(pos_qty)
+        if abs(signed) <= abs(pos_qty):
+            pos_qty += signed
+            pos_cost = abs(pos_qty) * pool_avg
+            if abs(pos_qty) <= FLAT_QTY_TOL:
+                pos_qty = 0.0
+                pos_cost = 0.0
+        else:
+            excess = abs(signed) - abs(pos_qty)
+            if excess <= FLAT_QTY_TOL:
+                pos_qty = 0.0
+                pos_cost = 0.0
+            else:
+                pos_qty = excess if signed > 0 else -excess
+                pos_cost = excess * opening_price
+
+    avg_cost = (
+        pos_cost / abs(pos_qty) if abs(pos_qty) > FLAT_QTY_TOL else None
+    )
+
+    net_qty = 0.0
+    cost = 0.0
+    for tx in rows:
+        sign = 1 if tx["transaction_type"] == "BUY" else -1
+        net_qty += sign * tx["qty"]
+        cost += sign * tx["price"] * tx["qty"] + (tx["fee"] or 0)
+
+    if abs(net_qty) <= FLAT_QTY_TOL or avg_cost is None:
+        return jsonify({"symbol": symbol, "held": False})
+
+    currency = rows[0]["currency"]
+    facts = {
+        "symbol": symbol,
+        "currency": currency,
+        "qty": net_qty,
+        "avg_cost": avg_cost,
+        "cost_basis": cost,
+        "held": True,
+    }
+
+    try:
+        quote = get_quote(symbol)
+    except Exception as exc:
+        app.logger.warning(
+            "event=stock_data_degraded request_id=%s operation=position "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, type(exc).__name__,
+        )
+        return jsonify(facts)
+
+    value = net_qty * quote["price"]
+    gain = value - cost
+    return jsonify({
+        **facts,
+        "price": quote["price"],
+        "previous_close": quote["previous_close"],
+        "value": value,
+        "gain": gain,
+        "gain_pct": gain / cost * 100 if cost > 0 else None,
+        "day_gain": net_qty * quote["change"],
+        "day_gain_pct": quote["change_pct"],
+    })
+
+
 @app.route("/api/stock/<symbol>/financials")
 def stock_financials(symbol):
     """The detail page's annual income statement, fetched ONCE per page

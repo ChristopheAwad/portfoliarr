@@ -124,6 +124,26 @@
             </div>
         </div>
 
+        <!-- Position card — the signed-in person's holding in THIS
+             security, in native currency (the page's rule: no FX math).
+             Ships HIDDEN: most visitors hold nothing here, and a symbol
+             not held is normal, not an error. All <dd> ship EMPTY (the
+             :empty shimmer fills in while the fetch runs); stock.js
+             unhides only when the reply says held:true, and gap-fills
+             live cells to "—" when the quote failed. -->
+        <div class="card position-card" id="position-card" hidden>
+            <h3>Your Position</h3>
+            <p class="position-note" id="position-note"></p>
+            <dl class="stats-grid">
+                <div class="stat"><dt>Shares</dt><dd id="pos-qty"></dd></div>
+                <div class="stat"><dt>Avg Cost</dt><dd id="pos-avg"></dd></div>
+                <div class="stat"><dt>Cost</dt><dd id="pos-cost"></dd></div>
+                <div class="stat"><dt>Value</dt><dd id="pos-value"></dd></div>
+                <div class="stat"><dt>Total Gain</dt><dd id="pos-gain"></dd></div>
+                <div class="stat"><dt>Day Move</dt><dd id="pos-day"></dd></div>
+            </dl>
+        </div>
+
         <!-- Stats card — the numbers that reset every trading day, fetched
              ONCE per page load (not polled): they come from Yahoo's heavy
              profile endpoint, and 60s polling would pay its cost for data
