@@ -18,7 +18,11 @@ android {
         minSdk = 24
         targetSdk = 34
         // versionCode is Android-specific; versionName is shared with Flask.
-        versionCode = project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 1
+        // No silent fallback: a missing VERSION_CODE must fail loudly at
+        // configuration time rather than ship versionCode 1 and force an
+        // uninstall-required downgrade on every device.
+        versionCode = project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull()
+            ?: error("VERSION_CODE property is required (see android/gradle.properties)")
         versionName = sharedVersion
     }
 

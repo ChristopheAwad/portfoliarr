@@ -39,3 +39,10 @@ AGENTS.md
 
 # Test framework
 .pytest_cache/
+
+# Scratch / local working files (never committed)
+android/.gradle/
+comparison.html
+ui-nomenclature-audit.html
+video/
+bugs.html

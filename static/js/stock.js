@@ -49,7 +49,7 @@ let activePeriod = "5D";
 function paintPeriodChange(el, period, value, pct) {
     const sign = value >= 0 ? "+" : "-";
     const amount = `${sign}$${formatNumber(Math.abs(value))}`;
-    el.textContent = pct === null
+    el.textContent = pct === null || pct === undefined
         ? `${period}: ${amount}`
         : `${period}: ${amount} (${sign}${Math.abs(pct).toFixed(2)}%)`;
     // Green for a gain, red for a loss — one call each, same as paintChange.
@@ -95,6 +95,14 @@ async function refreshStockQuote() {
 
     try {
         const response = await fetch(`/api/stock/${encodeURIComponent(symbol)}`);
+        if (response.status === 404) {
+            // Yahoo doesn't know this symbol (typo, delisted) — permanent,
+            // so later poll cycles stop asking. Other failures (network,
+            // 503 outage) keep polling below.
+            symbolKnown = false;
+            markUnknownSymbol();
+            return;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const quote = await response.json();
 
@@ -172,25 +180,25 @@ function paintStats(stats) {
     // Money cells: native currency figures, bare numbers — the currency
     // lives in the header's price ("229.50 USD") and repeating it in every
     // price-shaped cell would just be noise (Google Finance does the same).
-    setStat("stat-open", stats.open === null ? null : formatPrice(stats.open));
+    setStat("stat-open", stats.open == null ? null : formatPrice(stats.open));
     setStat("stat-day-high",
-        stats.day_high === null ? null : formatPrice(stats.day_high));
+        stats.day_high == null ? null : formatPrice(stats.day_high));
     setStat("stat-day-low",
-        stats.day_low === null ? null : formatPrice(stats.day_low));
+        stats.day_low == null ? null : formatPrice(stats.day_low));
     setStat("stat-prev-close",
-        stats.prev_close === null ? null : formatPrice(stats.prev_close));
+        stats.prev_close == null ? null : formatPrice(stats.prev_close));
     setStat("stat-volume",
-        stats.volume === null ? null : integerFormat.format(stats.volume));
+        stats.volume == null ? null : integerFormat.format(stats.volume));
 
     // 52W range: one cell for the pair. A range with one side missing
     // isn't a range — both must exist or the cell says "—".
     setStat("stat-week52-range",
-        stats.week52_low === null || stats.week52_high === null
+        stats.week52_low == null || stats.week52_high == null
             ? null
             : `${formatPrice(stats.week52_low)} – ${formatPrice(stats.week52_high)}`);
 
     setStat("stat-market-cap",
-        stats.market_cap === null ? null : compactFormat.format(stats.market_cap));
+        stats.market_cap == null ? null : compactFormat.format(stats.market_cap));
 
     // The 11 cheap additions (same already-fetched profile, more keys read
     // out of it). One formatter per kind of number:
@@ -198,31 +206,31 @@ function paintStats(stats) {
     //   price-shaped; yield → backend-sent 0-100 figure + "%"; analyst
     //   target → price-shaped; volume → integer like Volume above.
     setStat("stat-pe",
-        stats.pe_ratio === null ? null : formatNumber(stats.pe_ratio));
+        stats.pe_ratio == null ? null : formatNumber(stats.pe_ratio));
     setStat("stat-eps",
-        stats.eps === null ? null : formatPrice(stats.eps));
+        stats.eps == null ? null : formatPrice(stats.eps));
     setStat("stat-dividend-yield",
-        stats.dividend_yield === null
+        stats.dividend_yield == null
             ? null
             : `${formatNumber(stats.dividend_yield)}%`);
     setStat("stat-beta",
-        stats.beta === null ? null : formatNumber(stats.beta));
+        stats.beta == null ? null : formatNumber(stats.beta));
     setStat("stat-50d-avg",
-        stats.fifty_day_average === null
+        stats.fifty_day_average == null
             ? null : formatPrice(stats.fifty_day_average));
     setStat("stat-200d-avg",
-        stats.two_hundred_day_average === null
+        stats.two_hundred_day_average == null
             ? null : formatPrice(stats.two_hundred_day_average));
     setStat("stat-avg-volume",
-        stats.avg_volume === null
+        stats.avg_volume == null
             ? null : integerFormat.format(stats.avg_volume));
     setStat("stat-target-price",
-        stats.target_price === null ? null : formatPrice(stats.target_price));
+        stats.target_price == null ? null : formatPrice(stats.target_price));
     setStat("stat-rating",
-        stats.recommendation === null
+        stats.recommendation == null
             ? null : titleCaseRecommendation(stats.recommendation));
-    setStat("stat-sector", stats.sector === null ? null : stats.sector);
-    setStat("stat-industry", stats.industry === null ? null : stats.industry);
+    setStat("stat-sector", stats.sector == null ? null : stats.sector);
+    setStat("stat-industry", stats.industry == null ? null : stats.industry);
 
     // The fundamentals expansion (same already-fetched profile, many more
     // keys read out of it). Formatter per kind of number:
@@ -233,66 +241,66 @@ function paintStats(stats) {
     //   headcount → integer ("150,000")
     //   country/type → raw text
     setStat("stat-forward-pe",
-        stats.forward_pe === null ? null : formatNumber(stats.forward_pe));
+        stats.forward_pe == null ? null : formatNumber(stats.forward_pe));
     setStat("stat-price-to-book",
-        stats.price_to_book === null ? null : formatNumber(stats.price_to_book));
+        stats.price_to_book == null ? null : formatNumber(stats.price_to_book));
     setStat("stat-peg",
-        stats.peg_ratio === null ? null : formatNumber(stats.peg_ratio));
+        stats.peg_ratio == null ? null : formatNumber(stats.peg_ratio));
     // The percent fields: null stays null (setStat renders "—"); otherwise
     // the backend already ×100'd the fraction, so this only appends "%".
     // debt_to_equity is in this list because the backend passes Yahoo's
     // already-scaled figure through — no ×100 here either.
     setStat("stat-payout-ratio",
-        stats.payout_ratio === null ? null : `${formatNumber(stats.payout_ratio)}%`);
+        stats.payout_ratio == null ? null : `${formatNumber(stats.payout_ratio)}%`);
     setStat("stat-gross-margin",
-        stats.gross_margin === null ? null : `${formatNumber(stats.gross_margin)}%`);
+        stats.gross_margin == null ? null : `${formatNumber(stats.gross_margin)}%`);
     setStat("stat-operating-margin",
-        stats.operating_margin === null
+        stats.operating_margin == null
             ? null : `${formatNumber(stats.operating_margin)}%`);
     setStat("stat-profit-margin",
-        stats.profit_margin === null ? null : `${formatNumber(stats.profit_margin)}%`);
+        stats.profit_margin == null ? null : `${formatNumber(stats.profit_margin)}%`);
     setStat("stat-return-on-equity",
-        stats.return_on_equity === null
+        stats.return_on_equity == null
             ? null : `${formatNumber(stats.return_on_equity)}%`);
     setStat("stat-revenue-growth",
-        stats.revenue_growth === null ? null : `${formatNumber(stats.revenue_growth)}%`);
+        stats.revenue_growth == null ? null : `${formatNumber(stats.revenue_growth)}%`);
     setStat("stat-earnings-growth",
-        stats.earnings_growth === null ? null : `${formatNumber(stats.earnings_growth)}%`);
+        stats.earnings_growth == null ? null : `${formatNumber(stats.earnings_growth)}%`);
     setStat("stat-debt-to-equity",
-        stats.debt_to_equity === null
+        stats.debt_to_equity == null
             ? null : `${formatNumber(stats.debt_to_equity)}%`);
     setStat("stat-target-low",
-        stats.target_low === null ? null : formatPrice(stats.target_low));
+        stats.target_low == null ? null : formatPrice(stats.target_low));
     setStat("stat-target-high",
-        stats.target_high === null ? null : formatPrice(stats.target_high));
+        stats.target_high == null ? null : formatPrice(stats.target_high));
     setStat("stat-target-median",
-        stats.target_median === null ? null : formatPrice(stats.target_median));
+        stats.target_median == null ? null : formatPrice(stats.target_median));
     setStat("stat-num-analysts",
-        stats.num_analyst_opinions === null
+        stats.num_analyst_opinions == null
             ? null : integerFormat.format(stats.num_analyst_opinions));
     setStat("stat-recommendation-mean",
-        stats.recommendation_mean === null
+        stats.recommendation_mean == null
             ? null : formatNumber(stats.recommendation_mean));
     setStat("stat-total-cash",
-        stats.total_cash === null ? null : compactFormat.format(stats.total_cash));
+        stats.total_cash == null ? null : compactFormat.format(stats.total_cash));
     setStat("stat-total-debt",
-        stats.total_debt === null ? null : compactFormat.format(stats.total_debt));
+        stats.total_debt == null ? null : compactFormat.format(stats.total_debt));
     setStat("stat-free-cash-flow",
-        stats.free_cashflow === null
+        stats.free_cashflow == null
             ? null : compactFormat.format(stats.free_cashflow));
     setStat("stat-ebitda",
-        stats.ebitda === null ? null : compactFormat.format(stats.ebitda));
+        stats.ebitda == null ? null : compactFormat.format(stats.ebitda));
     setStat("stat-shares-out",
-        stats.shares_outstanding === null
+        stats.shares_outstanding == null
             ? null : compactFormat.format(stats.shares_outstanding));
     setStat("stat-float-shares",
-        stats.float_shares === null
+        stats.float_shares == null
             ? null : compactFormat.format(stats.float_shares));
     setStat("stat-employees",
-        stats.employees === null ? null : integerFormat.format(stats.employees));
-    setStat("stat-country", stats.country === null ? null : stats.country);
+        stats.employees == null ? null : integerFormat.format(stats.employees));
+    setStat("stat-country", stats.country == null ? null : stats.country);
     setStat("stat-quote-type",
-        stats.quote_type === null ? null : stats.quote_type);
+        stats.quote_type == null ? null : stats.quote_type);
 
     // Website is a link, so setStat's text-only rule is not enough.
     if (stats.website == null) {
@@ -301,7 +309,13 @@ function paintStats(stats) {
     } else {
         const link = document.getElementById("stat-website");
         link.textContent = stats.website;
-        link.href = stats.website;
+        // Yahoo supplies this URL: only http(s) links become clickable.
+        // Anything else (javascript:, data:, ...) stays plain text.
+        if (/^https?:\/\//i.test(stats.website)) {
+            link.href = stats.website;
+        } else {
+            link.removeAttribute("href");
+        }
     }
 
     // About: the free-text company description. Prose, so the shared

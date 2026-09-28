@@ -164,10 +164,38 @@ const GHOST_EVENT_WINDOW_MS = 500;
 function setupAutoRefresh(refreshFn) {
     // The live interval ID — null means "paused" (hidden or not started).
     let pollId = null;
+    // Overlap guard: a refresh slower than REFRESH_MS must not pile a
+    // second cycle on top of the first (double Yahoo traffic, out-of-order
+    // paints). While one cycle is in flight, ticks are skipped.
+    let refreshInFlight = false;
+    // Toast debounce: a flapping network fires "online" repeatedly — the
+    // success toast shows at most once per window.
+    let lastOnlineToast = 0;
+    const ONLINE_TOAST_MS = 10000;
+
+    function guardedRefresh() {
+        if (refreshInFlight) return;
+        refreshInFlight = true;
+        let result;
+        try {
+            result = refreshFn();
+        } catch (err) {
+            refreshInFlight = false;
+            throw err;
+        }
+        if (result && typeof result.then === "function") {
+            result.then(
+                () => { refreshInFlight = false; },
+                () => { refreshInFlight = false; }
+            );
+        } else {
+            refreshInFlight = false;
+        }
+    }
 
     function start() {
         if (pollId !== null) return;           // already running
-        pollId = setInterval(refreshFn, REFRESH_MS);
+        pollId = setInterval(guardedRefresh, REFRESH_MS);
     }
 
     function stop() {
@@ -181,8 +209,12 @@ function setupAutoRefresh(refreshFn) {
     // connectivity (Wi-Fi restored, airplane mode off, Doze ends).
     // Fire immediately + toast so the user sees the recovery.
     window.addEventListener("online", () => {
-        refreshFn();
-        showToast("Back online", "success");
+        guardedRefresh();
+        const now = Date.now();
+        if (now - lastOnlineToast >= ONLINE_TOAST_MS) {
+            lastOnlineToast = now;
+            showToast("Back online", "success");
+        }
     });
 
     // --- Foreground refresh ---
@@ -197,7 +229,7 @@ function setupAutoRefresh(refreshFn) {
             stop();                            // save battery
         } else {
             start();                           // restart interval
-            refreshFn();                       // instant refresh
+            guardedRefresh();                  // instant refresh
         }
     });
 
@@ -212,6 +244,7 @@ function setupAutoRefresh(refreshFn) {
 // ---------------------------------------------------------------------------
 
 function formatPrice(value) {
+    if (value === null || value === undefined || !Number.isFinite(value)) return "—";
     return new Intl.NumberFormat("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
@@ -222,6 +255,7 @@ function formatPrice(value) {
 // formatPrice (fixed at 2), maxDigits lets a qty column show fractional
 // amounts ("0.0050" BTC) without trailing-zero spam on whole numbers.
 function formatNumber(value, maxDigits = 2) {
+    if (value === null || value === undefined || !Number.isFinite(value)) return "—";
     return new Intl.NumberFormat("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: maxDigits,
@@ -232,6 +266,7 @@ function formatNumber(value, maxDigits = 2) {
 // Gains are signed in the DATA; the sign character is presentation,
 // so it belongs here (same rule as the chips' "+" prefix).
 function formatSigned(value, currency) {
+    if (value === null || value === undefined || !Number.isFinite(value)) return "—";
     const sign = value >= 0 ? "+" : "";
     return `${sign}${formatNumber(value)} ${currency}`;
 }

@@ -819,6 +819,22 @@ def _request_id():
     return "none"
 
 
+def _is_transport_error(exc):
+    """True when the failure is the network, not the symbol.
+
+    A bad ticker (unknown symbol, delisted, no data) fails inside
+    yfinance's parsing with KeyError/ValueError — that is a 404. A dead
+    network fails inside the HTTP layer with a requests exception — that
+    is a 503. Telling them apart lets routes, monitors, and the frontend
+    distinguish "typo" from "outage" instead of masking both as 404.
+    """
+    try:
+        from requests.exceptions import RequestException
+    except ImportError:  # requests ships with yfinance; be safe anyway
+        return False
+    return isinstance(exc, RequestException)
+
+
 # The @app.route decorator registers this function as the handler for the
 # root URL "/" (e.g. http://localhost:5000/).
 @app.route("/")
@@ -1988,7 +2004,10 @@ def portfolio_realized():
         })
         q = tx["qty"]
         price = tx["price"]
-        fee_per_share = (tx["fee"] or 0) / q
+        # Legacy rows written before validation (or by hand in sqlite3) can
+        # carry qty 0 — the live validator rejects those, but the replay
+        # must not 500 on them. A zero-qty row spreads no fee.
+        fee_per_share = (tx["fee"] or 0) / q if q else 0
         buy_unit = price + fee_per_share
         sell_unit = price - fee_per_share
         rate = stored_rate(tx)
@@ -2540,8 +2559,13 @@ def add_to_watchlist():
 
     # Normalize: trim stray spaces and uppercase ("aapl" and "AAPL" are the
     # same ticker to Yahoo — storing one canonical form keeps 409-duplicate
-    # detection honest).
-    symbol = str(body["symbol"]).strip().upper()
+    # detection honest). Non-strings (a JSON number, null) are a 400:
+    # coercing 123 to "123" would send a nonsense Yahoo lookup instead of
+    # telling the caller the field has the wrong shape.
+    raw_symbol = body["symbol"]
+    if not isinstance(raw_symbol, str):
+        return jsonify({"error": "symbol must be a string"}), 400
+    symbol = raw_symbol.strip().upper()
     if not symbol:
         return jsonify({"error": "symbol is required"}), 400
 
@@ -2838,7 +2862,11 @@ def log_transaction():
     # --- Ticker: same trim + uppercase normalization as the watchlist add
     # route — one canonical form everywhere ("aapl" and "AAPL" must match).
     # (The other four fields share validate_tx_fields with the PUT route.)
-    ticker = str(body.get("ticker", "")).strip().upper()
+    # A non-string ticker is a 400, never a coerced Yahoo lookup.
+    raw_ticker = body.get("ticker", "")
+    if not isinstance(raw_ticker, str):
+        return jsonify({"error": "ticker must be a string"}), 400
+    ticker = raw_ticker.strip().upper()
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
@@ -3161,8 +3189,11 @@ def list_transactions():
                 tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
             )
             px = tx["price_display"]
+            # Same legacy-zero guard as the realized replay: validator-born
+            # rows always have qty/price > 0, but a hand-edited row must
+            # degrade, never 500.
             fee_per_share = ((tx["fee"] or 0) / tx["qty"]
-                             * px / tx["price"])
+                             * px / tx["price"]) if tx["qty"] and tx["price"] else 0
             opening_price = px + fee_per_share if signed > 0 else px - fee_per_share
 
             if abs(pos_qty) <= FLAT_QTY_TOL:
@@ -3246,8 +3277,11 @@ def list_transactions():
         for tx in rows:
             sign = 1 if tx["transaction_type"] == "BUY" else -1
             net_qty += sign * tx["qty"]
-            cost += (sign * tx["price_display"] * tx["qty"]
-                     + (tx["fee"] or 0) * tx["price_display"] / tx["price"])
+            # A zero stored price (legacy/hand-edited only) carries no fee
+            # spread rather than dividing by zero.
+            fee_spread = ((tx["fee"] or 0) * tx["price_display"] / tx["price"]
+                          if tx["price"] else 0)
+            cost += (sign * tx["price_display"] * tx["qty"] + fee_spread)
 
         # Pass B — live math: value and day move apply to the NET
         # position (sold shares no longer move with the market).
@@ -3871,7 +3905,16 @@ def quote(symbol):
         # Keep the route's response object independent from the data-layer
         # result, matching the decoration pattern used by stock_quote.
         return jsonify(dict(get_quote(symbol)))
-    except Exception:
+    except Exception as exc:
+        if _is_transport_error(exc):
+            # The network died, not the symbol — 503 so monitors and the
+            # frontend can tell an outage from a typo.
+            app.logger.warning(
+                "event=quote_unavailable request_id=%s operation=quote "
+                "symbol=%r error_type=%s",
+                g.request_id, symbol, type(exc).__name__,
+            )
+            return jsonify({"error": "quote service unavailable"}), 503
         # TIER 1 at INFO — same expected-client-behavior rule as stock_quote:
         # an unquotable symbol is usually a typo, not a malfunction.
         app.logger.info(
@@ -3899,7 +3942,14 @@ def stock_quote(symbol):
         # Decorate a route-owned object. The market layer already returns a
         # defensive copy, and this keeps that ownership boundary explicit.
         quote = dict(get_quote(symbol))
-    except Exception:
+    except Exception as exc:
+        if _is_transport_error(exc):
+            app.logger.warning(
+                "event=quote_unavailable request_id=%s operation=stock_quote "
+                "symbol=%r error_type=%s",
+                g.request_id, symbol, type(exc).__name__,
+            )
+            return jsonify({"error": "quote service unavailable"}), 503
         # TIER 1 at INFO, no traceback: an unquotable symbol on a page the
         # user navigated to is usually a typo or a delisted ticker —
         # expected client behavior; the symbol string IS the story.
@@ -3935,6 +3985,13 @@ def stock_stats(symbol):
     try:
         return jsonify(get_stats(symbol))
     except Exception as exc:
+        if _is_transport_error(exc):
+            app.logger.warning(
+                "event=stock_data_degraded request_id=%s operation=stats "
+                "symbol=%r error_type=%s",
+                g.request_id, symbol, type(exc).__name__,
+            )
+            return jsonify({"error": "stats service unavailable"}), 503
         # The quote worked (the page rendered) but stats didn't — degraded,
         # not dead. TIER 1 at warning with traceback: on screen the grid
         # just gap-fills to "—" and this log line is the reason.
@@ -3959,6 +4016,13 @@ def stock_financials(symbol):
     try:
         return jsonify(get_financials(symbol))
     except Exception as exc:
+        if _is_transport_error(exc):
+            app.logger.warning(
+                "event=stock_data_degraded request_id=%s operation=financials "
+                "symbol=%r error_type=%s",
+                g.request_id, symbol, type(exc).__name__,
+            )
+            return jsonify({"error": "financials service unavailable"}), 503
         # A missing statement must not sink the page — degraded, not
         # dead. TIER 1 at warning WITHOUT a traceback: on screen the
         # card just stays hidden and this log line is the reason.

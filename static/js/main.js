@@ -66,6 +66,7 @@ function setMarketPanelValues(panel, text) {
 // readable; everything else keeps two. Deliberately NOT formatPrice — that
 // shared helper stays two-decimal for portfolio/ledger/stock money.
 function formatMarketLevel(value) {
+    if (value === null || value === undefined || !Number.isFinite(value)) return "—";
     const digits = Math.abs(value) < 1 ? 4 : 2;
     return new Intl.NumberFormat("en-US", {
         minimumFractionDigits: digits,
@@ -82,10 +83,17 @@ function marketTextSpan(className, text) {
     return span;
 }
 
+// Selector-escape for Yahoo symbols inside querySelector. Every real
+// browser and the Android WebView ships CSS.escape; the typeof fallback
+// is for non-browser JS harnesses only — never for production.
+function escapeSymbol(symbol) {
+    return typeof CSS !== "undefined" ? CSS.escape(symbol) : symbol;
+}
+
 // Fill one market item from one quote object (a parsed JSON piece).
 function updateMarketItem(panel, quote) {
     // Find the item by its data-symbol hook — by meaning, not position.
-    const item = panel.querySelector(`.market-item[data-symbol="${quote.symbol}"]`);
+    const item = panel.querySelector(`.market-item[data-symbol="${escapeSymbol(quote.symbol)}"]`);
     if (!item) return; // backend knows a symbol our panel doesn't show yet
 
     const priceEl = item.querySelector(".market-item-price");
@@ -105,7 +113,10 @@ function updateMarketItem(panel, quote) {
     // of a single text node. Both still ship from one quote, in one paint.
     changeEl.replaceChildren(
         marketTextSpan("market-item-move", `${sign}${formatMarketLevel(quote.change)}`),
-        marketTextSpan("market-item-pct", `(${sign}${quote.change_pct.toFixed(2)}%)`)
+        marketTextSpan("market-item-pct",
+            quote.change_pct === null || quote.change_pct === undefined || !Number.isFinite(quote.change_pct)
+                ? "(—)"
+                : `(${sign}${quote.change_pct.toFixed(2)}%)`)
     );
 
     // One call each: green (pos) or red (neg), replacing the other.
@@ -315,6 +326,7 @@ function renderWatchlistRows(symbols) {
         removeBtn.className = "remove-btn";
         removeBtn.append(icon("x"));
         removeBtn.title = `Remove ${symbol}`;
+        removeBtn.setAttribute("aria-label", `Remove ${symbol} from watchlist`);
         removeBtn.dataset.symbol = symbol;
 
         row.append(left, right, removeBtn);
@@ -325,7 +337,7 @@ function renderWatchlistRows(symbols) {
 // Fill one row from one quote dict (a parsed piece of the JSON "quotes" list).
 function updateWatchRow(quote) {
     const row = watchlistTab.querySelector(
-        `.watchlist-item[data-symbol="${quote.symbol}"]`
+        `.watchlist-item[data-symbol="${escapeSymbol(quote.symbol)}"]`
     );
     if (!row) return; // row was removed between cycles; harmless
 
@@ -340,9 +352,14 @@ function updateWatchRow(quote) {
 
     const positive = quote.change_pct >= 0;
     const sign = positive ? "+" : "";
-    changeEl.textContent = `${sign}${quote.change_pct.toFixed(2)}%`;
-    changeEl.classList.toggle("pos", positive);
-    changeEl.classList.toggle("neg", !positive);
+    if (quote.change_pct === null || quote.change_pct === undefined || !Number.isFinite(quote.change_pct)) {
+        changeEl.textContent = "—";
+        changeEl.classList.remove("pos", "neg");
+    } else {
+        changeEl.textContent = `${sign}${quote.change_pct.toFixed(2)}%`;
+        changeEl.classList.toggle("pos", positive);
+        changeEl.classList.toggle("neg", !positive);
+    }
 
     // A failed name fetch came back as null — show the ticker alone.
     nameEl.textContent = quote.name || "";
@@ -606,8 +623,11 @@ function applyPortfolioPrivacy() {
         // the unmask branch repaints them from memory so the wait for the
         // fresh fetch is invisible. Empty spans (masked before any fetch
         // ever landed) mean there's nothing worth restoring: keep the old
-        // cache, if any.
-        if (portfolioValueEl.textContent) {
+        // cache, if any. A "****" value means a re-mask while already
+        // masked (e.g. a poll repainted under the mask) — snapshotting it
+        // would store the mask as the real value and unmask to "****".
+        if (portfolioValueEl.textContent
+            && portfolioValueEl.textContent !== "****") {
             lastPortfolioPaint = {
                 value: portfolioValueEl.textContent,
                 day: portfolioDayChangeEl.textContent,
@@ -1144,8 +1164,10 @@ function syncAllocCarousel() {
     allocDotsEl.querySelectorAll(".alloc-dot").forEach((dot, index) => {
         const active = index === allocViewIndex;
         dot.classList.toggle("active", active);
+        // "true", not "page": these dots switch carousel slides, they do
+        // not navigate between pages.
         dot.toggleAttribute("aria-current", active);
-        if (active) dot.setAttribute("aria-current", "page");
+        if (active) dot.setAttribute("aria-current", "true");
     });
 }
 
@@ -1588,7 +1610,11 @@ function buildVolumeLeaderRow(leader) {
     changeEl.className = "change-tag";
     const positive = leader.change_pct >= 0;
     const sign = positive ? "+" : "";
-    changeEl.textContent = `${sign}${leader.change_pct.toFixed(2)}%`;
+    if (leader.change_pct === null || leader.change_pct === undefined || !Number.isFinite(leader.change_pct)) {
+        changeEl.textContent = "—";
+    } else {
+        changeEl.textContent = `${sign}${leader.change_pct.toFixed(2)}%`;
+    }
     changeEl.classList.toggle("pos", positive);
     changeEl.classList.toggle("neg", !positive);
     right.append(priceEl, changeEl);

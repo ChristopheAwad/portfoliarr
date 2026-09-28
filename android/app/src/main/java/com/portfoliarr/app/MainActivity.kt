@@ -2,18 +2,33 @@ package com.portfoliarr.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Menu
 import android.view.MenuItem
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+
+    // Renderer crash timestamps (elapsed-realtime ms): three crashes in
+    // a minute means the PAGE is killing its own renderer, and reloading
+    // the same URL just loops — fall back to the home URL instead.
+    private var crashTimestamps = ArrayDeque<Long>()
+
+    // Consecutive main-frame load failures. The app auto-opens Settings
+    // once this reaches STUCK_LOAD_FAILURES: a URL that fails that many
+    // times in a row is almost certainly wrong (not a blip), and without
+    // an action bar the user has no other in-app path to fix it.
+    // A single success resets it (see onPageFinished below).
+    private var consecutiveLoadFailures = 0
 
     // Set to true when a MAIN-FRAME load fails (e.g. server unreachable,
     // network dropped). onResume() checks this and reloads the page so the
@@ -22,8 +37,29 @@ class MainActivity : AppCompatActivity() {
     // app's JS-level problem, not a full-page recovery case.
     private var loadFailed = false
 
+    companion object {
+        private const val STUCK_LOAD_FAILURES = 3
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Back navigation that survives API 33+: the platform
+        // onBackPressed() override is deprecated — the dispatcher owns
+        // back now. WebView history first, otherwise fall through to the
+        // system (disable self so the event reaches the next handler).
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (webView.canGoBack()) {
+                        webView.goBack()
+                    } else {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
+                }
+            }
+        )
         supportActionBar?.hide()
 
         // Build the WebView via the shared factory and put it on screen
@@ -76,6 +112,34 @@ class MainActivity : AppCompatActivity() {
                     // error toasts ("Could not reach the server").
                     if (request?.isForMainFrame == true) {
                         loadFailed = true
+                        consecutiveLoadFailures++
+                    }
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    // A finished main-frame load means the server answered:
+                    // the URL is good, so past failures stop counting. (A
+                    // blip followed by success must never add up to a
+                    // Settings redirect days later.)
+                    if (view != null && url != null) {
+                        loadFailed = false
+                        consecutiveLoadFailures = 0
+                    }
+                    super.onPageFinished(view, url)
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView?, request: WebResourceRequest?,
+                    errorResponse: WebResourceResponse?
+                ) {
+                    // Flask renders its own error pages (500/404) with HTTP
+                    // status codes — without this the WebView shows a blank
+                    // page, loadFailed stays false, and onResume never
+                    // recovers. Only the main frame counts, same rule as
+                    // onReceivedError above.
+                    if (request?.isForMainFrame == true) {
+                        loadFailed = true
+                        consecutiveLoadFailures++
                     }
                 }
 
@@ -91,7 +155,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onRenderProcessGone(
                     view: WebView, detail: RenderProcessGoneDetail
                 ): Boolean {
-                    this@MainActivity.rebuildWebView()
+                    this@MainActivity.recordCrashAndRebuild()
                     // Return true = we handled it (don't kill the activity).
                     return true
                 }
@@ -111,8 +175,19 @@ class MainActivity : AppCompatActivity() {
         // would wipe open dialogs and edit forms every time the user
         // alt-tabs back; instant-freshness-on-return is the JS layer's
         // job (common.js's setupAutoRefresh).
+        //
+        // STUCK ESCAPE: failures past STUCK_LOAD_FAILURES mean the saved
+        // URL itself is wrong, and with no action bar there is no menu
+        // path to Settings — so open Settings instead of reloading the
+        // dead URL again. The counters reset, and saving an unchanged
+        // (correct) URL there simply retries.
         if (loadFailed) {
             loadFailed = false
+            if (consecutiveLoadFailures >= STUCK_LOAD_FAILURES) {
+                consecutiveLoadFailures = 0
+                startActivity(Intent(this, SettingsActivity::class.java))
+                return
+            }
             val url = webView.url
                 ?: getSharedPreferences("portfoliarr", MODE_PRIVATE)
                     .getString("server_url", null)
@@ -138,20 +213,57 @@ class MainActivity : AppCompatActivity() {
     // content view.
 
     private fun rebuildWebView() {
+        rebuildWebView(fallbackToHome = false)
+    }
+
+    // Count this crash and rebuild. A lone crash (background OOM kill)
+    // reloads the page the user was on; three crashes within a minute
+    // means the page itself is poison and would loop — go home instead.
+    private fun recordCrashAndRebuild() {
+        val now = SystemClock.elapsedRealtime()
+        crashTimestamps.addLast(now)
+        while (crashTimestamps.isNotEmpty()
+            && now - crashTimestamps.first() > 60_000) {
+            crashTimestamps.removeFirst()
+        }
+        rebuildWebView(fallbackToHome = crashTimestamps.size >= 3)
+    }
+
+    private fun rebuildWebView(fallbackToHome: Boolean) {
+        // Prefer the page the user was actually on (a deep /stock link
+        // survives a renderer crash); fall back to the saved home URL.
+        // Captured BEFORE destroy() — afterwards the view is gone.
+        // A crash loop (same page killing its renderer repeatedly) also
+        // goes home instead of reloading the poison URL.
+        val currentUrl = webView.url
+        // Detach first so the dead view can never leak through the content
+        // view; destroy() alone leaves it attached on some API levels.
+        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+        webView.clearHistory()
         webView.destroy()
 
         webView = createWebView()
         setContentView(webView)
         webView.onResume()
 
-        val url = getSharedPreferences("portfoliarr", MODE_PRIVATE)
+        val homeUrl = getSharedPreferences("portfoliarr", MODE_PRIVATE)
             .getString("server_url", null)
+        val url = if (fallbackToHome) homeUrl else currentUrl ?: homeUrl
         if (!url.isNullOrBlank()) {
             webView.loadUrl(url)
         }
     }
 
-    // ── Menu & back ────────────────────────────────────────────────────
+    override fun onDestroy() {
+        // The activity's own teardown path never destroyed the WebView —
+        // only the crash path did — leaking the renderer on every rotate
+        // (now rare with configChanges) and every back-out.
+        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+        webView.destroy()
+        super.onDestroy()
+    }
+
+    // ── Menu ─────────────────────────────────────────────────────────
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
@@ -165,15 +277,6 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             else -> super.onOptionsItemSelected(item)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
         }
     }
 }
