@@ -25,6 +25,8 @@ const stockDayChangeEl = document.getElementById("stock-day-change");
 const addToWatchlistBtn = document.getElementById("add-to-watchlist-btn");
 const logTxBtn = document.getElementById("log-tx-btn");
 const actionErrorEl = document.getElementById("stock-action-error");
+const positionCard = document.getElementById("position-card");
+const positionNoteEl = document.getElementById("position-note");
 
 // Once the symbol is known to be unquotable (404), later poll cycles have
 // nothing to ask for — this flag silences them (the dashboard's sections
@@ -135,6 +137,97 @@ async function refreshStockQuote() {
         } else {
             setQuoteUnavailable();
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POSITION — the signed-in person's holding in this security (native
+// money, no FX). Facts come from the ledger replay; live numbers come
+// from the quote. Hidden when not held; facts-only when the quote
+// failed (live cells gap-fill to "—").
+// ---------------------------------------------------------------------------
+
+function setPos(id, text) {
+    document.getElementById(id).textContent = text == null ? "—" : text;
+}
+
+function paintSignedMoney(el, value, currency, pct) {
+    const sign = value >= 0 ? "+" : "-";
+    const money = `${sign}${formatPrice(Math.abs(value))} ${currency}`;
+    el.textContent = pct == null || pct === undefined
+        ? money
+        : `${money} (${sign}${Math.abs(pct).toFixed(2)}%)`;
+    el.classList.toggle("pos", value >= 0);
+    el.classList.toggle("neg", value < 0);
+}
+
+async function refreshPosition() {
+    if (!positionCard) return;
+    try {
+        await portfolioReady;
+    } catch (err) {
+        positionCard.hidden = true;
+        return;
+    }
+    let pid;
+    try {
+        pid = currentPortfolioId();
+    } catch (err) {
+        positionCard.hidden = true;
+        return;
+    }
+    if (!pid) {
+        positionCard.hidden = true;
+        return;
+    }
+    try {
+        const response = await fetch(
+            `/api/portfolio/position?symbol=${encodeURIComponent(symbol)}` +
+            `&portfolio_id=${pid}`);
+        if (!response.ok) {
+            positionCard.hidden = true;
+            return;
+        }
+        const pos = await response.json();
+        if (!pos.held) {
+            positionCard.hidden = true;
+            return;
+        }
+        setPos("pos-qty", formatNumber(pos.qty));
+        setPos("pos-avg", pos.avg_cost == null
+            ? null : `${formatPrice(pos.avg_cost)} ${pos.currency}`);
+        setPos("pos-cost", pos.cost_basis == null
+            ? null : `${formatPrice(pos.cost_basis)} ${pos.currency}`);
+        if (pos.price === undefined || pos.value === undefined) {
+            setPos("pos-value", null);
+            setPos("pos-gain", null);
+            setPos("pos-day", null);
+            document.getElementById("pos-gain").classList.remove("pos", "neg");
+            document.getElementById("pos-day").classList.remove("pos", "neg");
+        } else {
+            setPos("pos-value",
+                `${formatPrice(pos.value)} ${pos.currency}`);
+            const gainEl = document.getElementById("pos-gain");
+            if (pos.gain == null || pos.gain === undefined) {
+                setPos("pos-gain", null);
+                gainEl.classList.remove("pos", "neg");
+            } else {
+                paintSignedMoney(gainEl, pos.gain, pos.currency, pos.gain_pct);
+            }
+            const dayEl = document.getElementById("pos-day");
+            if (pos.day_gain == null || pos.day_gain === undefined) {
+                setPos("pos-day", null);
+                dayEl.classList.remove("pos", "neg");
+            } else {
+                paintSignedMoney(dayEl, pos.day_gain, pos.currency,
+                    pos.day_gain_pct);
+            }
+        }
+        positionNoteEl.textContent = "Native currency.";
+        positionCard.hidden = false;
+    } catch (err) {
+        console.error("stock position refresh failed:", err);
+        positionCard.hidden = true;
     }
 }
 
@@ -733,9 +826,15 @@ document.addEventListener("themechange", () => {
 // runs — no fetch, no flicker, no network on the critical path.
 paintWatchBtn(addToWatchlistBtn.dataset.watched === "true");
 refreshStockQuote();
+refreshPosition();
 refreshStockStats();
 refreshStockFinancials();
 if (stockChartHandle) stockChartHandle.refresh();
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).
-setupAutoRefresh(refreshStockQuote);
+// The position card rides the same heartbeat (facts + quote move together).
+setupAutoRefresh(async () => {
+    await refreshStockQuote();
+    await refreshPosition();
+});
+document.addEventListener("portfoliochange", refreshPosition);

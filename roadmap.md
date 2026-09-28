@@ -263,6 +263,7 @@ one symbol.
 **Effort:** 1.5 days
 **Files:** `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_position.py`
 **Depends on:** Nothing
+**Status:** in progress
 
 ---
 

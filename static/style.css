@@ -3243,6 +3243,14 @@ input[type="date"]::-moz-placeholder {
     font-size: 0.85em;
 }
 
+/* Position card note: the same quiet caption voice as .financials-note
+   (native-currency caption under the heading). */
+.position-card .position-note {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
 /* Financials bars: shorter than the 300px price chart (four year-groups
    of thin bars need less air) but the same positioned box so Chart.js
    measures itself the same way. */
