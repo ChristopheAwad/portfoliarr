@@ -95,6 +95,21 @@ _profile_cache = {}
 # Ticker.info call while a miss is in flight. Guarded by _market_lock.
 _inflight_profiles = {}
 
+# ── Financials cache — the stock page's annual income statement ─────
+#
+# {symbol: {"data": <financials reply dict>, "fetched_at": epoch}} — the
+# last four fiscal years of Total Revenue, Gross Profit, Operating
+# Income, Net Income, and Diluted EPS from Yahoo's annual income_stmt.
+# Annual figures never move intraday, so the TTL is a full day (compare
+# the 120s quote cache); a wrong TTL here costs either a stale year or
+# a heavy Yahoo call per page load, and neither is worth it. Same
+# successes-only rule as every cache here: a failed fetch is never
+# stored, so ETFs/crypto/indices (no statement) retry next visit
+# instead of posing as "no financials" for a day. Dies on restart —
+# acceptable, same call as the quote cache.
+_FINANCIALS_TTL = 86400
+_financials_cache = {}
+
 
 def clear_profile_cache():
     """Empty the profile cache — test isolation's escape hatch.
@@ -112,6 +127,7 @@ def clear_market_caches():
         _name_cache.clear()
         _history_cache.clear()
         _profile_cache.clear()
+        _financials_cache.clear()
         _volume_cache.clear()
         # In-flight entries should be empty between tests already (no market
         # operation is active at fixture time); clearing keeps stale state
@@ -472,6 +488,113 @@ def get_stats(symbol):
         "website": info.get("website"),
         # The longest field: the free-text company description.
         "business_summary": info.get("longBusinessSummary"),
+    }
+
+
+def get_financials(symbol):
+    """Return the stock detail page's annual income statement for `symbol`.
+
+    Reads Yahoo's annual `income_stmt` (a pandas DataFrame with one row
+    per line item and one timestamp column per fiscal year — the same
+    yearly figures finance sites print, native currency, up to four
+    years from Yahoo regardless of start date).
+
+    Returns the exact reply shape (years ascending, each row list
+    aligned to years):
+        years             ["2022", "2023", "2024", "2025"] — the last
+                          four fiscal years, oldest first
+        rows.total_revenue / cost_of_revenue / gross_profit /
+        operating_expense / operating_income / total_expenses /
+        net_income / diluted_eps
+                          raw native-currency floats per year — NO
+                          rounding, NO FX conversion; the frontend owns
+                          all formatting (money rows compact, EPS two
+                          decimals).
+
+    Yahoo's index labels map EXACTLY (no guessing, no case folding):
+    "Total Revenue", "Cost Of Revenue", "Gross Profit",
+    "Operating Expense", "Operating Income", "Total Expenses",
+    "Net Income", "Diluted EPS" (verified live on AAPL Sep 2026).
+    A missing row becomes all-nulls; a NaN/inf cell
+    becomes None via _finite_number (the same NaN guard as get_stats —
+    a bare NaN token is invalid JSON for browsers). Only a WHOLLY
+    unusable statement (empty frame, no columns, or not one finite
+    number anywhere) raises ValueError — ETFs, crypto, and indices
+    legitimately have no income statement, and the route turns that
+    into a 404 the frontend answers by hiding the table.
+
+    Cached per symbol for _FINANCIALS_TTL (annual data never moves
+    intraday), successes only — a failure must stay retryable. A cache
+    hit returns a COPY so callers cannot mutate the stored reply.
+
+    Raises on failure — same boundary rule as get_quote: this layer
+    reports problems, the route layer decides the HTTP response.
+    """
+    # 1. Cache check — is our copy young enough to trust?
+    now = time.time()
+    with _market_lock:
+        entry = _financials_cache.get(symbol)
+        if entry and (now - entry["fetched_at"]) < _FINANCIALS_TTL:
+            return {
+                "years": list(entry["data"]["years"]),
+                "rows": {
+                    key: list(values)
+                    for key, values in entry["data"]["rows"].items()
+                },
+            }
+
+    df = yf.Ticker(symbol).income_stmt
+
+    # An empty statement means Yahoo has no income data for this symbol —
+    # fail loudly with a named error instead of returning null rows that
+    # would masquerade as "real but empty" financials.
+    if df is None or df.empty or len(df.columns) == 0:
+        raise ValueError(f"no financials data for {symbol}")
+
+    # Columns are fiscal-year timestamps (newest first from Yahoo): sort
+    # ascending and keep the LAST four, so the table reads oldest first.
+    cols = sorted(df.columns)[-4:]
+    years = [col.strftime("%Y") for col in cols]
+
+    # Exact Yahoo row labels — absent rows degrade to all-nulls (a ticker
+    # that reports revenue but no EPS line still gets its table).
+    label_map = [
+        ("Total Revenue", "total_revenue"),
+        ("Cost Of Revenue", "cost_of_revenue"),
+        ("Gross Profit", "gross_profit"),
+        ("Operating Expense", "operating_expense"),
+        ("Operating Income", "operating_income"),
+        ("Total Expenses", "total_expenses"),
+        ("Net Income", "net_income"),
+        ("Diluted EPS", "diluted_eps"),
+    ]
+    rows = {}
+    for yahoo_label, app_key in label_map:
+        if yahoo_label not in df.index:
+            rows[app_key] = [None] * len(cols)
+            continue
+        cells = []
+        for col in cols:
+            number = _finite_number(df.loc[yahoo_label, col])
+            cells.append(None if number is None else float(number))
+        rows[app_key] = cells
+
+    # No usable number anywhere (all-null frame) is the same verdict as
+    # an empty frame: nothing to paint, so raise for the route's 404
+    # rather than serve a table of "—".
+    if all(cell is None for values in rows.values() for cell in values):
+        raise ValueError(f"no financials data for {symbol}")
+
+    data = {"years": years, "rows": rows}
+
+    # Cache the SUCCESS (a raise above never reaches this line) under the
+    # lock, and hand back a copy — see the docstring for why callers get
+    # their own lists rather than the cached objects.
+    with _market_lock:
+        _financials_cache[symbol] = {"data": data, "fetched_at": time.time()}
+    return {
+        "years": list(data["years"]),
+        "rows": {key: list(values) for key, values in data["rows"].items()},
     }
 
 

@@ -252,6 +252,39 @@
             </div>
         </div>
 
+        <!-- Financials card — the annual income statement (last four
+             fiscal years, native currency), fetched ONCE per page load
+             like the stats grid above. Ships HIDDEN: having no income
+             statement is NORMAL for ETFs, crypto, and indices — not an
+             error — so stock.js unhides it only when the reply carries
+             years. thead/tbody ship EMPTY; stock.js builds every year
+             th and value td from JSON, so no static number can ever
+             masquerade as a live fact. -->
+        <div class="card financials-card" id="financials-card" hidden>
+            <h3>Financials</h3>
+            <p class="financials-note">Annual income statement, native currency.</p>
+            <!-- Grouped bars: one group per fiscal year, one bar per row.
+                 Ships as a bare canvas (nothing static to masquerade as
+                 data); stock.js builds the chart from the same JSON reply
+                 as the table below. -->
+            <div class="chart-box fin-chart-box">
+                <canvas id="fin-chart"></canvas>
+            </div>
+            <table class="financials-table" id="fin-table">
+                <thead><tr id="fin-head-row"><th scope="col"></th></tr></thead>
+                <tbody>
+                    <tr id="fin-row-total-revenue"><th scope="row">Total Revenue</th></tr>
+                    <tr id="fin-row-cost-of-revenue"><th scope="row">Cost Of Revenue</th></tr>
+                    <tr id="fin-row-gross-profit"><th scope="row">Gross Profit</th></tr>
+                    <tr id="fin-row-operating-expense"><th scope="row">Operating Expense</th></tr>
+                    <tr id="fin-row-operating-income"><th scope="row">Operating Income</th></tr>
+                    <tr id="fin-row-total-expenses"><th scope="row">Total Expenses</th></tr>
+                    <tr id="fin-row-net-income"><th scope="row">Net Income</th></tr>
+                    <tr id="fin-row-diluted-eps"><th scope="row">Diluted EPS</th></tr>
+                </tbody>
+            </table>
+        </div>
+
 {% endblock %}
 
 {% block scripts %}
