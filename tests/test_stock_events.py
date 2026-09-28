@@ -188,6 +188,33 @@ def test_cache_returns_copy(monkeypatch):
     assert len(second["recent"]) == 2
 
 
+def test_failure_leaves_nothing_cached(monkeypatch):
+    # Successes only: a Yahoo failure must stay retryable next visit,
+    # never pose as "no events" for a TTL window.
+    patch_ticker(monkeypatch, None, pd.Series(dtype=float))
+    with pytest.raises(ValueError):
+        market_data.get_events("AAPL")
+    assert "AAPL" not in market_data._events_cache
+    patch_ticker(monkeypatch, full_calendar(),
+                 monthly_dividends(2, amount=1.0))
+    events = market_data.get_events("AAPL")
+    assert events["earnings_date"] == "2026-10-30"
+
+
+def test_expired_entry_refetches(monkeypatch):
+    patch_ticker(monkeypatch, full_calendar(),
+                 monthly_dividends(2, amount=1.0))
+    market_data.get_events("AAPL")
+    # Backdate past the 24h TTL: the next call refetches instead of
+    # serving the stale entry.
+    market_data._events_cache["AAPL"]["fetched_at"] -= (
+        market_data._EVENTS_TTL + 1)
+    patch_ticker(monkeypatch, full_calendar(),
+                 monthly_dividends(2, amount=9.0))
+    events = market_data.get_events("AAPL")
+    assert events["ttm_total"] == pytest.approx(18.0)
+
+
 # ── Route ────────────────────────────────────────────────────────────
 
 

@@ -711,6 +711,9 @@ def get_events(symbol):
     Raises on failure — same boundary rule as get_quote: this layer
     reports problems, the route layer decides the HTTP response.
     """
+    # Canonical form first: the route uppercases, but direct callers may
+    # not — one cache entry per symbol either way (the get_quote rule).
+    symbol = symbol.strip().upper()
     # 1. Cache check — is our copy young enough to trust?
     now = time.time()
     with _market_lock:
