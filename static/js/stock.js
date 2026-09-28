@@ -154,9 +154,14 @@ function setPos(id, text) {
 function paintSignedMoney(el, value, currency, pct) {
     const sign = value >= 0 ? "+" : "-";
     const money = `${sign}${formatPrice(Math.abs(value))} ${currency}`;
+    // The % keeps its OWN sign: for a short, the dollar move and the
+    // market move point opposite ways (short −5, price up +2% →
+    // day_gain −$10 but change_pct +4%), so borrowing the money sign
+    // would misstate the market direction.
+    const pctSign = pct >= 0 ? "+" : "-";
     el.textContent = pct == null || pct === undefined
         ? money
-        : `${money} (${sign}${Math.abs(pct).toFixed(2)}%)`;
+        : `${money} (${pctSign}${Math.abs(pct).toFixed(2)}%)`;
     el.classList.toggle("pos", value >= 0);
     el.classList.toggle("neg", value < 0);
 }
@@ -193,7 +198,7 @@ async function refreshPosition() {
             positionCard.hidden = true;
             return;
         }
-        setPos("pos-qty", formatNumber(pos.qty));
+        setPos("pos-qty", formatNumber(pos.qty, 4));
         setPos("pos-avg", pos.avg_cost == null
             ? null : `${formatPrice(pos.avg_cost)} ${pos.currency}`);
         setPos("pos-cost", pos.cost_basis == null

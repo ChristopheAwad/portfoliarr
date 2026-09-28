@@ -72,6 +72,24 @@ def test_sell_only_short(client, fake_market):
     assert data["qty"] == pytest.approx(-5.0)
     assert data["avg_cost"] == pytest.approx(50.0)
     assert data["cost_basis"] == pytest.approx(-250.0)
+    # Short falls while the market rises: the dollar move and the
+    # market % point opposite ways. Both must be served with their
+    # own direction (the frontend signs each independently).
+    assert data["day_gain"] == pytest.approx(-5.0 * (45.0 - 46.0))
+    assert data["day_gain_pct"] == pytest.approx((45.0 - 46.0) / 46.0 * 100)
+
+
+def test_sell_fee_reduces_cost_basis(client, fake_market):
+    seed(price=100.0, qty=10, tx_type="BUY")
+    seed(price=150.0, qty=4, tx_type="SELL", fee=8.0)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 110.0, 108.0, "USD")
+    data = get(client, "?symbol=AAPL").get_json()
+    assert data["held"] is True
+    assert data["qty"] == pytest.approx(6.0)
+    # A sell fee comes off the proceeds: it lowers the cost basis
+    # but leaves the remaining pool's average untouched.
+    assert data["avg_cost"] == pytest.approx(100.0)
+    assert data["cost_basis"] == pytest.approx(10 * 100.0 - 4 * 150.0 + 8.0)
 
 
 def test_cross_flat_opens_short_at_sell(client, fake_market):
@@ -151,6 +169,21 @@ def test_gain_pct_null_when_cost_not_positive(client, fake_market):
     fake_market.quotes["AAPL"] = make_quote("AAPL", 45.0, 46.0, "USD")
     data = get(client, "?symbol=AAPL").get_json()
     assert data["gain_pct"] is None
+
+
+def test_gain_pct_null_when_cost_fully_recovered(client, fake_market):
+    # BUY 10@100, SELL 5@200: the sale returned the whole stake, so
+    # cost is 0 — no base for a %. Money fields still show.
+    seed(price=100.0, qty=10, tx_type="BUY")
+    seed(price=200.0, qty=5, tx_type="SELL")
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 210.0, 208.0, "USD")
+    data = get(client, "?symbol=AAPL").get_json()
+    assert data["held"] is True
+    assert data["qty"] == pytest.approx(5.0)
+    assert data["cost_basis"] == pytest.approx(0.0)
+    assert data["gain_pct"] is None
+    assert data["gain"] == pytest.approx(5.0 * 210.0 - 0.0)
+    assert data["value"] == pytest.approx(5.0 * 210.0)
 
 
 def test_source_contracts():
