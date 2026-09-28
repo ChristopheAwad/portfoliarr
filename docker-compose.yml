@@ -32,6 +32,17 @@ services:
       # the server's timezone so every date matches the user.
       TZ: America/Toronto
     restart: unless-stopped
+    # Crash-loop detection without external monitoring: Docker restarts
+    # an unhealthy container per the restart policy above. The probe is
+    # plain python + urllib (the slim image has no curl) against an
+    # unauthenticated page, so a hung gunicorn worker pool counts as
+    # unhealthy instead of serving timeouts silently.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/preferences')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     # Rotation protects the host during a repeated upstream outage.
     logging:
       driver: json-file

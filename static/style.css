@@ -1331,6 +1331,8 @@ a.logo { text-decoration: none; color: var(--text-primary); }
     background: var(--bg-inset);
     border-radius: var(--radius-md);
     width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
     margin-bottom: 6px;
 }
 
@@ -1752,6 +1754,13 @@ a.logo { text-decoration: none; color: var(--text-primary); }
 .watchlist-item .text-right {
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    /* Seven-digit prices ("1,234,567.89 CAD") are wider than the 110px
+       pin on a 320px phone — clip with "…" instead of shoving the
+       remove button off screen. Layout never breaks; only extreme
+       values degrade. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sub-text {

@@ -67,6 +67,16 @@ _name_cache = {}
 _HISTORY_TTL_SETTLED = 600    # seconds: settled date-spaced bars
 _HISTORY_TTL_LIVE = 120       # seconds: series including today's live bar
 _history_cache = {}
+# Same per-(symbol, period) in-flight coordination as quotes: concurrent
+# threads missing the same history share ONE yfinance fetch while it is
+# in flight. Guarded by _market_lock; the fetch itself runs outside it.
+_inflight_histories = {}
+
+# How long a thread waits on another thread's in-flight fetch before
+# giving up. A hung Yahoo call must not pin a gunicorn worker thread
+# forever (only 8 exist) — the waiter degrades via the route's normal
+# per-symbol resilience instead. Longer than any healthy fetch.
+_WAITER_TIMEOUT = 120  # seconds
 
 
 def clear_history_cache():
@@ -135,6 +145,8 @@ def clear_market_caches():
         # from leaking across tests if a test left one behind.
         _inflight_quotes.clear()
         _inflight_profiles.clear()
+        _inflight_histories.clear()
+        _inflight_volume.clear()
 
 
 def _finite_number(value):
@@ -261,10 +273,12 @@ def get_quote(symbol):
             _inflight_quotes[symbol] = future
 
     # 2. Waiter path: someone else already owns this symbol's fetch. Block
-    #    on their future (outside the lock) and hand back a defensive copy
-    #    of whatever they learned — success or the exact same failure.
+    #    on their future (outside the lock, bounded by _WAITER_TIMEOUT so a
+    #    hung Yahoo call cannot pin this thread forever) and hand back a
+    #    defensive copy of whatever they learned — success or the exact
+    #    same failure.
     if waiter is not None:
-        return dict(waiter.result())
+        return dict(waiter.result(timeout=_WAITER_TIMEOUT))
 
     # 3. Owner path: pay the network cost, exactly as in the scratch script.
     try:
@@ -642,9 +656,10 @@ def get_profile(symbol):
             future = Future()
             _inflight_profiles[symbol] = future
 
-    # 2. Waiter path: share the owner's result (or its failure).
+    # 2. Waiter path: share the owner's result (or its failure), bounded
+    #    by _WAITER_TIMEOUT so a hung fetch cannot pin this thread forever.
     if waiter is not None:
-        return dict(waiter.result())
+        return dict(waiter.result(timeout=_WAITER_TIMEOUT))
 
     # 3. Owner path: pay the (slow) network cost once.
     try:
@@ -725,35 +740,62 @@ def get_history(symbol, period_key):
     # Cache check — is our copy young enough to trust? The TTL depends on
     # the data's age profile: a "live" series (1D, 5D) includes today's
     # still-moving bar, so 120s; settled history (1M–MAX) keeps 600s.
+    # Under the lock, with the same in-flight sharing as quotes: threads
+    # missing the same (symbol, period) share ONE fetch. The Yahoo call
+    # itself runs OUTSIDE the lock, so different keys still fetch
+    # concurrently.
     now = time.time()
     ttl = _HISTORY_TTL_LIVE if timeframe["live"] else _HISTORY_TTL_SETTLED
-    entry = _history_cache.get((symbol, period_key))
-    if entry and (now - entry["fetched_at"]) < ttl:
-        return dict(entry["data"])  # cache hit: no network involved
+    with _market_lock:
+        entry = _history_cache.get((symbol, period_key))
+        if entry and (now - entry["fetched_at"]) < ttl:
+            return dict(entry["data"])  # cache hit: no network involved
+        in_flight = _inflight_histories.get((symbol, period_key))
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_histories[(symbol, period_key)] = future
 
-    df = yf.Ticker(symbol).history(
-        period=timeframe["period"],
-        interval=timeframe["interval"],
-    )
+    if waiter is not None:
+        return dict(waiter.result(timeout=_WAITER_TIMEOUT))
 
-    # df is a pandas DataFrame indexed by timezone-aware timestamps
-    # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
-    # dict. Vectorized ops replace the old iterrows() loop for speed:
-    # dropna() removes NaN closes (same as the old continue), then
-    # strftime on the index builds all labels at once.
-    valid = df["Close"].dropna()
-    valid = valid[valid.map(lambda value: _finite_number(value) is not None)]
-    labels = valid.index.strftime(label_format)
-    result = dict(zip(labels, valid))
+    try:
+        df = yf.Ticker(symbol).history(
+            period=timeframe["period"],
+            interval=timeframe["interval"],
+        )
 
-    # Cache the SUCCESS (an exception above never reaches this line) and
-    # hand back a copy — see the docstring for why callers get their own
-    # dict rather than the cached object itself.
-    _history_cache[(symbol, period_key)] = {
-        "data": result,
-        "fetched_at": time.time(),
-    }
-    return dict(result)
+        # df is a pandas DataFrame indexed by timezone-aware timestamps
+        # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
+        # dict. Vectorized ops replace the old iterrows() loop for speed:
+        # dropna() removes NaN closes (same as the old continue), then
+        # strftime on the index builds all labels at once.
+        valid = df["Close"].dropna()
+        valid = valid[valid.map(lambda value: _finite_number(value) is not None)]
+        labels = valid.index.strftime(label_format)
+        result = dict(zip(labels, valid))
+
+        # Cache the SUCCESS (an exception above never reaches this line)
+        # under the lock and hand back a copy — see the docstring for why
+        # callers get their own dict rather than the cached object itself.
+        with _market_lock:
+            _history_cache[(symbol, period_key)] = {
+                "data": result,
+                "fetched_at": time.time(),
+            }
+        future.set_result(result)
+        return dict(result)
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _market_lock:
+            # Identity check: never delete a NEWER future registered after
+            # we finished.
+            if _inflight_histories.get((symbol, period_key)) is future:
+                del _inflight_histories[(symbol, period_key)]
 
 
 # ── FX rates — the CAD display layer's exchange rates ─────────────────
@@ -947,6 +989,10 @@ _VOLUME_TTL = 300  # 5 minutes — volume changes slowly during the day
 # One composite result (per-sector winners, sorted, capped) instead of
 # per-symbol entries — every consumer of this endpoint wants the same list.
 _volume_cache = {}
+# Single in-flight slot for the composite scan: concurrent polls share ONE
+# 33-ticker scan while it runs instead of each spawning their own pool.
+# Guarded by _market_lock; the scan itself runs OUTSIDE the lock.
+_inflight_volume = {}
 
 
 def get_volume_leaders():
@@ -969,90 +1015,119 @@ def get_volume_leaders():
     anywhere" for a TTL window). Partial failures are graceful: sectors
     that couldn't answer are simply absent from the result.
     """
-    # Cache check
+    # Cache check under the lock, with single-slot in-flight sharing:
+    # concurrent polls share ONE scan instead of each spawning a
+    # 33-ticker pool. The scan itself runs OUTSIDE the lock.
     now = time.time()
-    entry = _volume_cache.get("data")
-    if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
-        return [dict(leader) for leader in entry["leaders"]]
+    with _market_lock:
+        entry = _volume_cache.get("data")
+        if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
+            return [dict(leader) for leader in entry["leaders"]]
+        in_flight = _inflight_volume.get("data")
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_volume["data"] = future
 
-    # Flatten all candidate symbols (deduplicated — a ticker might appear
-    # in multiple sectors, though our list avoids that).
-    all_candidates = []
-    seen = set()
-    for sector, tickers in SECTOR_LEADERS.items():
-        for t in tickers:
-            if t not in seen:
-                all_candidates.append((sector, t))
-                seen.add(t)
+    if waiter is not None:
+        return [dict(leader) for leader in waiter.result(timeout=_WAITER_TIMEOUT)]
 
-    # Fetch info for all candidates in parallel
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    try:
+        # Flatten all candidate symbols (deduplicated — a ticker might appear
+        # in multiple sectors, though our list avoids that).
+        all_candidates = []
+        seen = set()
+        for sector, tickers in SECTOR_LEADERS.items():
+            for t in tickers:
+                if t not in seen:
+                    all_candidates.append((sector, t))
+                    seen.add(t)
 
-    results = {}  # {sector: {"symbol": ..., "info": <info dict>}}
+        # Fetch info for all candidates in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    def _fetch(sector, symbol):
-        # The one deliberate except-Exception in the data layer: a 33-ticker
-        # parallel scan needs PER-SYMBOL resilience (one dead ticker must not
-        # sink the scan, same rule as the indices route). The boundary rule
-        # still holds at the function level — get_volume_leaders raises when
-        # NOTHING survives, and never caches that failure.
-        try:
-            info = yf.Ticker(symbol).info
-            volume = _positive_finite_number(info.get("volume"))
-            price = _first_positive_finite(
-                info.get("regularMarketPrice"), info.get("currentPrice")
-            )
-            prev_close = _first_positive_finite(
-                info.get("regularMarketPreviousClose"),
-                info.get("previousClose"),
-            )
-            if volume is None or price is None or prev_close is None:
-                return None
-            change = price - prev_close
-            return (symbol, sector, {
-                "symbol": symbol,
-                "name": info.get("shortName") or info.get("longName"),
-                "price": price,
-                "change": change,
-                "change_pct": change / prev_close * 100,
-                "volume": volume,
-            })
-        except Exception:
-            return None  # skip failed tickers; counted as "sector didn't answer"
+        results = {}  # {sector: {"symbol": ..., "info": <info dict>}}
 
-    with ThreadPoolExecutor(max_workers=min(len(all_candidates), 8)) as pool:
-        futures = {
-            pool.submit(_fetch, sector, sym): (sector, sym)
-            for sector, sym in all_candidates
-        }
-        for future in as_completed(futures):
-            result = future.result()
-            if result is None:
-                continue
-            symbol, sector, leader = result
-            # If we already have a leader for this sector, keep the one
-            # with higher volume.
-            if sector in results:
-                existing_vol = results[sector]["volume"]
-                if leader["volume"] <= existing_vol:
+        def _fetch(sector, symbol):
+            # The one deliberate except-Exception in the data layer: a 33-ticker
+            # parallel scan needs PER-SYMBOL resilience (one dead ticker must not
+            # sink the scan, same rule as the indices route). The boundary rule
+            # still holds at the function level — get_volume_leaders raises when
+            # NOTHING survives, and never caches that failure.
+            try:
+                info = yf.Ticker(symbol).info
+                volume = _positive_finite_number(info.get("volume"))
+                price = _first_positive_finite(
+                    info.get("regularMarketPrice"), info.get("currentPrice")
+                )
+                prev_close = _first_positive_finite(
+                    info.get("regularMarketPreviousClose"),
+                    info.get("previousClose"),
+                )
+                if volume is None or price is None or prev_close is None:
+                    return None
+                change = price - prev_close
+                return (symbol, sector, {
+                    "symbol": symbol,
+                    "name": info.get("shortName") or info.get("longName"),
+                    "price": price,
+                    "change": change,
+                    "change_pct": change / prev_close * 100,
+                    "volume": volume,
+                })
+            except Exception:
+                return None  # skip failed tickers; counted as "sector didn't answer"
+
+        with ThreadPoolExecutor(max_workers=min(len(all_candidates), 8)) as pool:
+            futures = {
+                pool.submit(_fetch, sector, sym): (sector, sym)
+                for sector, sym in all_candidates
+            }
+            for scan_future in as_completed(futures):
+                result = scan_future.result()
+                if result is None:
                     continue
-            results[sector] = leader
+                symbol, sector, leader = result
+                # If we already have a leader for this sector, keep the one
+                # with higher volume.
+                if sector in results:
+                    existing_vol = results[sector]["volume"]
+                    if leader["volume"] <= existing_vol:
+                        continue
+                results[sector] = leader
 
-    # Build leader dicts, sorted by volume descending, capped at 10
-    leaders = list(results.values())
-    leaders.sort(key=lambda item: (-item["volume"], item["symbol"]))
-    leaders = leaders[:10]
+        # Build leader dicts, sorted by volume descending, capped at 10
+        leaders = list(results.values())
+        leaders.sort(key=lambda item: (-item["volume"], item["symbol"]))
+        leaders = leaders[:10]
 
-    # Successes-only cache rule: an EMPTY result means Yahoo answered for
-    # nobody (or nobody had usable prices) — that's a failed fetch, so
-    # raise instead of caching it. The route's wide catch degrades the
-    # raise to 200 + {"leaders": []}, and the next poll retries rather
-    # than reading "no volume anywhere" out of the cache for 5 minutes.
-    if not leaders:
-        raise ValueError("no volume leaders resolved from any sector")
+        # Successes-only cache rule: an EMPTY result means Yahoo answered for
+        # nobody (or nobody had usable prices) — that's a failed fetch, so
+        # raise instead of caching it. The route's wide catch degrades the
+        # raise to 200 + {"leaders": []}, and the next poll retries rather
+        # than reading "no volume anywhere" out of the cache for 5 minutes.
+        if not leaders:
+            exc = ValueError("no volume leaders resolved from any sector")
+            future.set_exception(exc)
+            raise exc
 
-    # Cache the result
-    _volume_cache["data"] = {
-        "leaders": leaders, "fetched_at": time.time(),
-    }
-    return [dict(leader) for leader in leaders]
+        # Cache the SUCCESS under the lock and share it with any waiters.
+        with _market_lock:
+            _volume_cache["data"] = {
+                "leaders": leaders, "fetched_at": time.time(),
+            }
+        future.set_result(leaders)
+        return [dict(leader) for leader in leaders]
+    except Exception as exc:
+        # A scan that dies mid-way (not the empty-result case above, which
+        # already completed the future) must still wake its waiters with
+        # the same failure and stay retryable — never cache the failure.
+        if not future.done():
+            future.set_exception(exc)
+        raise
+    finally:
+        with _market_lock:
+            if _inflight_volume.get("data") is future:
+                del _inflight_volume["data"]

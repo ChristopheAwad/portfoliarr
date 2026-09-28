@@ -207,6 +207,10 @@ let editingTxId = null;
 // The freshest GET result. Action clicks (edit/delete) look rows up HERE,
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
+// The freshest realized payload, for the privacy-eye handler: toggling
+// the eye repaints the closed-sales card from THIS instead of waiting
+// for the next poll. Null until the first successful fetch.
+let lastClosedSales = null;
 
 // True once a refresh cycle fails AFTER rows have painted. The cached
 // lastTransactions then still describe a quote the page has stopped
@@ -511,17 +515,20 @@ function buildTxRow(tx) {
 
         // Total gain/pct: the position's whole lifetime since purchase.
         gainCell.textContent = formatSigned(tx.total_gain, displayCurrency);
-        gainPctCell.textContent =
-            `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
+        gainPctCell.textContent = tx.total_gain_pct === null || tx.total_gain_pct === undefined
+            ? "—"
+            : `${tx.total_gain_pct >= 0 ? "+" : ""}${tx.total_gain_pct.toFixed(2)}%`;
 
         // Green for gains, red for losses — the shared pos/neg classes.
         // Each pair colours independently: a position can be up overall
         // (green Total) while today is red (neg Day). Day gain rides on
         // the group row only, so only the Total pair is coloured here.
+        // A null pct ("—") gets no colour: it is neither green nor red.
         for (const [cell, value] of [
             [gainCell, tx.total_gain],
             [gainPctCell, tx.total_gain_pct],
         ]) {
+            if (value === null || value === undefined) continue;
             cell.classList.toggle("pos", value >= 0);
             cell.classList.toggle("neg", value < 0);
         }
@@ -563,11 +570,13 @@ function buildTxRow(tx) {
     editBtn.className = "tx-action-btn edit";
     editBtn.append(icon("pencil"));
     editBtn.title = "Edit this transaction";
+    editBtn.setAttribute("aria-label", `Edit ${tx.ticker} transaction from ${tx.transaction_date}`);
     editBtn.dataset.id = tx.id;
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "tx-action-btn delete";
     deleteBtn.append(icon("trash"));
     deleteBtn.title = "Delete this transaction";
+    deleteBtn.setAttribute("aria-label", `Delete ${tx.ticker} transaction from ${tx.transaction_date}`);
     deleteBtn.dataset.id = tx.id;
     actionsCell.append(editBtn, deleteBtn);
 
@@ -663,6 +672,17 @@ function buildGroupRow(ticker, txs) {
     const row = document.createElement("tr");
     row.className = "ledger-group";
     row.dataset.ticker = ticker; // click-handler hook: find by meaning
+    // Keyboard parity with the sortable <th> pattern below: the row is a
+    // plain element, so it needs a tab stop and an expanded-state label
+    // to be operable without a mouse (the ticker link inside stays the
+    // focusable path to the detail page).
+    row.tabIndex = 0;
+    // No role="button": the row contains the ticker <a> link, and an
+    // interactive descendant of a button confuses screen readers. The tab
+    // stop plus aria-expanded below is the reachable toggle surface; the
+    // link keeps its native navigation.
+    row.setAttribute("aria-expanded",
+        expandedTickers.has(ticker) ? "true" : "false");
 
     // --- Facts ---
     const dateCell = document.createElement("td");
@@ -751,8 +771,9 @@ function buildGroupRow(ticker, txs) {
             ? "—"
             : `${totalGainPct >= 0 ? "+" : ""}${totalGainPct.toFixed(2)}%`;
         dayGainCell.textContent = formatSigned(dayGain, currency);
-        dayPctCell.textContent =
-            `${dayGainPct >= 0 ? "+" : ""}${dayGainPct.toFixed(2)}%`;
+        dayPctCell.textContent = dayGainPct === null || dayGainPct === undefined
+            ? "—"
+            : `${dayGainPct >= 0 ? "+" : ""}${dayGainPct.toFixed(2)}%`;
 
         // Colour the sums with the same pos/neg rule as the detail rows —
         // with one guard: a null pct gets no colour, because "—" is
@@ -1119,12 +1140,23 @@ ledgerBody.addEventListener("click", (event) => {
     if (open) expandedTickers.add(ticker);
     else expandedTickers.delete(ticker);
     groupRow.classList.toggle("open", open);
+    groupRow.setAttribute("aria-expanded", open ? "true" : "false");
 
     // CSS.escape: tickers can contain selector-hostile characters
     // ("BRK.B") — the attribute-selector cousin of encodeURIComponent.
     ledgerBody.querySelectorAll(
         `.tx-detail[data-ticker="${CSS.escape(ticker)}"]`
     ).forEach((detailRow) => { detailRow.hidden = !open; });
+});
+// Keyboard parity for the tabindex="0" group rows: Enter or Space toggles
+// the same expand/collapse as a click. Focus on the ticker link or an
+// action button is left alone — those handle their own keys natively.
+ledgerBody.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const groupRow = event.target.closest(".ledger-group");
+    if (!groupRow || event.target !== groupRow) return;
+    event.preventDefault();
+    groupRow.click();
 });
 
 // Header-click sorting: ONE delegated listener on the <thead>, the same
@@ -1832,6 +1864,13 @@ if (hideLedgerToggle) {
         if (lastTransactions.length) {
             renderLedger(lastTransactions);
         }
+        // Same instant-mask rule for the closed-sales card: it owns no
+        // poll of its own in this handler, so repaint the last payload —
+        // otherwise already-painted amounts stay exposed until the next
+        // 60s cycle. A failed fetch leaves no payload; nothing to repaint.
+        if (lastClosedSales) {
+            renderClosedSales(lastClosedSales);
+        }
     });
 }
 
@@ -1918,6 +1957,11 @@ function setClosedSalesMessage(text) {
 }
 
 function renderClosedSales(payload) {
+    // The ledger privacy eye covers this card too: absolute amounts hide,
+    // percentages stay (relative performance reveals nothing) — the same
+    // rule as the detail and group rows above.
+    const ledgerHidden = hideLedgerToggle
+        && hideLedgerToggle.dataset.hidden === "true";
     // Header total first. null means at least one row's CAD math was
     // unknowable — summing the rest would look complete and be wrong.
     realizedTotalEl.textContent = payload.total_realized === null
@@ -1927,6 +1971,10 @@ function renderClosedSales(payload) {
         "pos", payload.total_realized !== null && payload.total_realized >= 0);
     realizedTotalEl.classList.toggle(
         "neg", payload.total_realized !== null && payload.total_realized < 0);
+    if (ledgerHidden) {
+        realizedTotalEl.textContent = "****";
+        realizedTotalEl.classList.remove("pos", "neg");
+    }
 
     closedSalesBody.textContent = "";
     if (payload.rows.length === 0) {
@@ -2002,6 +2050,13 @@ function renderClosedSales(payload) {
 
         row.append(tickerCell, nameCell, soldCell, qtyCell, avgCostCell,
                    priceCell, realizedCell, pctCell);
+        if (ledgerHidden) {
+            for (const cell of [qtyCell, avgCostCell, priceCell,
+                                realizedCell]) {
+                cell.textContent = "****";
+                cell.classList.remove("pos", "neg");
+            }
+        }
         closedSalesBody.append(row);
     }
 }
@@ -2024,6 +2079,9 @@ async function refreshClosedSales() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (epoch !== portfolioEpoch()) return;
+        // Cache for the privacy-eye handler above: toggling the eye must
+        // repaint this card instantly, not wait for the next poll.
+        lastClosedSales = data;
         renderClosedSales(data);
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
@@ -2047,6 +2105,7 @@ document.addEventListener("portfoliochange", () => {
     exitEditMode();
     expandedTickers.clear();
     lastTransactions = [];
+    lastClosedSales = null;
     previewPortfolioId = null;
     previewText = null;
     importCommitBtn.hidden = true;
