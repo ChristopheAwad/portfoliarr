@@ -305,6 +305,38 @@
             </table>
         </div>
 
+        <!-- Events card — earnings dates and dividend history, fetched
+              ONCE per page load like the stats grid above. Ships HIDDEN:
+              having no calendar or dividends is NORMAL for crypto, many
+              growth ETFs, and indices — not an error — so stock.js
+              unhides it only when the reply carries something usable.
+              The body ships COLLAPSED behind a header toggle (dates are
+              a glance-able extra, not the page's story): stock.js keeps
+              it collapsed on paint and the button flips it. Every <dd>
+              ships EMPTY (the :empty shimmer fills in while the fetch
+              runs) and tbody ships EMPTY; stock.js builds every row
+              from JSON. -->
+        <div class="card events-card" id="events-card" hidden>
+            <button class="card-toggle" id="events-toggle" type="button"
+                    aria-expanded="false" aria-controls="events-body">
+                <span class="toggle-marker" aria-hidden="true"></span>
+                Events
+            </button>
+            <div id="events-body" hidden>
+            <dl class="stats-grid">
+                <div class="stat"><dt>Next Earnings</dt><dd id="event-earnings"></dd></div>
+                <div class="stat"><dt>Ex-Dividend</dt><dd id="event-ex-div"></dd></div>
+                <div class="stat"><dt>Dividend Date</dt><dd id="event-div-date"></dd></div>
+                <div class="stat"><dt>TTM Dividends</dt><dd id="event-ttm"></dd></div>
+            </dl>
+            <h4 class="stats-cluster-label">Recent Dividends</h4>
+            <table class="events-table" id="events-table">
+                <thead><tr><th scope="col">Date</th><th scope="col">Amount</th></tr></thead>
+                <tbody id="events-tbody"></tbody>
+            </table>
+            </div>
+        </div>
+
 {% endblock %}
 
 {% block scripts %}

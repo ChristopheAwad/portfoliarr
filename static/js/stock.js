@@ -667,6 +667,91 @@ async function refreshStockFinancials() {
 }
 
 // ---------------------------------------------------------------------------
+// EVENTS — earnings dates + dividend history, fetched ONCE per page load
+// (event dates reset at most daily — same never-polled rhythm as the
+// stats grid above).
+// ---------------------------------------------------------------------------
+
+// One date cell: an ISO string paints as-is (no reformatting — the
+// reply is already YYYY-MM-DD), a null paints "—".
+function setEventDate(id, value) {
+    document.getElementById(id).textContent = value == null ? "—" : value;
+}
+
+function paintEvents(events) {
+    const card = document.getElementById("events-card");
+    const hasDate = events.earnings_date != null
+        || events.ex_dividend_date != null
+        || events.dividend_date != null;
+    const recent = events.recent || [];
+    // Nothing usable (the route 404s this case, but a stale cache or a
+    // proxy should never paint an empty card): stay hidden.
+    if (!hasDate && !recent.length && events.ttm_total == null) {
+        card.hidden = true;
+        return;
+    }
+    setEventDate("event-earnings", events.earnings_date);
+    setEventDate("event-ex-div", events.ex_dividend_date);
+    setEventDate("event-div-date", events.dividend_date);
+    // TTM is native money without a currency suffix — the header price
+    // owns that, same rule as the stats grid's money cells.
+    setEventDate("event-ttm", events.ttm_total == null
+        ? null : formatPrice(events.ttm_total));
+    // Recent dividends: rebuild every row from JSON (the thead ships
+    // static, the tbody ships empty — no static amount can ever
+    // masquerade as a live fact). An empty recent hides the table but
+    // keeps the dates grid above.
+    const tbody = document.getElementById("events-tbody");
+    tbody.querySelectorAll("tr").forEach((row) => row.remove());
+    for (const entry of recent) {
+        const tr = document.createElement("tr");
+        const dateCell = document.createElement("td");
+        dateCell.textContent = entry.date;
+        const amountCell = document.createElement("td");
+        amountCell.textContent = entry.amount == null
+            ? "—" : formatPrice(entry.amount);
+        tr.append(dateCell, amountCell);
+        tbody.append(tr);
+    }
+    document.getElementById("events-table").style.display =
+        recent.length ? "" : "none";
+    // The body stays COLLAPSED on every paint (dates are a glance-able
+    // extra, not the page's story): the card appears, the toggle keeps
+    // its ▸ face, and the user opens it. A repaint must never flip a
+    // body the user already opened — except this paint just rebuilt
+    // every row, so collapsed is the honest state.
+    document.getElementById("events-body").hidden = true;
+    const toggle = document.getElementById("events-toggle");
+    toggle.setAttribute("aria-expanded", "false");
+    card.hidden = false;
+}
+
+// The Events header toggle: collapsed (▸, body hidden) ⇄ expanded
+// (▾, body shown). Wired once at load — paintEvents above never
+// touches the listener, only the collapsed state.
+document.getElementById("events-toggle").addEventListener("click", () => {
+    const body = document.getElementById("events-body");
+    const toggle = document.getElementById("events-toggle");
+    body.hidden = !body.hidden;
+    toggle.setAttribute("aria-expanded", String(!body.hidden));
+});
+
+async function refreshStockEvents() {
+    const card = document.getElementById("events-card");
+    try {
+        const response =
+            await fetch(`/api/stock/${encodeURIComponent(symbol)}/events`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        paintEvents(await response.json());
+    } catch (err) {
+        console.error("stock events refresh failed:", err);
+        // Having no calendar is normal for crypto/ETFs/indices — keep
+        // the card hidden instead of showing a failure state.
+        card.hidden = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ACTIONS — the two buttons in the header card.
 // ---------------------------------------------------------------------------
 
@@ -834,6 +919,7 @@ refreshStockQuote();
 refreshPosition();
 refreshStockStats();
 refreshStockFinancials();
+refreshStockEvents();
 if (stockChartHandle) stockChartHandle.refresh();
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).

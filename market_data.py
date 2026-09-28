@@ -111,6 +111,20 @@ _inflight_profiles = {}
 _FINANCIALS_TTL = 86400
 _financials_cache = {}
 
+# ── Events cache — the stock page's earnings/dividend dates ─────────
+#
+# {symbol: {"data": <events reply dict>, "fetched_at": epoch}} — the
+# next earnings date, ex-dividend and dividend dates from Yahoo's
+# `Ticker.calendar`, plus the recent dividend history and its
+# trailing-12-month total from `Ticker.dividends`.
+# Event dates never move intraday, so the TTL is a full day (the same
+# as financials). Same successes-only rule as every cache here: a
+# failed fetch is never stored, so crypto/ETFs with no calendar retry
+# next visit instead of posing as "no events" for a day. Dies on
+# restart — acceptable, same call as the quote cache.
+_EVENTS_TTL = 86400
+_events_cache = {}
+
 
 def clear_profile_cache():
     """Empty the profile cache — test isolation's escape hatch.
@@ -129,6 +143,7 @@ def clear_market_caches():
         _history_cache.clear()
         _profile_cache.clear()
         _financials_cache.clear()
+        _events_cache.clear()
         _volume_cache.clear()
         # In-flight entries should be empty between tests already (no market
         # operation is active at fixture time); clearing keeps stale state
@@ -596,6 +611,194 @@ def get_financials(symbol):
     return {
         "years": list(data["years"]),
         "rows": {key: list(values) for key, values in data["rows"].items()},
+    }
+
+
+def _events_date_to_iso(value):
+    """A Yahoo calendar cell as an ISO YYYY-MM-DD string, else None.
+
+    Newer yfinance hands back Timestamps, sometimes wrapped in a
+    one-element list (earnings can carry several dates — the first is
+    the next one); older versions hand back strings. A list/tuple
+    unwraps to its first element; anything with strftime formats the
+    date part only (never timezone math); a plain string keeps its
+    first 10 characters when they look like a date. Anything else is
+    not a date — None, never a guess.
+    """
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+    if isinstance(value, str) and len(value) >= 10:
+        candidate = value[:10]
+        if (candidate[4] == "-" and candidate[7] == "-"
+                and candidate[:4].isdigit()):
+            return candidate
+    return None
+
+
+def _calendar_date(calendar, *keys):
+    """First usable date for any of `keys` in a Yahoo calendar, else None.
+
+    Handles both yfinance shapes: a dict (newer versions, keys are the
+    Yahoo labels) and a DataFrame (older versions, labels on the index
+    with the date in the first cell). An empty or missing calendar is
+    not an error — it just has no dates.
+    """
+    if calendar is None:
+        return None
+    if isinstance(calendar, dict):
+        for key in keys:
+            if key in calendar:
+                iso = _events_date_to_iso(calendar[key])
+                if iso is not None:
+                    return iso
+        return None
+    try:
+        if getattr(calendar, "empty", False):
+            return None
+        index = getattr(calendar, "index", [])
+        for key in keys:
+            if key in index:
+                cell = calendar.loc[key]
+                if hasattr(cell, "iloc"):
+                    cell = cell.iloc[0] if len(cell) else None
+                iso = _events_date_to_iso(cell)
+                if iso is not None:
+                    return iso
+    except Exception:
+        return None
+    return None
+
+
+def get_events(symbol):
+    """Return the stock detail page's earnings/dividend events for `symbol`.
+
+    Merges Yahoo's `Ticker.calendar` (next earnings date, ex-dividend
+    and dividend dates) with `Ticker.dividends` (a pandas Series of
+    payouts indexed by timestamps) in this ONE function, so the route
+    makes ONE call.
+
+    Returns the exact reply shape (no rounding, no FX conversion —
+    native currency, the frontend owns all formatting):
+        earnings_date / ex_dividend_date / dividend_date
+                          ISO YYYY-MM-DD strings, None when Yahoo has
+                          no such date
+        ttm_total         sum of payouts within 365 days before the
+                          LATEST payout date (anchored at the data, not
+                          today, so backfilled series give stable
+                          answers); None when there are no payouts
+                          (not 0.0, so the frontend can show "—")
+        recent            last 10 payouts, oldest first, each
+                          {date: YYYY-MM-DD, amount: raw float}
+
+    A NaN/inf payout is dropped via _finite_number (the same NaN guard
+    as get_financials — a bare NaN token is invalid JSON for
+    browsers). Only a WHOLLY unusable reply (all three dates None AND
+    no payouts) raises ValueError — crypto and many ETFs legitimately
+    have neither, and the route turns that into a 404 the frontend
+    answers by hiding the card.
+
+    Cached per symbol for _EVENTS_TTL (event dates never move
+    intraday), successes only — a failure stays retryable. A cache hit
+    returns a COPY so callers cannot mutate the stored reply.
+
+    Raises on failure — same boundary rule as get_quote: this layer
+    reports problems, the route layer decides the HTTP response.
+    """
+    # Canonical form first: the route uppercases, but direct callers may
+    # not — one cache entry per symbol either way (the get_quote rule).
+    symbol = symbol.strip().upper()
+    # 1. Cache check — is our copy young enough to trust?
+    now = time.time()
+    with _market_lock:
+        entry = _events_cache.get(symbol)
+        if entry and (now - entry["fetched_at"]) < _EVENTS_TTL:
+            return {
+                "earnings_date": entry["data"]["earnings_date"],
+                "ex_dividend_date": entry["data"]["ex_dividend_date"],
+                "dividend_date": entry["data"]["dividend_date"],
+                "ttm_total": entry["data"]["ttm_total"],
+                "recent": [dict(item)
+                           for item in entry["data"]["recent"]],
+            }
+
+    ticker = yf.Ticker(symbol)
+    calendar = ticker.calendar
+    dividends = ticker.dividends
+
+    earnings_date = _calendar_date(
+        calendar, "Earnings Date", "Earnings Dates", "Earnings")
+    ex_dividend_date = _calendar_date(
+        calendar, "Ex-Dividend Date", "Ex Dividend Date", "Ex-Dividend",
+        "exDividendDate")
+    dividend_date = _calendar_date(
+        calendar, "Dividend Date", "Dividend_Date", "DividendDate")
+
+    pairs = []
+    try:
+        items = dividends.items() if dividends is not None and hasattr(
+            dividends, "items") else []
+    except Exception:
+        items = []
+    for ts, amount in items:
+        number = _finite_number(amount)
+        if number is None:
+            continue
+        if hasattr(ts, "strftime"):
+            try:
+                date_str = ts.strftime("%Y-%m-%d")
+            except Exception:
+                continue
+        else:
+            continue
+        pairs.append((ts, date_str, float(number)))
+    pairs.sort(key=lambda item: item[0])
+
+    if earnings_date is None and ex_dividend_date is None \
+            and dividend_date is None and not pairs:
+        raise ValueError(f"no events data for {symbol}")
+
+    recent = [{"date": date_str, "amount": amount}
+              for _, date_str, amount in pairs[-10:]]
+    if pairs:
+        latest = pairs[-1][0]
+        try:
+            cutoff = latest - timedelta(days=365)
+        except Exception:
+            cutoff = None
+        if cutoff is None:
+            ttm_total = float(sum(amount for _, _, amount in pairs))
+        else:
+            ttm_total = float(sum(amount for ts, _, amount in pairs
+                                  if ts >= cutoff))
+    else:
+        ttm_total = None
+
+    data = {
+        "earnings_date": earnings_date,
+        "ex_dividend_date": ex_dividend_date,
+        "dividend_date": dividend_date,
+        "ttm_total": ttm_total,
+        "recent": recent,
+    }
+
+    # Cache the SUCCESS (a raise above never reaches this line) under
+    # the lock, and hand back a copy — see the docstring for why
+    # callers get their own lists rather than the cached objects.
+    with _market_lock:
+        _events_cache[symbol] = {"data": data, "fetched_at": time.time()}
+    return {
+        "earnings_date": data["earnings_date"],
+        "ex_dividend_date": data["ex_dividend_date"],
+        "dividend_date": data["dividend_date"],
+        "ttm_total": data["ttm_total"],
+        "recent": [dict(item) for item in data["recent"]],
     }
 
 
