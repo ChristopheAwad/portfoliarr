@@ -132,17 +132,9 @@ async function refreshStockQuote() {
         if (stockChartHandle) stockChartHandle.updatePrevClose(quote.previous_close);
     } catch (err) {
         console.error("stock quote refresh failed:", err);
-        // Distinguish "Yahoo doesn't know this symbol" (permanent — stop
-        // asking) from "the network hiccuped" (temporary — keep polling).
-        // fetch throws a bare TypeError for network failures, while our
-        // !ok branch above throws Error("HTTP <status>") — matching the
-        // message is what separates the two.
-        if (err instanceof Error && err.message === "HTTP 404") {
-            symbolKnown = false;
-            markUnknownSymbol();
-        } else {
-            setQuoteUnavailable();
-        }
+        // Only temporary failures reach here: a permanent 404 returns
+        // above, so the symbol stays known and polling continues.
+        setQuoteUnavailable();
     }
 }
 

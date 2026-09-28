@@ -1612,11 +1612,12 @@ function buildVolumeLeaderRow(leader) {
     const sign = positive ? "+" : "";
     if (leader.change_pct === null || leader.change_pct === undefined || !Number.isFinite(leader.change_pct)) {
         changeEl.textContent = "—";
+        changeEl.classList.remove("pos", "neg");
     } else {
         changeEl.textContent = `${sign}${leader.change_pct.toFixed(2)}%`;
+        changeEl.classList.toggle("pos", positive);
+        changeEl.classList.toggle("neg", !positive);
     }
-    changeEl.classList.toggle("pos", positive);
-    changeEl.classList.toggle("neg", !positive);
     right.append(priceEl, changeEl);
 
     // Volume badge — shows the volume in a readable format

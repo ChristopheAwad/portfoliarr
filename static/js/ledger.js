@@ -207,6 +207,10 @@ let editingTxId = null;
 // The freshest GET result. Action clicks (edit/delete) look rows up HERE,
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
+// The freshest realized payload, for the privacy-eye handler: toggling
+// the eye repaints the closed-sales card from THIS instead of waiting
+// for the next poll. Null until the first successful fetch.
+let lastClosedSales = null;
 
 // True once a refresh cycle fails AFTER rows have painted. The cached
 // lastTransactions then still describe a quote the page has stopped
@@ -673,7 +677,10 @@ function buildGroupRow(ticker, txs) {
     // to be operable without a mouse (the ticker link inside stays the
     // focusable path to the detail page).
     row.tabIndex = 0;
-    row.setAttribute("role", "button");
+    // No role="button": the row contains the ticker <a> link, and an
+    // interactive descendant of a button confuses screen readers. The tab
+    // stop plus aria-expanded below is the reachable toggle surface; the
+    // link keeps its native navigation.
     row.setAttribute("aria-expanded",
         expandedTickers.has(ticker) ? "true" : "false");
 
@@ -1857,6 +1864,13 @@ if (hideLedgerToggle) {
         if (lastTransactions.length) {
             renderLedger(lastTransactions);
         }
+        // Same instant-mask rule for the closed-sales card: it owns no
+        // poll of its own in this handler, so repaint the last payload —
+        // otherwise already-painted amounts stay exposed until the next
+        // 60s cycle. A failed fetch leaves no payload; nothing to repaint.
+        if (lastClosedSales) {
+            renderClosedSales(lastClosedSales);
+        }
     });
 }
 
@@ -2065,6 +2079,9 @@ async function refreshClosedSales() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (epoch !== portfolioEpoch()) return;
+        // Cache for the privacy-eye handler above: toggling the eye must
+        // repaint this card instantly, not wait for the next poll.
+        lastClosedSales = data;
         renderClosedSales(data);
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
@@ -2088,6 +2105,7 @@ document.addEventListener("portfoliochange", () => {
     exitEditMode();
     expandedTickers.clear();
     lastTransactions = [];
+    lastClosedSales = null;
     previewPortfolioId = null;
     previewText = null;
     importCommitBtn.hidden = true;

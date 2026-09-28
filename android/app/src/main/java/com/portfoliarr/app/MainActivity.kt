@@ -37,6 +37,13 @@ class MainActivity : AppCompatActivity() {
     // app's JS-level problem, not a full-page recovery case.
     private var loadFailed = false
 
+    // True when the CURRENT navigation errored. onPageFinished fires even
+    // for error pages (an HTTP 500 still "finishes"), so the success reset
+    // below must consult this instead of clearing blindly — otherwise an
+    // HTTP error's own finish wipes the failure it just recorded and both
+    // the resume recovery and the stuck-URL counter silently break.
+    private var mainFrameErrored = false
+
     companion object {
         private const val STUCK_LOAD_FAILURES = 3
     }
@@ -113,18 +120,21 @@ class MainActivity : AppCompatActivity() {
                     if (request?.isForMainFrame == true) {
                         loadFailed = true
                         consecutiveLoadFailures++
+                        mainFrameErrored = true
                     }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    // A finished main-frame load means the server answered:
-                    // the URL is good, so past failures stop counting. (A
-                    // blip followed by success must never add up to a
-                    // Settings redirect days later.)
-                    if (view != null && url != null) {
+                    // A finished navigation resets the failure state ONLY
+                    // when the navigation itself did not error (an HTTP
+                    // error page also "finishes" — clearing here would eat
+                    // the error recorded above). No iframes exist in the
+                    // app's templates, so this finish means the main frame.
+                    if (view != null && url != null && !mainFrameErrored) {
                         loadFailed = false
                         consecutiveLoadFailures = 0
                     }
+                    mainFrameErrored = false
                     super.onPageFinished(view, url)
                 }
 
@@ -140,6 +150,7 @@ class MainActivity : AppCompatActivity() {
                     if (request?.isForMainFrame == true) {
                         loadFailed = true
                         consecutiveLoadFailures++
+                        mainFrameErrored = true
                     }
                 }
 
@@ -211,10 +222,6 @@ class MainActivity : AppCompatActivity() {
     // screen, and reload. Kept as an Activity method (not inside the
     // client) because it mutates the activity's webView field and
     // content view.
-
-    private fun rebuildWebView() {
-        rebuildWebView(fallbackToHome = false)
-    }
 
     // Count this crash and rebuild. A lone crash (background OOM kill)
     // reloads the page the user was on; three crashes within a minute

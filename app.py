@@ -825,9 +825,12 @@ def _is_transport_error(exc):
     A bad ticker (unknown symbol, delisted, no data) fails inside
     yfinance's parsing with KeyError/ValueError — that is a 404. A dead
     network fails inside the HTTP layer with a requests exception — that
-    is a 503. Telling them apart lets routes, monitors, and the frontend
-    distinguish "typo" from "outage" instead of masking both as 404.
+    is a 503. A hung Yahoo call fails the waiter with TimeoutError — also
+    a 503, never a "symbol" verdict (misreporting a stall as 404 would
+    tell the stock page to stop polling a symbol that is fine).
     """
+    if isinstance(exc, TimeoutError):
+        return True
     try:
         from requests.exceptions import RequestException
     except ImportError:  # requests ships with yfinance; be safe anyway
