@@ -3258,6 +3258,91 @@ input[type="date"]::-moz-placeholder {
     height: 220px;
 }
 
+/* Events table (stock page). Dividend history: dates and amounts read
+/* Events table (stock page). Dividend history: dates read left, amounts
+   read right (numbers end at the same edge, so magnitudes compare at a
+   glance — the same rule as .financials-table), both in tabular
+   figures. The head row wears the stat-caption voice (small, muted,
+   uppercase) so it aligns with the .stat dt labels above instead of
+   shouting at body size. No new colors — everything inherits. */
+.events-card .events-table {
+    width: 100%;
+    max-width: 520px;
+    border-collapse: collapse;
+}
+.events-card .events-table th,
+.events-card .events-table td {
+    padding: 5px 8px;
+    font-variant-numeric: tabular-nums;
+}
+.events-card .events-table th:first-child,
+.events-card .events-table td:first-child {
+    text-align: left;
+}
+.events-card .events-table th:last-child,
+.events-card .events-table td:last-child {
+    text-align: right;
+}
+.events-card .events-table thead th {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    border-bottom: 1px solid var(--border-color);
+}
+.events-card .events-table tbody td {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The Recent Dividends label follows the dates grid directly (no
+   wrapping .stats-cluster div), so it carries the 18px cluster air
+   itself — the same gap .stats-cluster + .stats-cluster puts between
+   the stats card's groups. */
+.events-card .stats-cluster-label {
+    margin-top: 18px;
+}
+
+/* Collapsible card header (stock page Events card). A button wearing
+   the card heading's voice: EXACTLY .card h3's 16px size and bold
+   weight on a paper background, left-aligned, full width so the whole
+   row is the target. Margin is zero — the collapsed card stays tight
+   and the body's own grid margin supplies the air when expanded — so
+   the heading sits on the same line every other card's h3 sits on.
+   The marker is pure CSS (▸ collapsed, ▾ expanded via aria-expanded)
+   in a fixed-width centered box, so the label never shifts a pixel on
+   toggle — no glyph font, no JS-painted icon to drift. */
+.card-toggle {
+    display: block;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+}
+.card-toggle:hover {
+    color: var(--accent);
+}
+.card-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.card-toggle .toggle-marker::before {
+    content: "▸";
+    display: inline-block;
+    width: 1.2em;
+    text-align: center;
+}
+.card-toggle[aria-expanded="true"] .toggle-marker::before {
+    content: "▾";
+}
+
 /* 2. Stamp badges (ledger page). BUY/SELL stop being soft pills and
       become rubber stamps on a ledger page: small, bold, uppercase, and
       — the line that actually separates a stamp from a pill — framed by

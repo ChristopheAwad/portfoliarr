@@ -46,7 +46,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
 from market_data import (
-    get_quote, get_name, get_stats, get_financials, get_profile, get_history,
+    get_quote, get_name, get_stats, get_financials, get_events, get_profile, get_history,
     search_tickers,
     get_fx_rate, get_fx_rate_on, get_price_on, PERIOD_MAP, get_volume_leaders
 )
@@ -4074,6 +4074,30 @@ def stock_financials(symbol):
             g.request_id, symbol, type(exc).__name__,
         )
         return jsonify({"error": f"no financials available for {symbol}"}), 404
+
+
+@app.route("/api/stock/<symbol>/events")
+def stock_events(symbol):
+    """The detail page's earnings/dividend Events card, fetched ONCE per
+    page load (not polled): event dates reset at most daily, and the
+    calendar endpoint is heavy — same refresh rhythm as the stats grid,
+    for the same reason. Securities with no calendar or dividends
+    (crypto, many growth ETFs) get a 404 and the frontend hides the
+    card; that absence is normal, not an error worth a traceback."""
+    symbol = symbol.strip().upper()
+
+    try:
+        return jsonify(get_events(symbol))
+    except Exception as exc:
+        # A missing calendar must not sink the page — degraded, not
+        # dead. TIER 1 at warning WITHOUT a traceback: on screen the
+        # card just stays hidden and this log line is the reason.
+        app.logger.warning(
+            "event=stock_data_degraded request_id=%s operation=events "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, type(exc).__name__,
+        )
+        return jsonify({"error": f"no events available for {symbol}"}), 404
 
 
 @app.route("/api/stock/<symbol>/history")
