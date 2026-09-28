@@ -296,7 +296,7 @@ degraded, never fake dates.
 **Effort:** 1.5 days
 **Files:** `market_data.py`, `app.py`, `templates/stock.html`, `static/js/stock.js`, `static/style.css`, `tests/test_stock_events.py`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-28 (PR #96)
 
 ---
 
