@@ -2,8 +2,9 @@
 # ==============================
 # Locks for the stock-detail financials table (roadmap #54).
 #
-# A small annual income-statement table: 5 rows (Total Revenue,
-# Gross Profit, Operating Income, Net Income, Diluted EPS) x the last 4
+# A small annual income-statement table: 8 rows (Total Revenue,
+# Cost Of Revenue, Gross Profit, Operating Expense, Operating Income,
+# Total Expenses, Net Income, Diluted EPS) x the last 4
 # fiscal years, from Yahoo's annual `income_stmt` (a pandas DataFrame
 # with row labels on the index and year timestamps on the columns).
 #
@@ -11,8 +12,9 @@
 #
 #   1. DATA LAYER (market_data.get_financials). Returns raw native-
 #      currency floats in the exact reply shape
-#      {years: [...], rows: {total_revenue, gross_profit,
-#      operating_income, net_income, diluted_eps}} — years ascending,
+#      {years: [...], rows: {total_revenue, cost_of_revenue,
+#      gross_profit, operating_expense, operating_income, total_expenses,
+#      net_income, diluted_eps}} — years ascending,
 #      max 4, each row list aligned to years. NO rounding, NO FX. A
 #      missing row or NaN/inf cell degrades to None; a wholly EMPTY or
 #      all-null statement raises ValueError (the route turns it into a
@@ -20,7 +22,7 @@
 #      Results ride a 24h process-memory cache, successes only.
 #
 #   2. TEMPLATE. The financials card ships HIDDEN with an empty head row
-#      and five labelled body rows; stock.js builds every year cell from
+#      and eight labelled body rows; stock.js builds every year cell from
 #      JSON. A renamed id or a baked-in static year is a silent break,
 #      so pytest makes it loud.
 #
@@ -151,6 +153,15 @@ def test_more_than_four_columns_takes_last_four(monkeypatch):
     fin = market_data.get_financials("AAPL")
     assert fin["years"] == ["2021", "2022", "2023", "2024"]
     assert fin["rows"]["total_revenue"] == [2.0, 3.0, 4.0, 5.0]
+    # The truncation path keeps the full 8-key shape; rows Yahoo did not
+    # send degrade to all-nulls instead of vanishing.
+    assert set(fin["rows"]) == {
+        "total_revenue", "cost_of_revenue", "gross_profit",
+        "operating_expense", "operating_income", "total_expenses",
+        "net_income", "diluted_eps",
+    }
+    for key in ("cost_of_revenue", "operating_expense", "total_expenses"):
+        assert fin["rows"][key] == [None, None, None, None]
 
 
 def test_cache_serves_second_call(monkeypatch):

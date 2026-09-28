@@ -98,8 +98,9 @@ _inflight_profiles = {}
 # ── Financials cache — the stock page's annual income statement ─────
 #
 # {symbol: {"data": <financials reply dict>, "fetched_at": epoch}} — the
-# last four fiscal years of Total Revenue, Gross Profit, Operating
-# Income, Net Income, and Diluted EPS from Yahoo's annual income_stmt.
+# last four fiscal years of Total Revenue, Cost Of Revenue, Gross Profit,
+# Operating Expense, Operating Income, Total Expenses, Net Income, and
+# Diluted EPS from Yahoo's annual income_stmt.
 # Annual figures never move intraday, so the TTL is a full day (compare
 # the 120s quote cache); a wrong TTL here costs either a stale year or
 # a heavy Yahoo call per page load, and neither is worth it. Same
