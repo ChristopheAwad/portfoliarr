@@ -176,11 +176,14 @@ def fake_market(monkeypatch):
     quotes, names, histories, stats = {}, {}, {}, {}
     fx_rates, fx_on = {}, {}
     prices_on = {}
+    financials = {}
     monkeypatch.setattr(app_module, "get_quote", lambda symbol: quotes[symbol])
     monkeypatch.setattr(app_module, "get_name", lambda symbol: names[symbol])
     monkeypatch.setattr(app_module, "get_history",
                         lambda symbol, period: histories[symbol])
     monkeypatch.setattr(app_module, "get_stats", lambda symbol: stats[symbol])
+    monkeypatch.setattr(app_module, "get_financials",
+                        lambda symbol: financials[symbol])
     monkeypatch.setattr(app_module, "get_fx_rate",
                         lambda base, target: fx_rates[f"{base}{target}"])
     monkeypatch.setattr(app_module, "get_fx_rate_on",
@@ -190,4 +193,4 @@ def fake_market(monkeypatch):
                         lambda symbol, date_iso: prices_on[(symbol, date_iso)])
     return SimpleNamespace(quotes=quotes, names=names, histories=histories,
                            stats=stats, fx_rates=fx_rates, fx_on=fx_on,
-                           prices_on=prices_on)
+                           prices_on=prices_on, financials=financials)

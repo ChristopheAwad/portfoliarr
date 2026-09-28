@@ -347,6 +347,228 @@ async function refreshStockStats() {
 }
 
 // ---------------------------------------------------------------------------
+// FINANCIALS — the annual income-statement table, fetched ONCE per page
+// load (yearly figures from Yahoo's heaviest statement endpoint — same
+// never-polled rhythm as the stats grid above).
+// ---------------------------------------------------------------------------
+
+// The eight body-row ids in income-statement order, each paired with its
+// reply key: the first seven are MONEY (compact "107.72B"), the last is
+// per-share (two-decimal, like EPS in the stats grid). Native currency
+// throughout — the currency lives in the header's price, so repeating it
+// per cell would just be noise.
+const FIN_ROW_IDS = ["fin-row-total-revenue", "fin-row-cost-of-revenue",
+    "fin-row-gross-profit", "fin-row-operating-expense",
+    "fin-row-operating-income", "fin-row-total-expenses",
+    "fin-row-net-income", "fin-row-diluted-eps"];
+const FIN_ROW_KEYS = ["total_revenue", "cost_of_revenue", "gross_profit",
+    "operating_expense", "operating_income", "total_expenses",
+    "net_income", "diluted_eps"];
+
+function paintFinancials(fin) {
+    const card = document.getElementById("financials-card");
+    const years = fin.years || [];
+    // No years = no statement (an ETF, crypto, or index — normal, not
+    // an error): stay hidden rather than show a table of "—".
+    if (!years.length) {
+        card.hidden = true;
+        return;
+    }
+    // Clear any previous cells first so a retry never double-appends.
+    const headRow = document.getElementById("fin-head-row");
+    headRow.querySelectorAll("th:not(:first-child)").forEach((cell) => cell.remove());
+    for (const year of years) {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = year;
+        headRow.append(th);
+    }
+    FIN_ROW_IDS.forEach((rowId, index) => {
+        const row = document.getElementById(rowId);
+        row.querySelectorAll("td").forEach((cell) => cell.remove());
+        const key = FIN_ROW_KEYS[index];
+        const values = (fin.rows && fin.rows[key]) || [];
+        const isMoney = key !== "diluted_eps";
+        years.forEach((_, yearIndex) => {
+            const td = document.createElement("td");
+            const value = values[yearIndex];
+            td.textContent = value == null
+                ? "—"
+                : (isMoney ? compactFormat.format(value) : formatPrice(value));
+            row.append(td);
+        });
+    });
+    card.hidden = false;
+    try {
+        paintFinChart(fin);
+    } catch (err) {
+        // The table above is already painted and correct — a dead chart
+        // (blocked CDN, hidden canvas) must never hide it.
+        console.error("stock financials chart failed:", err);
+    }
+}
+
+// The live financials chart instance (at most one). Destroyed before
+// every rebuild so a retry never stacks two charts on one canvas.
+let finChart = null;
+// The last painted reply, kept so a theme flip can rebuild the chart
+// with fresh palette colors without another network call.
+let lastFin = null;
+
+// Grouped bars above the table: one group per fiscal year, three bars —
+// Total Revenue, Net Income (the profit), and Total Expenses drawn
+// NEGATIVE (costs point down, profits point up, so the year reads as
+// money in vs money out). The table below keeps all eight rows; the
+// chart is the short story, not the full statement. The look follows
+// the app's printed-ledger voice: slim ink bars with rounded outer
+// ends, hairline grid, one ruled zero line, quiet captions. A null cell
+// stays null (Chart.js skips it: a gap, never a fake zero bar). A chart
+// failure must never kill the table, so callers wrap this in try/catch.
+function paintFinChart(fin) {
+    lastFin = fin;
+    const canvas = document.getElementById("fin-chart");
+    const years = fin.years || [];
+    if (!years.length) return;
+    const style = getComputedStyle(document.documentElement);
+    const ink = (name) => style.getPropertyValue(name).trim();
+    // Theme-aware inks, read live so a theme flip repaints correctly:
+    // revenue wears the first allocation color, profit the app's
+    // up-green, expenses the app's down-red.
+    const revenueInk = getAllocationColors()[0];
+    const profitInk = ink("--green-pos");
+    const expenseInk = ink("--red-neg");
+    // Quiet chart furniture, all theme tokens: hairline grid, a ruled
+    // zero line (the ledger's hairline, so money-in vs money-out reads
+    // at a glance), secondary-ink captions in the app's own typeface.
+    const gridInk = ink("--border-subtle");
+    const zeroInk = ink("--border-strong");
+    const captionInk = ink("--text-secondary");
+    const appFont = getComputedStyle(document.body).fontFamily;
+    const series = [
+        { key: "total_revenue", label: "Total Revenue", color: revenueInk },
+        { key: "net_income", label: "Net Income", color: profitInk },
+        // Expenses ship positive in the reply (the table prints them
+        // that way); only the CHART negates them so the bars hang below
+        // zero. Null stays null — never a fake zero bar.
+        { key: "total_expenses", label: "Total Expenses",
+          color: expenseInk, negative: true },
+    ];
+    const datasets = series.map((s) => {
+        const values = (fin.rows && fin.rows[s.key]) || [];
+        return {
+            label: s.label,
+            // Pad short arrays with null so every dataset aligns to years.
+            data: years.map((_, i) => {
+                const value = values[i];
+                if (value == null) return null;
+                return s.negative ? -value : value;
+            }),
+            // Soft ink fill with a solid 1px edge: engraved, not flat.
+            backgroundColor: hexToRgba(s.color, 0.78),
+            borderColor: s.color,
+            borderWidth: 1.5,
+            // Round the OUTER end only: 'start' is the bar's base (zero
+            // for positives, zero for negatives too), so the rounded end
+            // is always the tip — revenue rounds up, expenses round down.
+            borderRadius: 6,
+            borderSkipped: "start",
+        };
+    });
+    // Drop rows that are entirely null (e.g. a ticker with no expense
+    // line) so the legend never offers an empty series.
+    const live = datasets.filter((ds) => ds.data.some((v) => v != null));
+    if (!live.length) return;
+    if (finChart) {
+        finChart.destroy();
+        finChart = null;
+    }
+    finChart = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: { labels: years, datasets: live },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            // Slim groups with air between them: three thin bars read as
+            // figures in columns, not bricks in a wall.
+            datasets: { bar: { categoryPercentage: 0.55, barPercentage: 0.72,
+                               maxBarThickness: 30 } },
+            layout: { padding: { top: 4 } },
+            plugins: {
+                legend: {
+                    position: "bottom",
+                    labels: {
+                        // Small rounded keys, not default squares.
+                        usePointStyle: true,
+                        pointStyle: "rectRounded",
+                        boxWidth: 8,
+                        boxHeight: 8,
+                        padding: 16,
+                        color: captionInk,
+                        font: { family: appFont },
+                    },
+                },
+                tooltip: {
+                    padding: 12,
+                    cornerRadius: 10,
+                    boxPadding: 6,
+                    titleFont: { family: appFont },
+                    bodyFont: { family: appFont },
+                    callbacks: {
+                        // Compact money in the hover box ("104B",
+                        // "-96B") — raw floats would collide.
+                        label: (ctx) =>
+                            ` ${ctx.dataset.label}: ` +
+                            `${compactFormat.format(ctx.parsed.y)}`,
+                    },
+                },
+            },
+            scales: {
+                y: {
+                    // Seven ticks at most: enough steps to read values off
+                    // the axis without crowding the 220px box.
+                    ticks: {
+                        maxTicksLimit: 7,
+                        color: captionInk,
+                        font: { family: appFont },
+                        // Compact money ("107.7B") — full figures would
+                        // collide on a 220px axis.
+                        callback: (v) => compactFormat.format(v),
+                    },
+                    grid: {
+                        // The ruled zero line: money-in above, money-out
+                        // below, split by the ledger's hairline.
+                        color: (ctx) =>
+                            (ctx.tick && ctx.tick.value === 0)
+                                ? zeroInk : gridInk,
+                    },
+                    border: { display: false },
+                },
+                x: {
+                    ticks: { color: captionInk, font: { family: appFont } },
+                    grid: { display: false },
+                    border: { display: false },
+                },
+            },
+        },
+    });
+}
+
+async function refreshStockFinancials() {
+    const card = document.getElementById("financials-card");
+    try {
+        const response =
+            await fetch(`/api/stock/${encodeURIComponent(symbol)}/financials`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        paintFinancials(await response.json());
+    } catch (err) {
+        console.error("stock financials refresh failed:", err);
+        // Having no statement is normal for ETFs/crypto/indices — keep
+        // the card hidden instead of showing a failure state.
+        card.hidden = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ACTIONS — the two buttons in the header card.
 // ---------------------------------------------------------------------------
 
@@ -489,6 +711,16 @@ const stockChartHandle = setupTimeframeChart({
 // the new CSS variable values.
 document.addEventListener("themechange", () => {
     if (stockChartHandle) stockChartHandle.repaintComparisonReadout();
+    // Rebuild the financials bars with the new palette (the reply is
+    // cached, so this costs no network). A blocked CDN must not throw
+    // out of a theme flip.
+    if (lastFin && !document.getElementById("financials-card").hidden) {
+        try {
+            paintFinChart(lastFin);
+        } catch (err) {
+            console.error("stock financials chart failed:", err);
+        }
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -502,6 +734,7 @@ document.addEventListener("themechange", () => {
 paintWatchBtn(addToWatchlistBtn.dataset.watched === "true");
 refreshStockQuote();
 refreshStockStats();
+refreshStockFinancials();
 if (stockChartHandle) stockChartHandle.refresh();
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).

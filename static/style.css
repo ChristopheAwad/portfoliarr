@@ -3220,6 +3220,36 @@ input[type="date"]::-moz-placeholder {
     color: var(--text-secondary);
 }
 
+/* Financials table (stock page). The annual income statement: year
+   columns read right (numbers end at the same edge, so magnitudes
+   compare at a glance) while the row labels stay left. The note is the
+   same quiet caption voice as .stats-cluster-label — a heading states
+   what it names and steps back. */
+.financials-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.financials-table th,
+.financials-table td {
+    padding: 6px 8px;
+    text-align: right;
+}
+.financials-table th[scope="row"] {
+    text-align: left;
+}
+.financials-note {
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+/* Financials bars: shorter than the 300px price chart (four year-groups
+   of thin bars need less air) but the same positioned box so Chart.js
+   measures itself the same way. */
+.fin-chart-box {
+    height: 220px;
+}
+
 /* 2. Stamp badges (ledger page). BUY/SELL stop being soft pills and
       become rubber stamps on a ledger page: small, bold, uppercase, and
       — the line that actually separates a stamp from a pill — framed by

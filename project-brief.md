@@ -51,6 +51,9 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   averages, valuation multiples, dividends and analyst targets, profitability
   margins and growth, balance-sheet figures, and a company profile (sector,
   industry, country, type, employees, website) with a free-text About summary
+- Annual income-statement table (Total Revenue, Cost Of Revenue, Gross Profit,
+  Operating Expense, Operating Income, Total Expenses, Net Income, Diluted EPS
+  for the last 4 fiscal years; hidden for securities with no statement)
 - Buttons to add to watchlist or log a transaction
 
 ## Scope (MVP — Lean)

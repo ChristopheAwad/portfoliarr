@@ -46,7 +46,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # the HOW of fetching from Yahoo, db.py the HOW of persisting the watchlist
 # and the transaction ledger.
 from market_data import (
-    get_quote, get_name, get_stats, get_profile, get_history,
+    get_quote, get_name, get_stats, get_financials, get_profile, get_history,
     search_tickers,
     get_fx_rate, get_fx_rate_on, get_price_on, PERIOD_MAP, get_volume_leaders
 )
@@ -3717,10 +3717,11 @@ def import_commit():
 # ledger behind it, so there is no cost basis — and therefore no total
 # return, the one dashboard number this page deliberately lacks.
 #
-# Three endpoints, sized to their data's weight and refresh rhythm:
-#   /api/stock/<symbol>           light  (fast_info)  — polled every 60s
-#   /api/stock/<symbol>/stats     heavy  (Ticker.info) — once per page load
-#   /api/stock/<symbol>/history   medium (bar closes)  — per button click
+# Four endpoints, sized to their data's weight and refresh rhythm:
+#   /api/stock/<symbol>              light  (fast_info)  — polled every 60s
+#   /api/stock/<symbol>/stats        heavy  (Ticker.info) — once per page load
+#   /api/stock/<symbol>/financials   heavy  (income_stmt) — once per page load
+#   /api/stock/<symbol>/history      medium (bar closes)  — per button click
 #
 # ERROR CONVENTION (differs from the dashboard's multi-symbol endpoints on
 # purpose): an unquotable symbol here is 404, not graceful degradation —
@@ -3943,6 +3944,30 @@ def stock_stats(symbol):
             g.request_id, symbol, type(exc).__name__,
         )
         return jsonify({"error": f"no stats available for {symbol}"}), 404
+
+
+@app.route("/api/stock/<symbol>/financials")
+def stock_financials(symbol):
+    """The detail page's annual income statement, fetched ONCE per page
+    load (not polled): yearly figures from Yahoo's heaviest statement
+    endpoint — same refresh rhythm as the stats grid, for the same
+    reason. Securities with no statement (ETFs, crypto, indices) get a
+    404 and the frontend hides the table; that absence is normal, not
+    an error worth a traceback."""
+    symbol = symbol.strip().upper()
+
+    try:
+        return jsonify(get_financials(symbol))
+    except Exception as exc:
+        # A missing statement must not sink the page — degraded, not
+        # dead. TIER 1 at warning WITHOUT a traceback: on screen the
+        # card just stays hidden and this log line is the reason.
+        app.logger.warning(
+            "event=stock_data_degraded request_id=%s operation=financials "
+            "symbol=%r error_type=%s",
+            g.request_id, symbol, type(exc).__name__,
+        )
+        return jsonify({"error": f"no financials available for {symbol}"}), 404
 
 
 @app.route("/api/stock/<symbol>/history")
