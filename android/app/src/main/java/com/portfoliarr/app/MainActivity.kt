@@ -47,13 +47,15 @@ class MainActivity : AppCompatActivity() {
     // The cold-start page load, issued at most once. See loadOnce().
     private var loadIssued = false
 
+    // The pending unlock-timeout handler, so onDestroy can cancel it.
+    private var unlockTimeout: Handler? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
 
         secretStore = SecretStore(this)
         biometricGate = BiometricGate(this)
-
         // Build the WebView via the shared factory and put it on screen
         // directly — avoids inflating the XML layout's unconfigured
         // WebView, which would sit on screen as a blank white view while
@@ -197,6 +199,10 @@ class MainActivity : AppCompatActivity() {
      * page, which is always a working answer.
      */
     private fun promptThenLoad(url: String) {
+        val timeout = Handler(Looper.getMainLooper())
+        // Kept so onDestroy can cancel it; see UNLOCK_TIMEOUT_MS.
+        unlockTimeout = timeout
+
         var answered = false
         fun answer(unlocked: Boolean) {
             if (answered) return
@@ -207,18 +213,22 @@ class MainActivity : AppCompatActivity() {
                 // Cancelled, refused, or the sensor failed. The login page
                 // goes up now and the ways out of this float on top of it.
                 loadOnce(url)
-                // Posted rather than shown inline: BiometricPrompt pauses
-                // the Activity, and its callback is delivered around the
-                // resume. Showing a dialog in the same breath can beat the
-                // window token and throw BadTokenException, which on this
-                // path would mean a crash on the exact tap the user made to
-                // escape the prompt. One message later is invisible and
-                // cannot lose the race.
-                Handler(Looper.getMainLooper()).post { showCancelChoice() }
+                // Posted rather than shown inline: BiometricPrompt pauses the
+                // Activity and its callback is delivered around the resume.
+                // Showing a dialog in the same breath can beat the window
+                // token and throw BadTokenException, which on this path would
+                // be a crash on the exact tap the user made to escape the
+                // prompt. One message later is invisible and cannot lose the
+                // race.
+                Handler(Looper.getMainLooper()).post {
+                    // ...and the Activity may be gone by then, if the user
+                    // rotated or the system reclaimed it while the prompt was
+                    // up. A dialog on a dead Activity is the same crash.
+                    if (!isFinishing && !isDestroyed) showCancelChoice()
+                }
             }
         }
 
-        val timeout = Handler(Looper.getMainLooper())
         timeout.postDelayed({
             answer(false)
             // Belt and braces: answer(false) normally issues the load
@@ -234,6 +244,20 @@ class MainActivity : AppCompatActivity() {
             timeout.removeCallbacksAndMessages(null)
             answer(unlocked)
         }
+    }
+
+    /**
+     * Cancel anything that could fire into an Activity that is going away.
+     *
+     * The unlock timeout runs for up to 90 seconds. If the user rotates the
+     * screen or the system reclaims the Activity while it is pending, the
+     * callback would land on a destroyed instance and try to load a dead
+     * WebView.
+     */
+    override fun onDestroy() {
+        unlockTimeout?.removeCallbacksAndMessages(null)
+        unlockTimeout = null
+        super.onDestroy()
     }
 
     /**

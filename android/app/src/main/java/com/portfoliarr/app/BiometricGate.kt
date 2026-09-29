@@ -14,12 +14,12 @@
 package com.portfoliarr.app
 
 import android.content.Context
-import android.os.CancellationSignal
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 
-class BiometricGate(private val context: Context) {
+class BiometricGate(private val activity: FragmentActivity) {
 
     /**
      * Whether the device can actually service a prompt right now.
@@ -34,7 +34,7 @@ class BiometricGate(private val context: Context) {
      * failed attempt.
      */
     fun isAvailable(): Boolean =
-        when (BiometricManager.from(context).canAuthenticate(AUTHENTICATORS)) {
+        when (BiometricManager.from(activity).canAuthenticate(AUTHENTICATORS)) {
             BiometricManager.BIOMETRIC_SUCCESS -> true
             BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
             BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
@@ -62,8 +62,8 @@ class BiometricGate(private val context: Context) {
         }
 
         val prompt = BiometricPrompt(
-            context,
-            ContextCompat.getMainExecutor(context),
+            activity,
+            ContextCompat.getMainExecutor(activity),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     deliver(true)
@@ -99,7 +99,14 @@ class BiometricGate(private val context: Context) {
             .build()
 
         try {
-            prompt.authenticate(info, CancellationSignal())
+            // No CancellationSignal: androidx.biometric.BiometricPrompt
+            // offers only authenticate(PromptInfo) and
+            // authenticate(PromptInfo, CryptoObject). The overload that takes
+            // a CancellationSignal belongs to the FRAMEWORK class,
+            // android.hardware.biometrics.BiometricPrompt, which has a
+            // different API. Cancellation is already covered by
+            // onAuthenticationError, so nothing is lost.
+            prompt.authenticate(info)
         } catch (e: Exception) {
             // A device that cannot even construct a prompt (odd OEM builds,
             // a locked-down profile) must still reach the login page.

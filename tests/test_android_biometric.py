@@ -8,14 +8,19 @@
 # on. The runtime behaviour is the on-device GUI gate's job.
 #
 # What genuinely matters here, and why each pin exists:
-#   * the keystore key must require a fresh authentication, or the "secret"
-#     is just a file anyone can copy off the phone;
+#   * the keystore key must NOT be bound to user authentication, and the
+#     prompt is what gates access instead. Binding it would also gate
+#     encryption and force a prompt on every login.
 #   * the restored cookie must re-apply HttpOnly and SameSite=Lax, or
 #     re-injecting it by hand silently downgrades app.py's protections;
 #   * Max-Age must match the server's own session lifetime, or the phone
 #     and the server disagree about how long a login lasts;
 #   * the gate must run BEFORE the first loadUrl, or the WebView races the
 #     prompt and the portfolio flashes before the fingerprint is asked for.
+#
+# The androidx.biometric pins exist because hand-written stubs cannot see the
+# real library. Two mistakes there shipped a red CI build, and both are
+# invisible without a compiler.
 
 import re
 from pathlib import Path
@@ -132,6 +137,20 @@ def test_secret_store_clears_itself_when_the_secret_is_unreadable():
         assert marker in store, f"{marker} must be handled, not left to crash"
 
 
+def test_secret_store_does_not_reinsert_the_generated_key():
+    # KeyGenerator.generateKey() on the AndroidKeyStore provider ALREADY
+    # creates the entry under the alias. Calling setEntry on top of that
+    # throws KeyStoreException on a real device, which obtainKey() swallows as
+    # a GeneralSecurityException, so save() fails silently, hasSecret() stays
+    # false, and the one-time offer can never fire. The feature would be dead
+    # on arrival with nothing on screen to explain it.
+    store = code(f"{KOTLIN}/SecretStore.kt")
+    assert "generateKey()" in store
+    assert "setEntry" not in store, (
+        "do not re-store a key the provider already registered under the alias"
+    )
+
+
 # ── Cookie round-trip: the no-downgrade guard ────────────────────────────
 
 def test_restored_cookie_reapplies_the_servers_protections():
@@ -217,15 +236,30 @@ def test_offers_the_feature_exactly_once():
 
 def test_login_is_saved_even_while_the_feature_is_off():
     # The one-time offer is only possible because there is a saved login to
-    # restore. Capture must therefore NOT be gated on the enabled flag —
+    # restore. Capture must therefore NOT consult the enabled flag AT ALL —
     # otherwise the offer can never fire and the feature is unreachable.
+    #
+    # Deliberately asserts the absence of ANY mention of the flag, not one
+    # particular phrasing: a test that only banned the string it happened to
+    # be written against would pass on `if (!isEnabled) return`.
     main = code(f"{KOTLIN}/MainActivity.kt")
     capture = main[main.index("private fun captureSessionCookie"):]
     capture = capture[:capture.index("\n    }")]
-    assert "if (!secretStore.isEnabled) return" not in capture, (
-        "capture must run regardless of the enabled flag; the OFFER needs a "
-        "stored secret to exist"
-    )
+    for reference in ("isEnabled", "enabledInSettings", "declinedOffer"):
+        assert reference not in capture, (
+            f"captureSessionCookie must not consult {reference}; the one-time "
+            "offer needs a stored secret to exist"
+        )
+
+
+def test_stale_callbacks_cannot_act_on_a_dead_activity():
+    # A 90s timeout and a posted dialog can both outlive the Activity if the
+    # user rotates or the system reclaims it. Firing either at that point is a
+    # crash (BadTokenException) or a load into a destroyed WebView.
+    main = code(f"{KOTLIN}/MainActivity.kt")
+    assert "onDestroy" in main, "the timeout handler must be cancelled"
+    assert "removeCallbacksAndMessages" in main
+    assert "isFinishing" in main or "isDestroyed" in main
 
 
 def test_the_settings_gear_stays_gone():
@@ -446,6 +480,45 @@ def test_android_ci_runs_the_unit_tests():
     assert "./gradlew test" in workflow
     # And it must not be the only thing: the APK is still the artifact.
     assert "./gradlew assembleDebug" in workflow
+
+
+# ── androidx.biometric API contract ──────────────────────────────────────
+# Pinned because hand-written stubs cannot see the real library. Two mistakes
+# here shipped a red CI build: the constructors take a FragmentActivity (there
+# is no Context overload) and authenticate() has no CancellationSignal
+# overload (that one belongs to the framework class, not the androidx one).
+# Both are cheap to write and impossible to notice without compiling.
+
+def test_biometric_prompt_is_built_from_a_fragment_activity():
+    gate = code(f"{KOTLIN}/BiometricGate.kt")
+    assert "FragmentActivity" in gate, (
+        "androidx.biometric.BiometricPrompt only accepts a FragmentActivity or "
+        "a Fragment; there is no Context constructor"
+    )
+    assert "import androidx.fragment.app.FragmentActivity" in gate
+    # And it must not reach for the framework class, whose API differs.
+    assert "android.hardware.biometrics" not in gate
+
+
+def test_biometric_prompt_is_started_without_a_cancellation_signal():
+    gate = code(f"{KOTLIN}/BiometricGate.kt")
+    # androidx has exactly two authenticate() overloads:
+    #   (PromptInfo) and (PromptInfo, CryptoObject)
+    # No CancellationSignal. The one that takes a CancellationSignal belongs
+    # to android.hardware.biometrics.BiometricPrompt.
+    assert "authenticate(info)" in gate
+    assert "CancellationSignal" not in gate, (
+        "androidx BiometricPrompt has no CancellationSignal overload"
+    )
+
+
+def test_biometric_prompt_still_answers_exactly_once():
+    # Whatever the API shape, the one guarantee that matters is that every
+    # ending reaches the caller. A second callback would double-load the page.
+    gate = code(f"{KOTLIN}/BiometricGate.kt")
+    assert "delivered" in gate
+    assert "onAuthenticationSucceeded" in gate
+    assert "onAuthenticationError" in gate
 
 
 # ── Pure-logic unit tests exist at all ───────────────────────────────────

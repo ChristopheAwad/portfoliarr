@@ -234,7 +234,8 @@ class SecretStore(context: Context) {
     private fun obtainKey(): SecretKey? = try {
         val keyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)
-            ?: generateKey(keyStore)
+            // The KeyGenerator registers the entry itself; see generateKey.
+            ?: generateKey()
     } catch (e: KeyPermanentlyInvalidatedException) {
         // Not reachable for a key with no auth binding, but a keystore that
         // refuses the existing key for any reason leaves us unable to read or
@@ -245,7 +246,7 @@ class SecretStore(context: Context) {
         null
     }
 
-    private fun generateKey(keyStore: KeyStore): SecretKey? {
+    private fun generateKey(): SecretKey? {
         val generator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES, PROVIDER
         )
@@ -259,13 +260,19 @@ class SecretStore(context: Context) {
                 .setKeySize(256)
                 .build()
         )
-        // What keeps the key out of reach is the PROVIDER argument above —
-        // a key generated through AndroidKeyStore is generated inside the
-        // TEE and is non-exportable, so nothing this app (or a backup of its
-        // data directory) can read ever yields the key itself.
-        val key = generator.generateKey()
-        keyStore.setEntry(KEY_ALIAS, KeyStore.SecretKeyEntry(key), null)
-        return key
+        // What keeps the key out of reach is the PROVIDER argument above — a
+        // key generated through AndroidKeyStore is generated inside the TEE
+        // and is non-exportable, so nothing this app (or a backup of its data
+        // directory) can read ever yields the key itself.
+        //
+        // generateKey() ALREADY registers the entry under KEY_ALIAS. Calling
+        // keyStore.setEntry() on top of that throws KeyStoreException on a
+        // real device ("entry already exists"), which obtainKey() swallows as
+        // a GeneralSecurityException and turns into a null key. The
+        // consequence is silent and total: save() fails, hasSecret() stays
+        // false, the one-time offer can never fire, and the feature is dead
+        // with nothing on screen to say why. See obtainKey.
+        return generator.generateKey()
     }
 
     private fun encode(bytes: ByteArray): String =

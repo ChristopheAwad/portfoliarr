@@ -192,6 +192,24 @@ class StartGateTest {
     }
 
     @Test
+    fun `normalize drops credentials but keeps the host`() {
+        // Stripping with substringBefore('@') would have kept "user:pass" and
+        // thrown the host away, producing an origin that matches nothing.
+        assertEquals(
+            "http://192.168.1.50:9967",
+            StartGate.normalizeOrigin("http://user:pass@192.168.1.50:9967")
+        )
+    }
+
+    @Test
+    fun `normalize drops a path, query and fragment`() {
+        assertEquals(
+            "http://192.168.1.50:9967",
+            StartGate.normalizeOrigin("http://192.168.1.50:9967/ledger?x=1#top")
+        )
+    }
+
+    @Test
     fun `normalize maps blank input to an empty string`() {
         assertEquals("", StartGate.normalizeOrigin(null))
         assertEquals("", StartGate.normalizeOrigin("   "))
@@ -238,6 +256,15 @@ class StartGateTest {
             StartGate.isAuthPath("http://host:9967/auth/login?next=%2Fledger")
         )
         assertTrue(StartGate.isAuthPath("http://host:9967/auth/login#top"))
+    }
+
+    @Test
+    fun `recognises a bare auth path with a trailing slash`() {
+        // "/auth/" is still the auth area. Missing it would mean a sign-out
+        // landing there leaves the stored secret in place, and the next cold
+        // start signs the user straight back in.
+        assertTrue(StartGate.isAuthPath("http://host:9967/auth/"))
+        assertTrue(StartGate.isAuthPath("http://host:9967/auth/?next=%2F"))
     }
 
     @Test

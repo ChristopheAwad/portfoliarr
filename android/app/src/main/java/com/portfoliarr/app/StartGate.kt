@@ -116,12 +116,15 @@ object StartGate {
             else -> return ""
         }
         val afterScheme = lower.substringAfter("://")
-        // Cut the path, query, fragment and any credentials. A cookie is
-        // scoped to host and port only.
+        // A cookie is scoped to host and port only, so drop the path, query,
+        // fragment, and any userinfo. Credentials are stripped by taking what
+        // comes AFTER the last '@', not before it: "user:pass@host" must
+        // reduce to "host", and substringBefore would have kept the
+        // credentials and thrown the host away.
         val hostPort = afterScheme.substringBefore('/')
             .substringBefore('?')
             .substringBefore('#')
-            .substringBefore('@')
+            .substringAfterLast('@')
         if (hostPort.isEmpty()) return ""
         return "$scheme://$hostPort"
     }
@@ -147,12 +150,11 @@ object StartGate {
         // no path leaves this empty.
         val path = afterScheme.substringAfter('/', "")
         if (path.isEmpty()) return false
-        if (path == "auth") return true
-        if (!path.startsWith("auth/")) return false
-        // Strip the query and fragment before matching the segment, so
-        // "/auth/login?next=%2Fledger" is still recognised.
-        val segment = path.removePrefix("auth/").substringBefore('?')
-            .substringBefore('#')
-        return segment.isNotEmpty()
+        // "auth" exactly, or anything beneath "auth/". The query and fragment
+        // need no stripping: they sit after the prefix, so
+        // "/auth/login?next=%2Fledger" and the bare "/auth/" both pass here.
+        // Missing either shape would let a sign-out slip through and the
+        // stored secret survive, signing the user back in on the next start.
+        return path == "auth" || path.startsWith("auth/")
     }
 }
