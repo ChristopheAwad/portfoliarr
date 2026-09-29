@@ -400,7 +400,8 @@ function paintStats(stats) {
         const link = document.getElementById("stat-website");
         const site = stats.website || "";
         link.textContent = site;
-        if (site.startsWith("http://") || site.startsWith("https://")) {
+        const lowerSite = site.toLowerCase();
+        if (lowerSite.startsWith("http://") || lowerSite.startsWith("https://")) {
             link.href = site;
         } else {
             link.removeAttribute("href");

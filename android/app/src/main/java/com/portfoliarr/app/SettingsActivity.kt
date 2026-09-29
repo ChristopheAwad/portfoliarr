@@ -36,7 +36,7 @@ class SettingsActivity : AppCompatActivity() {
                 Toast.makeText(this, "That URL is not allowed", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
                 Toast.makeText(this, "Start with http://", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }

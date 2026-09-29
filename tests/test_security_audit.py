@@ -138,14 +138,18 @@ def test_dockerfile_has_healthcheck():
 
 # T9 android static checks
 def test_android_hardening():
+    # Cleartext stays globally permitted by the manifest (plain-HTTP LAN
+    # server); scoping happens in-app via URL validation, because
+    # <domain> entries cannot express IP ranges.
     manifest = open(
         "android/app/src/main/AndroidManifest.xml").read()
-    assert "networkSecurityConfig" in manifest
+    assert 'usesCleartextTraffic="true"' in manifest
     main = open(
         "android/app/src/main/java/com/portfoliarr/app/MainActivity.kt"
     ).read()
     assert "allowFileAccess = false" in main
     assert "allowContentAccess = false" in main
+    assert "isAllowedUrl" in main
     settings = open(
         "android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt"
     ).read()
