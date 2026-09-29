@@ -94,7 +94,7 @@ was removed at the user's request, so the dialogs are the reachable path.
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt` (new), `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (new), `android/app/src/main/java/com/portfoliarr/app/StartGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SessionControl.kt` (new), `android/app/src/test/java/com/portfoliarr/app/` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, `android/gradle.properties`, `.github/workflows/build-android.yml`, `tests/test_android_biometric.py`, `project-brief.md`, `AGENTS.md`, `README.md`
 **Depends on:** Nothing
-**Status:** in progress
+**Status:** shipped 2026-09-29 (PR #98)
 
 ---
 
