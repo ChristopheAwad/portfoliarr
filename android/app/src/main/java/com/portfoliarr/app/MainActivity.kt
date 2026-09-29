@@ -2,8 +2,11 @@ package com.portfoliarr.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
+import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -11,9 +14,26 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
 
+/**
+ * Process-scoped flag, deliberately NOT an Activity field.
+ *
+ * The fingerprint prompt is for a COLD START only. Android destroys and
+ * recreates an Activity for an ordinary rotation or a low-memory kill while
+ * the process keeps running, and prompting again for those would be
+ * maddening. A top-level object's state lives as long as the process, so it
+ * is still true in a recreated Activity and false after the first unlock of
+ * that process. Only a genuinely new process — the app fully closed, or
+ * killed — starts it over at true.
+ */
+object AppState {
+    var processFresh: Boolean = true
+}
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var secretStore: SecretStore
+    private lateinit var biometricGate: BiometricGate
 
     // Set to true when a MAIN-FRAME load fails (e.g. server unreachable,
     // network dropped). onResume() checks this and reloads the page so the
@@ -26,6 +46,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
 
+        secretStore = SecretStore(this)
+        biometricGate = BiometricGate(this)
+
         // Build the WebView via the shared factory and put it on screen
         // directly — avoids inflating the XML layout's unconfigured
         // WebView, which would sit on screen as a blank white view while
@@ -36,18 +59,192 @@ class MainActivity : AppCompatActivity() {
         webView = createWebView()
         setContentView(webView)
 
-        // Load saved URL or redirect to settings
+        // Saved URL, or straight to settings if there isn't a usable one.
         val prefs = getSharedPreferences("portfoliarr", MODE_PRIVATE)
         val url = prefs.getString("server_url", null)
 
         if (url.isNullOrBlank() || !isAllowedUrl(url)) {
             startActivity(Intent(this, SettingsActivity::class.java))
-        } else {
+            return
+        }
+
+        // THE GATE. This must run before the first loadUrl: the whole point
+        // is that the portfolio is not on screen until the user has
+        // authenticated. If biometrics are unavailable, the feature is off,
+        // there is no secret, or the user cancels, we simply load — and the
+        // server's own auth gate redirects to the login form as usual.
+        if (StartGate.shouldPromptOnStart(
+                hasStoredSecret = secretStore.hasSecret(),
+                biometricAvailable = biometricGate.isAvailable(),
+                enabledInSettings = secretStore.isEnabled,
+                coldStart = AppState.processFresh,
+                secretServerOrigin = secretStore.secretOrigin(),
+                currentServerOrigin = StartGate.normalizeOrigin(url),
+            )
+        ) {
+            promptThenLoad(url)
+            return
+        }
+
+        AppState.processFresh = false
+        webView.loadUrl(url)
+    }
+
+    /**
+     * Ask for the fingerprint, then load the page — exactly once, whichever
+     * happens first.
+     *
+     * Two guards, because there are two ways this could go wrong:
+     *
+     *   * [answered] makes the unlock a one-shot. BiometricPrompt reports
+     *     through several callbacks and the timeout below races them, and
+     *     without it a double answer would load twice and restore twice.
+     *   * [loadIssued] makes the LOAD a one-shot, independently. The cookie
+     *     write is asynchronous, so the page load is issued from inside its
+     *     callback; if that callback were ever swallowed, only the timeout
+     *     could still rescue the screen, and it must not be blocked by
+     *     [answered] already being true.
+     *
+     * The timeout itself is a safety net, not a UX decision. A system prompt
+     * always ends in onAuthenticationError, but if some OEM build or a
+     * bizarre lifecycle state ever swallowed that, the user would otherwise
+     * stare at a blank screen forever. Loading anyway degrades to the login
+     * page, which is always a working answer.
+     */
+    private fun promptThenLoad(url: String) {
+        // Flipped before prompting, so an Activity rebuilt while the prompt
+        // is up cannot ask a second time.
+        AppState.processFresh = false
+
+        var loadIssued = false
+        fun loadOnce() {
+            if (loadIssued) return
+            loadIssued = true
             webView.loadUrl(url)
+        }
+
+        var answered = false
+        fun answer(unlocked: Boolean) {
+            if (answered) return
+            answered = true
+            if (unlocked) {
+                restoreSavedSession(url, ::loadOnce)
+            } else {
+                loadOnce()
+            }
+        }
+
+        val timeout = Handler(Looper.getMainLooper())
+        timeout.postDelayed({
+            answer(false)
+            // Belt and braces: answer(false) normally issues the load
+            // itself, but if a cookie write is stuck this is what still
+            // gets the page on screen.
+            loadOnce()
+        }, UNLOCK_TIMEOUT_MS)
+
+        biometricGate.authenticate(
+            getString(R.string.biometric_unlock_title),
+            getString(R.string.biometric_unlock_subtitle),
+        ) { unlocked ->
+            timeout.removeCallbacksAndMessages(null)
+            answer(unlocked)
         }
     }
 
+    /**
+     * Hand the stored cookie back to the WebView, then run [then].
+     *
+     * The cookie is re-set with HttpOnly and SameSite=Lax, which the server
+     * applied to the original login response but which are lost when a cookie
+     * is injected by hand. Skipping them would silently downgrade the session
+     * on the one screen the user trusts most.
+     *
+     * [then] runs from the setCookie callback, NOT synchronously:
+     * CookieManager.setCookie is asynchronous, and loading the page in the
+     * same breath would race the write and land on the login form even though
+     * the unlock succeeded. [then] also runs when there is nothing to
+     * restore, so the caller has a single path either way.
+     *
+     * If the stored secret cannot be read, [then] still runs — the page then
+     * simply lands on the login form, which is the intended fallback.
+     */
+    private fun restoreSavedSession(url: String, then: () -> Unit) {
+        val header = secretStore.load()?.let { CookieHeader.buildRestoreCookieHeader(it) }
+        if (header == null) {
+            then()
+            return
+        }
+        val cookies = CookieManager.getInstance()
+        cookies.setCookie(url, header) {
+            // Persist so the value survives the app process being killed.
+            cookies.flush()
+            then()
+        }
+    }
+
+    /**
+     * Keep the stored secret in step with the live one.
+     *
+     * Runs after every page load, which is the only moment a fresh session
+     * cookie exists: the login POST redirects, onPageFinished fires, and the
+     * jar now holds it.
+     *
+     * The stored cookie's hash is compared rather than its value, because
+     * reading the value would mean decrypting, which must never happen from
+     * the background.
+     *
+     * No cookie means the user is sitting on the login page, and the stored
+     * secret is left alone — a bad capture must never destroy a good one.
+     */
+    private fun captureSessionCookie(url: String) {
+        if (!secretStore.isEnabled) return
+        val origin = StartGate.normalizeOrigin(url)
+        if (origin.isEmpty()) return
+
+        val live = CookieHeader.extractSession(
+            CookieManager.getInstance().getCookie(url)
+        )
+
+        if (live == null) {
+            // Landing on an auth page with no session cookie is what a logout
+            // looks like from here — and a logout MUST stay logged out.
+            //
+            // Flask's session cookie is a stateless signed blob, so the server
+            // cannot revoke the copy we already hold: replaying it would sign
+            // the user straight back in. The stored secret therefore has to go
+            // when the live cookie does, or tapping "Sign out" in the profile
+            // menu would only last until the app was closed.
+            if (StartGate.isAuthPath(url) && secretStore.hasSecret()) {
+                secretStore.clear()
+            }
+            // Anything else with no cookie is just the login page before a
+            // first sign-in: leave any stored secret completely alone.
+            return
+        }
+
+        // A secret captured from a different server is never reused: handing
+        // a cookie to a host it was not issued for would leak a live session.
+        if (secretStore.hasSecret() &&
+            secretStore.secretOrigin() != null &&
+            secretStore.secretOrigin() != origin
+        ) {
+            secretStore.clear()
+        }
+
+        if (secretStore.storedCookieHash() ==
+            CookieHeader.sha256Hex(live)
+        ) {
+            return
+        }
+        secretStore.save(live, origin)
+    }
+
     companion object {
+        // Generous enough for a deliberate, unhurried unlock, short enough
+        // that a swallowed callback is not a permanently blank screen.
+        private const val UNLOCK_TIMEOUT_MS = 90_000L
+
         // LAN WebView may only load http(s) URLs. A value saved before
         // validation existed (or edited outside the settings form) must
         // never reach loadUrl — notably javascript: URLs.
@@ -89,6 +286,18 @@ class MainActivity : AppCompatActivity() {
                     // error toasts ("Could not reach the server").
                     if (request?.isForMainFrame == true) {
                         loadFailed = true
+                    }
+                }
+
+                // The session cookie only exists once a login has completed,
+                // and the login POST redirects — so onPageFinished is the
+                // moment there is something worth saving. Errors never reach
+                // here, which is why a failed load cannot overwrite a good
+                // stored secret.
+                override fun onPageFinished(view: WebView, url: String) {
+                    super.onPageFinished(view, url)
+                    if (isAllowedUrl(url)) {
+                        captureSessionCookie(url)
                     }
                 }
 

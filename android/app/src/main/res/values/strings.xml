@@ -1,4 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Portfoliarr</string>
+
+    <!-- Shown by the system fingerprint prompt on a cold start. -->
+    <string name="biometric_unlock_title">Unlock Portfoliarr</string>
+    <string name="biometric_unlock_subtitle">Confirm to open your portfolio</string>
+
+    <!-- Settings screen. -->
+    <string name="biometric_enabled">Unlock with fingerprint</string>
+    <string name="biometric_explainer">Asks for your fingerprint or phone PIN when you open the app, and remembers your login so you do not type it. Your password still works if you cancel.</string>
+    <string name="biometric_forget">Forget this phone</string>
+    <string name="biometric_forget_confirm_title">Forget this phone?</string>
+    <string name="biometric_forget_confirm_message">This signs you out on this phone. You will need your username and password to get back in.</string>
+    <string name="biometric_forget_done">Signed out on this phone</string>
+    <string name="biometric_unavailable">No fingerprint or screen lock is set up on this phone</string>
+    <string name="cancel">Cancel</string>
+    <string name="forget">Forget</string>
 </resources>

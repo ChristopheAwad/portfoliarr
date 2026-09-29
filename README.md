@@ -93,6 +93,8 @@ docker compose pull && docker compose up -d
 
 `android/` holds a thin WebView client for this web app. Build with `./gradlew assembleDebug` (JDK 17, Android SDK 34). See `android/README.md`.
 
+On a cold start the app asks for your fingerprint (or your phone PIN) and restores a saved login, so the portfolio is not readable by whoever picks up your phone and you stop typing your password every month. Your password still works whenever you cancel the prompt. There is no WebAuthn/passkey support: that needs HTTPS and a real domain name, which a plain-HTTP LAN server does not have.
+
 ## Scope
 
-Single user, single portfolio, no login. Not included by design: dividends, cash-balance tracking, multi-user auth, multiple portfolios, currencies beyond USD/CAD, and news/AI/social features.
+Multi-user, with sign-in required: each person owns their own portfolios, transactions, and watchlist. Not included by design: dividends, cash-balance tracking, currencies beyond USD/CAD, and news/AI/social features.

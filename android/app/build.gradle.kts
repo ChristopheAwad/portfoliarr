@@ -71,4 +71,10 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.biometric)
+
+    // JVM unit tests for the pure helpers (CookieHeader, StartGate). They
+    // carry no android.* imports precisely so these run here, on a plain
+    // JVM, instead of needing a device.
+    testImplementation(libs.junit)
 }

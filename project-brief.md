@@ -103,8 +103,26 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   1–30 characters, trimmed, case-insensitively unique. Login allows 10
   fails per IP per 10 minutes (429). Password change signs out other
   browsers via password_version.
-  Android needs nothing: the WebView loads the login page and keeps the
-  cookie itself.
+   Android needs no auth code of its own: the WebView loads the login page
+   and keeps the cookie itself (#57). What the APK adds is a local lock —
+   on a cold start, `BiometricPrompt` releases a saved session cookie so
+   the portfolio is not readable by whoever picks up the phone. The cookie
+   is encrypted at rest under a non-exportable `AndroidKeyStore` AES-GCM
+   key, and the prompt — NOT the key — is the access gate: the key is
+   deliberately not bound to `setUserAuthenticationRequired`, because that
+   would also gate ENCRYPTION and force an extra prompt on every login.
+   The password form is untouched and is the automatic fallback whenever
+   the prompt is skipped, cancelled, or refused by the server. This is a
+   privacy lock, not a server login: the cookie is a 30-day bearer
+   credential and cannot be revoked per device.
+ - **Passkeys/WebAuthn are deliberately not used, and cannot be.** They
+   need a secure context (this server is plain HTTP on the LAN, so
+   `navigator.credentials` is undefined), a registrable domain for the RP
+   ID (Chrome rejects a bare IP with a `SecurityError`), and WebView
+   support (absent by default even with `androidx.webkit` 1.12+). Getting
+   them means HTTPS plus a real hostname first — Tailscale Serve or a local
+   CA — which is a separate, larger decision. Revisit only with all three
+   answered.
 - **Each portfolio owns its transaction ledger and all calculations built
   from it.** Existing rows migrate unchanged into `Main`; new portfolios
   start empty. One watchlist PER PERSON (multi-user since #26); market

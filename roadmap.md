@@ -67,8 +67,32 @@ authenticate or secure the Flask server.
 
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, Android tests
-**Depends on:** Nothing
+**Depends on:** #57 (ships `BiometricGate.kt` and `SecretStore.kt`, which this reuses for the background-timeout half)
 **Priority:** Back burner (user request)
+
+---
+
+### 57. Android Biometric Unlock (fingerprint replaces the login typing)
+Ask for a fingerprint on every COLD START of the Android app, then restore the
+saved session so the dashboard opens with no typing. The WebView already keeps a
+30-day cookie, so this is a privacy lock first and a password-saver second: it
+stops anyone who picks up the phone from reading the portfolio, and it removes
+the monthly re-type. The saved `session` cookie is encrypted with an AES-256-GCM
+key in `AndroidKeyStore` created with `setUserAuthenticationRequired(true)`, so
+the hardware refuses to decrypt it without a fresh authentication. Restored
+cookies are re-set with `HttpOnly; SameSite=Lax` so the app never downgrades the
+server's session protections. The password form is untouched and is the
+automatic fallback: no secret, a cancelled prompt, a failed decrypt, or a
+rejected cookie all just load the URL and let the existing gate redirect to
+`/auth/login`. Settings gain an on/off switch and a "Forget this phone" button.
+NO server change: no route, no table, no new Python dependency, no web UI
+change. Not WebAuthn/passkeys, which are blocked on this deployment by plain
+HTTP, an IP-address RP ID, and the Android WebView.
+
+**Effort:** 1–2 days
+**Files:** `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt` (new), `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (new), `android/app/src/test/java/com/portfoliarr/app/CookieHeaderTest.kt` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, `.github/workflows/build-android.yml`, `tests/test_android_biometric.py`, `project-brief.md`, `AGENTS.md`, `README.md`
+**Depends on:** Nothing
+**Status:** in progress
 
 ---
 
@@ -391,7 +415,8 @@ management (list/add/delete/reset rules: no self-delete, no last-user delete,
 typed-username confirm for the cascade) and change-own-password live in
 Preferences. Signed-out 401s redirect the browser to login through one common.js
 fetch hook; Android needs no changes (the WebView logs in and keeps cookies).
-No open registration, no roles, no rate limiting (home-LAN trust model).
+No open registration (owner opt-in came with #27), no roles. Login
+throttling arrived later with the security audit.
 
 **Effort:** 5 days
 **Files:** `db.py`, `app.py`, `templates/base.html`, `templates/login.html`, `templates/setup.html`, `templates/preferences.html`, `static/js/common.js`, `static/js/preferences.js`, `static/style.css`, `conftest.py`, `project-brief.md`, `tests/test_users.py`, `tests/test_auth.py`, `tests/test_multiuser_scoping.py`, `tests/test_users_ui.py`, existing fixture/db/route tests
@@ -457,7 +482,7 @@ email, no push, no Android intent — the tint waits for someone to look.
 ### 27. Account Recovery + Owner-Controlled Open Sign-Up
 Close the two gaps #26 left on purpose. `python app.py reset-password
 <username>` sets a new password for any account from the server terminal
-(typed twice with hidden input, 4–128 chars, old password dies, so even the
+(typed twice with hidden input, 8–128 chars, old password dies, so even the
 only user can always get back in). A signed-in toggle in Preferences →
 People ("Allow anyone on this network to sign up") stores `allow_signup`
 in the `app_settings` table so it survives restarts; when on, the login
@@ -465,7 +490,8 @@ page shows a Create-an-account link and `/auth/signup` — a plain form page
 like setup — creates a person with their own Main portfolio and signs them
 in. Same validation ladder and uniform failure messages as setup/login;
 the toggle and forged POSTs are re-checked server-side. Still no email,
-no roles, no rate limiting: home-LAN trust, now owner-opt-in.
+no roles: home-LAN trust, now owner-opt-in. Login throttling (10 fails per
+IP per 10 minutes) arrived later with the security audit.
 
 **Effort:** 2 days
 **Files:** `app.py`, `templates/login.html`, `templates/signup.html`,
@@ -736,7 +762,8 @@ Tier 1 (all independent; shipped dependencies are noted but do not block):
   3. Transaction Fees ─────────────────┤── can be done in any order
   4. Sector Breakdown (shipped) ───────┤
   5. Cash Balance ─────────────────────┤
-  16. Android Biometric/PIN Lock ────────┤
+  16. Android Biometric/PIN Lock ────────┤── #57 first: it ships the gate
+  57. Android Biometric Unlock ───────────┤   and secret store this reuses
   18. Ledger Quick Sell ─────────────────┤
   19. Date-Aware Price Auto-Fill ────────┤
   21. High-Value Operational Logging ────┤
@@ -833,6 +860,7 @@ For maximum compounding value:
 30. **Holdings Age on the Ledger** → days held per group, a count on aggregates that already exist
 34. **Quick-Watch Star in Search** → add to the watchlist without leaving the dropdown
 35. **Android Pull-to-Refresh and Share** → the two gestures phone users expect from a client app
+57. **Android Biometric Unlock** → a fingerprint on cold start opens the app and restores the session, so the portfolio is private to you and the monthly password is gone
 52. **Ticker Fundamentals Expansion** → the cheap stock-page win: more numbers from the profile call the page already makes
 53. **Ticker Position Card** → turns the page from "this security" into "your stake in this security"
 54. **Ticker Financials Table** → revenue/profit/loss context behind the price
@@ -844,7 +872,7 @@ For maximum compounding value:
 12. **Stats Caching** → performance
 25. **Coin-Stack Brand Mark** → one consistent brand across web and Android
 
-Back burner (user request): #2 CSV Export, #16 Android Biometric/PIN Lock, and #50 Rebalance Share Counts.
+Back burner (user request): #2 CSV Export, #16 Android Biometric/PIN Lock (now only the background-timeout half; #57 shipped the gate it reuses), and #50 Rebalance Share Counts.
 
 ---
 
