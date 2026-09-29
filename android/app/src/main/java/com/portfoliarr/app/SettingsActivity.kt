@@ -31,6 +31,15 @@ class SettingsActivity : AppCompatActivity() {
                 Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            val lower = url.lowercase()
+            if (lower.startsWith("javascript:")) {
+                Toast.makeText(this, "That URL is not allowed", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+                Toast.makeText(this, "Start with http://", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
             // Save and return to main
             prefs.edit().putString("server_url", url).apply()

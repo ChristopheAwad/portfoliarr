@@ -40,10 +40,21 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("portfoliarr", MODE_PRIVATE)
         val url = prefs.getString("server_url", null)
 
-        if (url.isNullOrBlank()) {
+        if (url.isNullOrBlank() || !isAllowedUrl(url)) {
             startActivity(Intent(this, SettingsActivity::class.java))
         } else {
             webView.loadUrl(url)
+        }
+    }
+
+    companion object {
+        // LAN WebView may only load http(s) URLs. A value saved before
+        // validation existed (or edited outside the settings form) must
+        // never reach loadUrl — notably javascript: URLs.
+        fun isAllowedUrl(url: String): Boolean {
+            val lower = url.trim().lowercase()
+            if (lower.startsWith("javascript:")) return false
+            return lower.startsWith("http://") || lower.startsWith("https://")
         }
     }
 
@@ -57,6 +68,8 @@ class MainActivity : AppCompatActivity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
             }
 
             webViewClient = object : WebViewClient() {
@@ -116,7 +129,7 @@ class MainActivity : AppCompatActivity() {
             val url = webView.url
                 ?: getSharedPreferences("portfoliarr", MODE_PRIVATE)
                     .getString("server_url", null)
-            if (!url.isNullOrBlank()) {
+            if (!url.isNullOrBlank() && isAllowedUrl(url)) {
                 webView.loadUrl(url)
             }
         }
@@ -146,7 +159,7 @@ class MainActivity : AppCompatActivity() {
 
         val url = getSharedPreferences("portfoliarr", MODE_PRIVATE)
             .getString("server_url", null)
-        if (!url.isNullOrBlank()) {
+        if (!url.isNullOrBlank() && isAllowedUrl(url)) {
             webView.loadUrl(url)
         }
     }

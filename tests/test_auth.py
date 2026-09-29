@@ -134,10 +134,10 @@ def test_setup_validation_errors_re_render_400(fresh_db):
          "Usernames are 1 to 30 characters."),
         ({"username": "kid", "password": "abc",
           "confirm_password": "abc"},
-         "Passwords are 4 to 128 characters."),
+         "Passwords are 8 to 128 characters."),
         ({"username": "kid", "password": "y" * 129,
           "confirm_password": "y" * 129},
-         "Passwords are 4 to 128 characters."),
+         "Passwords are 8 to 128 characters."),
         ({"username": "kid", "password": "secret-1",
           "confirm_password": "secret-2"},
          "Passwords do not match."),
@@ -224,9 +224,9 @@ def test_create_user_via_api_validates_fields_and_taken_names(client):
         ({"username": "x" * 31, "password": "kid-key-1"},
          "username must contain 1 to 30 characters"),
         ({"username": "kid", "password": "abc"},
-         "password must contain 4 to 128 characters"),
+         "password must contain 8 to 128 characters"),
         ({"username": "kid", "password": "y" * 129},
-         "password must contain 4 to 128 characters"),
+         "password must contain 8 to 128 characters"),
     ]
     for body, message in bad_bodies:
         response = client.post("/api/users", json=body)
@@ -301,7 +301,7 @@ def test_change_own_password_via_api(client):
         "current_password": "new-key-9", "new_password": "ab"})
     assert bad_new.status_code == 400
     assert bad_new.get_json()["error"] == (
-        "password must contain 4 to 128 characters")
+        "password must contain 8 to 128 characters")
 
     shape = client.post("/api/auth/password", json={
         "current_password": "new-key-9"})
@@ -359,7 +359,7 @@ def test_perform_password_reset_rejects_out_of_range(fresh_db):
     for password in ("abc", "y" * 129):
         ok, message = perform_password_reset("tester", password)
         assert ok is False, password
-        assert message == "Passwords are 4 to 128 characters.", password
+        assert message == "Passwords are 8 to 128 characters.", password
 
 
 def test_perform_password_reset_round_trip(fresh_db):
@@ -501,7 +501,7 @@ def test_signup_validation_ladder(fresh_db):
         ({"username": "x" * 31, "password": "pw-key-9", "confirm_password":
           "pw-key-9"}, "Usernames are 1 to 30 characters."),
         ({"username": "kid", "password": "abc", "confirm_password": "abc"},
-         "Passwords are 4 to 128 characters."),
+         "Passwords are 8 to 128 characters."),
         ({"username": "kid", "password": "secret-1", "confirm_password":
           "secret-2"}, "Passwords do not match."),
         ({"username": "TESTER", "password": "pw-key-9", "confirm_password":

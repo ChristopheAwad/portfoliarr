@@ -398,8 +398,14 @@ function paintStats(stats) {
         document.getElementById("stat-website").removeAttribute("href");
     } else {
         const link = document.getElementById("stat-website");
-        link.textContent = stats.website;
-        link.href = stats.website;
+        const site = stats.website || "";
+        link.textContent = site;
+        const lowerSite = site.trim().toLowerCase();
+        if (lowerSite.startsWith("http://") || lowerSite.startsWith("https://")) {
+            link.href = site;
+        } else {
+            link.removeAttribute("href");
+        }
     }
 
     // About: the free-text company description. Prose, so the shared
