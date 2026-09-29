@@ -103,8 +103,40 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   1–30 characters, trimmed, case-insensitively unique. Login allows 10
   fails per IP per 10 minutes (429). Password change signs out other
   browsers via password_version.
-  Android needs nothing: the WebView loads the login page and keeps the
-  cookie itself.
+   Android needs no auth code of its own: the WebView loads the login page
+   and keeps the cookie itself (#57). What the APK adds is a local lock, and
+   it is OFF BY DEFAULT: the first time the app opens after a login exists,
+   a single dialog offers it, and "No thanks" is recorded permanently.
+   Defaulting to on was tried in PR #75 and rejected on the on-device
+   trial, so a feature that has to be asked for can never surprise anyone.
+   When on, every COLD START runs `BiometricPrompt` (falling back to the
+   device PIN) which releases a saved session cookie. Cancelling loads the
+   password page immediately and floats three ways out on top of it: use my
+   password / stop asking / forget this phone. The password form is
+   untouched and remains the automatic fallback.
+
+   The cookie is encrypted at rest under a non-exportable `AndroidKeyStore`
+   AES-GCM key, and the prompt — NOT the key — is the access gate: the key
+   is deliberately not bound to `setUserAuthenticationRequired`, because that
+   would also gate ENCRYPTION and force an extra prompt on every login.
+
+   Three rules the code exists to enforce. The login is saved even while the
+   feature is off, because the one-time offer is only possible if a secret
+   already exists. A sign-out must clear the stored secret too: Flask cookies
+   are stateless signed blobs, so the server cannot revoke the copy the app
+   holds, and replaying it would sign the user back in. And there is no
+   visible Settings gear — `MainActivity` keeps the action bar hidden, the
+   gear was removed at the user's request, and the dialogs are the reachable
+   path. This is a privacy lock, not a server login: the cookie is a 30-day
+   bearer credential and cannot be revoked per device.
+ - **Passkeys/WebAuthn are deliberately not used, and cannot be.** They
+   need a secure context (this server is plain HTTP on the LAN, so
+   `navigator.credentials` is undefined), a registrable domain for the RP
+   ID (Chrome rejects a bare IP with a `SecurityError`), and WebView
+   support (absent by default even with `androidx.webkit` 1.12+). Getting
+   them means HTTPS plus a real hostname first — Tailscale Serve or a local
+   CA — which is a separate, larger decision. Revisit only with all three
+   answered.
 - **Each portfolio owns its transaction ledger and all calculations built
   from it.** Existing rows migrate unchanged into `Main`; new portfolios
   start empty. One watchlist PER PERSON (multi-user since #26); market

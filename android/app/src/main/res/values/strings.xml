@@ -1,4 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Portfoliarr</string>
+
+    <!-- Shown by the system fingerprint prompt on a cold start. -->
+    <string name="biometric_unlock_title">Unlock Portfoliarr</string>
+    <string name="biometric_unlock_subtitle">Confirm to open your portfolio</string>
+
+    <!-- The one-time offer, shown the first time the app opens after a
+         login exists. This is the ONLY way the feature turns itself on,
+         because the Settings screen is unreachable (see SettingsActivity). -->
+    <string name="biometric_offer_title">Unlock with your fingerprint?</string>
+    <string name="biometric_offer_message">Next time you open Portfoliarr, it will ask for your fingerprint or phone PIN instead of making you log in. Your password still works if you cancel.</string>
+    <string name="biometric_offer_accept">Yes, ask me</string>
+    <string name="biometric_offer_decline">No thanks</string>
+
+    <!-- The ways out, offered when a prompt is cancelled. -->
+    <string name="biometric_cancel_title">Use your password instead?</string>
+    <string name="biometric_cancel_message">You can carry on typing your password, stop Portfoliarr asking altogether, or make it forget the login saved on this phone.</string>
+    <string name="biometric_use_my_password">Use my password</string>
+    <string name="biometric_stop_asking">Stop asking</string>
+    <string name="biometric_forget">Forget this phone</string>
+    <string name="biometric_forget_done">Saved login removed from this phone</string>
+
+    <!-- Settings screen. Unreachable in the shipped UI; kept for the day
+         the gear returns. -->
+    <string name="biometric_enabled">Unlock with fingerprint</string>
+    <string name="biometric_explainer">Asks for your fingerprint or phone PIN when you open the app, and remembers your login so you do not type it. Your password still works if you cancel.</string>
+    <string name="biometric_forget_confirm_title">Forget this phone?</string>
+    <string name="biometric_forget_confirm_message">This signs you out on this phone. You will need your username and password to get back in.</string>
+    <string name="cancel">Cancel</string>
+    <string name="forget">Forget</string>
 </resources>

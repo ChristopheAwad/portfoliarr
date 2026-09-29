@@ -8,6 +8,11 @@ venv/
 instance/
 *.db
 
+# Android / Gradle build output
+android/.gradle/
+android/build/
+android/app/build/
+
 # Environment variables & secrets
 .env
 

@@ -52,6 +52,15 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Pure-JVM unit tests for the helpers that carry no android.*
+      # imports (cookie parsing, the cold-start decision). They are cheap
+      # and they are the only automated coverage this app has — nothing in
+      # pytest can compile Kotlin, and the rest of the biometric flow is
+      # covered by the on-device GUI check only.
+      - name: Run JVM unit tests
+        run: ./gradlew test
+        working-directory: android
+
       - name: Build debug APK
         run: ./gradlew assembleDebug
         working-directory: android
