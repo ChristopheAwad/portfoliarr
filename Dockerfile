@@ -64,6 +64,8 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 # Document the listening port (compose maps host 9967 -> this).
 EXPOSE 5000
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/preferences')"
+
 # ONE worker + threads, not many workers: the in-memory quote cache in
 # market_data.py (TTL 120s) and SQLite both want a single process, and a
 # single-user app scales plenty on threads. Binding 0.0.0.0 (not

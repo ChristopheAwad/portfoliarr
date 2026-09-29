@@ -164,6 +164,9 @@ app.secret_key = _bootstrap_session_secret()
 # monthly — a deliberate trade against fat-fingering credentials again.
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Plain HTTP LAN: Secure must stay off or login breaks.
+app.config["SESSION_COOKIE_SECURE"] = False
 
 # The dashboard's market overview is TABBED: one category on screen at a
 # time, so /api/indices fetches only that category. This is a product
@@ -369,7 +372,20 @@ def require_authentication():
     user_id = session.get("user_id")
     g.user = db.get_user(user_id) if user_id is not None else None
     if g.user is not None:
-        return
+        expected_pv = g.user.get("password_version", 1)
+        session_pv = session.get("pv")
+        if session_pv is None:
+            # Old cookie from before versions: accept once, stamp it.
+            try:
+                session["pv"] = expected_pv
+            except Exception:
+                pass
+            return
+        if session_pv != expected_pv:
+            session.clear()
+            g.user = None
+        else:
+            return
 
     endpoint = request.endpoint
     setup_mode = db.count_users() == 0
@@ -441,7 +457,30 @@ def resolve_portfolio_request():
 
 USERNAME_MAX = 30
 PASSWORD_MAX = 128
-PASSWORD_MIN = 4
+PASSWORD_MIN = 8
+
+# Login throttle: home-LAN brute-force brake. In-memory only; a restart
+# clears it. 10 fails per IP per 10 minutes, then 429.
+_LOGIN_MAX_FAILS = 10
+_LOGIN_WINDOW_S = 600
+_LOGIN_FAILS = {}
+
+
+def _login_throttled(ip):
+    now = time.perf_counter()
+    window = _LOGIN_WINDOW_S
+    # perf_counter is monotonic; store perf_counter stamps, not wall time.
+    recent = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < window]
+    _LOGIN_FAILS[ip] = recent
+    return len(recent) >= _LOGIN_MAX_FAILS
+
+
+def _login_failed(ip):
+    _LOGIN_FAILS.setdefault(ip, []).append(time.perf_counter())
+
+
+def _login_ok(ip):
+    _LOGIN_FAILS.pop(ip, None)
 
 
 def _safe_next(next_value):
@@ -470,6 +509,11 @@ def _stamp_session(user_id):
     session.clear()
     session.permanent = True
     session["user_id"] = user_id
+    try:
+        user = db.get_user(user_id)
+        session["pv"] = user.get("password_version", 1) if user else 1
+    except Exception:
+        session["pv"] = 1
 
 
 @app.route("/auth/setup", methods=["GET", "POST"])
@@ -500,7 +544,7 @@ def auth_setup():
         if not 1 <= len(username) <= USERNAME_MAX:
             error = "Usernames are 1 to 30 characters."
         elif not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
-            error = "Passwords are 4 to 128 characters."
+            error = "Passwords are 8 to 128 characters."
         elif password != confirm:
             error = "Passwords do not match."
         else:
@@ -542,17 +586,28 @@ def auth_login():
 
     error = None
     if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+        if _login_throttled(ip):
+            app.logger.warning(
+                "event=login_throttled request_id=%s ip=%r",
+                g.request_id, ip,
+            )
+            error = "Too many tries. Wait 10 minutes."
+            return render_template("login.html", error=error,
+                                   signup_allowed=signup_allowed()), 429
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         user = db.get_user_by_username(username)
         if user is None or not check_password_hash(
                 user["password_hash"], password):
+            _login_failed(ip)
             app.logger.warning(
                 "event=login_failed request_id=%s username=%r",
                 g.request_id, username,
             )
             error = "Wrong username or password."
         else:
+            _login_ok(ip)
             _stamp_session(user["id"])
             app.logger.info(
                 "event=login_success request_id=%s user_id=%d username=%r",
@@ -610,7 +665,7 @@ def auth_signup():
         if not 1 <= len(username) <= USERNAME_MAX:
             error = "Usernames are 1 to 30 characters."
         elif not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
-            error = "Passwords are 4 to 128 characters."
+            error = "Passwords are 8 to 128 characters."
         elif password != confirm:
             error = "Passwords do not match."
         else:
@@ -688,7 +743,7 @@ def create_user_api():
             {"error": "username must contain 1 to 30 characters"}), 400
     if not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
         return jsonify(
-            {"error": "password must contain 4 to 128 characters"}), 400
+            {"error": "password must contain 8 to 128 characters"}), 400
     try:
         user_id = db.create_user(username, generate_password_hash(password))
     except sqlite3.IntegrityError:
@@ -744,11 +799,8 @@ def change_own_password_api():
 
     Verifying the CURRENT password is required even on a home server:
     a bystander at an unlocked desk shouldn't own the account in two
-    keystrokes. Deleting other people's SEPARATE accounts is someone
-    else's operation (delete_user_api); here, only one's own session is
-    involved. Other signed-in sessions are NOT invalidated and the reason
-    is documented in the design decisions (rework trigger: first public
-    exposure).
+    keystrokes. Other sessions of the same user ARE invalidated via
+    password_version; the calling session is re-stamped so it stays in.
     """
     body = request.get_json(silent=True)
     if not (isinstance(body, dict)
@@ -767,8 +819,14 @@ def change_own_password_api():
         return jsonify({"error": "current password does not match"}), 400
     if not PASSWORD_MIN <= len(new_password) <= PASSWORD_MAX:
         return jsonify(
-            {"error": "password must contain 4 to 128 characters"}), 400
+            {"error": "password must contain 8 to 128 characters"}), 400
     db.set_password(g.user["id"], generate_password_hash(new_password))
+    db.bump_password_version(g.user["id"])
+    try:
+        session["pv"] = db.get_user(g.user["id"]).get(
+            "password_version", 1)
+    except Exception:
+        pass
     app.logger.info(
         "event=password_changed request_id=%s user_id=%d",
         g.request_id, g.user["id"],
@@ -782,6 +840,9 @@ def log_request_duration(response):
     duration_ms = (now - getattr(g, "request_started_at", now)) * 1000
     request_id = getattr(g, "request_id", uuid.uuid4().hex)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "no-referrer"
     log = app.logger.warning if duration_ms >= SLOW_REQUEST_MS \
         else app.logger.debug
     log(
@@ -4210,17 +4271,17 @@ def stock_history(symbol):
 def perform_password_reset(username, new_password):
     """Set a NEW password for one account. Returns (ok, message).
 
-    Same rules the web forms enforce: trim the username, 4..128
-    character passwords, uniform wording. The old hash is simply
-    overwritten; there is nothing session-side to invalidate that the
-    next request would not re-resolve from the database anyway.
+    Same rules the web forms enforce: trim the username, 8..128
+    character passwords, uniform wording. Bumps password_version so all
+    browsers sign out.
     """
     user = db.get_user_by_username((username or "").strip())
     if user is None:
         return False, "No account with that name on this server."
     if not PASSWORD_MIN <= len(new_password or "") <= PASSWORD_MAX:
-        return False, "Passwords are 4 to 128 characters."
+        return False, "Passwords are 8 to 128 characters."
     db.set_password(user["id"], generate_password_hash(new_password))
+    db.bump_password_version(user["id"])
     app.logger.info(
         "event=password_reset user_id=%d username=%r",
         user["id"], user["username"],

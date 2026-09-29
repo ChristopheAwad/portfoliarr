@@ -57,6 +57,8 @@ class MainActivity : AppCompatActivity() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
             }
 
             webViewClient = object : WebViewClient() {

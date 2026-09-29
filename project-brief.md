@@ -99,9 +99,10 @@ Prices and historical charts come from the [Yahoo Finance Python library](https:
   `app_settings` table (restarts keep signed-in sessions); cookies are
   SameSite=Lax with a 30-day lifetime; mutating API routes only accept
   JSON bodies, which together with Lax is the CSRF stance. Passwords are
-  hashed by werkzeug (scrypt), policy 4–128 characters; usernames are
-  1–30 characters, trimmed, case-insensitively unique. No rate limiting
-  yet (home-LAN trust model; rework trigger: first public exposure).
+  hashed by werkzeug (scrypt), policy 8–128 characters; usernames are
+  1–30 characters, trimmed, case-insensitively unique. Login allows 10
+  fails per IP per 10 minutes (429). Password change signs out other
+  browsers via password_version.
   Android needs nothing: the WebView loads the login page and keeps the
   cookie itself.
 - **Each portfolio owns its transaction ledger and all calculations built

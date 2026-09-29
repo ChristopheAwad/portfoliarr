@@ -110,10 +110,20 @@ def init():
                 username      TEXT NOT NULL COLLATE NOCASE UNIQUE
                     CHECK (length(username) BETWEEN 1 AND 30
                            AND username = trim(username)),
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL,
+                password_version INTEGER NOT NULL DEFAULT 1
             )
             """
         )
+        user_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_version" not in user_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN password_version INTEGER"
+                " NOT NULL DEFAULT 1"
+            )
 
         # The watchlist: one user's symbols to watch, not a global list.
         # (user_id, symbol) is the identity, so two users can watch the
@@ -337,9 +347,20 @@ def get_user(user_id):
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE id = ?",
+            "SELECT id, username, password_hash, password_version"
+            " FROM users WHERE id = ?",
             (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def bump_password_version(user_id):
+    """Increase the session version so old cookies stop working."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET password_version = password_version + 1"
+            " WHERE id = ?",
+            (user_id,),
+        )
 
 
 def get_user_by_username(username):
@@ -349,7 +370,7 @@ def get_user_by_username(username):
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT id, username, password_hash FROM users"
+            "SELECT id, username, password_hash, password_version FROM users"
             " WHERE username = ?", (username,)).fetchone()
     return dict(row) if row else None
 

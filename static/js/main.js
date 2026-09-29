@@ -85,7 +85,10 @@ function marketTextSpan(className, text) {
 // Fill one market item from one quote object (a parsed JSON piece).
 function updateMarketItem(panel, quote) {
     // Find the item by its data-symbol hook — by meaning, not position.
-    const item = panel.querySelector(`.market-item[data-symbol="${quote.symbol}"]`);
+    const sym = (typeof CSS !== "undefined" && CSS.escape
+        ? CSS.escape(quote.symbol) : quote.symbol);
+    const item = panel.querySelector(
+        `.market-item[data-symbol="${sym}"]`);
     if (!item) return; // backend knows a symbol our panel doesn't show yet
 
     const priceEl = item.querySelector(".market-item-price");
@@ -324,8 +327,10 @@ function renderWatchlistRows(symbols) {
 
 // Fill one row from one quote dict (a parsed piece of the JSON "quotes" list).
 function updateWatchRow(quote) {
+    const rowSym = (typeof CSS !== "undefined" && CSS.escape
+        ? CSS.escape(quote.symbol) : quote.symbol);
     const row = watchlistTab.querySelector(
-        `.watchlist-item[data-symbol="${quote.symbol}"]`
+        `.watchlist-item[data-symbol="${rowSym}"]`
     );
     if (!row) return; // row was removed between cycles; harmless
 
