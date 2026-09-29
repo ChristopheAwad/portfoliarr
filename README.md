@@ -93,7 +93,7 @@ docker compose pull && docker compose up -d
 
 `android/` holds a thin WebView client for this web app. Build with `./gradlew assembleDebug` (JDK 17, Android SDK 34). See `android/README.md`.
 
-On a cold start the app asks for your fingerprint (or your phone PIN) and restores a saved login, so the portfolio is not readable by whoever picks up your phone and you stop typing your password every month. Your password still works whenever you cancel the prompt. There is no WebAuthn/passkey support: that needs HTTPS and a real domain name, which a plain-HTTP LAN server does not have.
+On the first app open after you sign in, Portfoliarr offers to unlock with your fingerprint or phone PIN instead. If you say yes, every cold start asks for it and opens your portfolio with no typing; if you cancel, your password works exactly as before, and the app offers to stop asking or to forget the phone. There is no WebAuthn/passkey support: that needs HTTPS and a real domain name, which a plain-HTTP LAN server does not have.
 
 ## Scope
 

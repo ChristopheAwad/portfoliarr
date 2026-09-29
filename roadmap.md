@@ -73,24 +73,26 @@ authenticate or secure the Flask server.
 ---
 
 ### 57. Android Biometric Unlock (fingerprint replaces the login typing)
-Ask for a fingerprint on every COLD START of the Android app, then restore the
-saved session so the dashboard opens with no typing. The WebView already keeps a
-30-day cookie, so this is a privacy lock first and a password-saver second: it
-stops anyone who picks up the phone from reading the portfolio, and it removes
-the monthly re-type. The saved `session` cookie is encrypted with an AES-256-GCM
-key in `AndroidKeyStore` created with `setUserAuthenticationRequired(true)`, so
-the hardware refuses to decrypt it without a fresh authentication. Restored
-cookies are re-set with `HttpOnly; SameSite=Lax` so the app never downgrades the
-server's session protections. The password form is untouched and is the
-automatic fallback: no secret, a cancelled prompt, a failed decrypt, or a
-rejected cookie all just load the URL and let the existing gate redirect to
-`/auth/login`. Settings gain an on/off switch and a "Forget this phone" button.
-NO server change: no route, no table, no new Python dependency, no web UI
-change. Not WebAuthn/passkeys, which are blocked on this deployment by plain
-HTTP, an IP-address RP ID, and the Android WebView.
+Offer an optional local lock on the Android APK. The first time the app opens
+after a login exists, a single dialog offers fingerprint unlock; "No thanks"
+is recorded permanently. Once armed, every COLD START runs `BiometricPrompt`
+(fingerprint, falling back to the device PIN) and restores a saved session, so
+the dashboard opens with no typing. Cancelling loads the password page at once
+and floats three ways out on top of it: use my password / stop asking / forget
+this phone. This is OFF BY DEFAULT on purpose — PR #75 shipped a lock enabled
+and the user rejected that APK. The saved `session` cookie is encrypted with
+AES-256-GCM under a non-exportable `AndroidKeyStore` key, and restored with
+`HttpOnly; SameSite=Lax` so the app never downgrades the server's session
+protections. The password form is untouched and is the automatic fallback. The
+login is captured even while the feature is off, because the one-time offer is
+impossible without it. NO server change: no route, no table, no new Python
+dependency, no web UI change. Not WebAuthn/passkeys, which are blocked on this
+deployment by plain HTTP, an IP-address RP ID, and the Android WebView. There
+is no visible Settings gear: `MainActivity` hides the action bar and the gear
+was removed at the user's request, so the dialogs are the reachable path.
 
 **Effort:** 1–2 days
-**Files:** `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt` (new), `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (new), `android/app/src/test/java/com/portfoliarr/app/CookieHeaderTest.kt` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, `.github/workflows/build-android.yml`, `tests/test_android_biometric.py`, `project-brief.md`, `AGENTS.md`, `README.md`
+**Files:** `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt` (new), `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (new), `android/app/src/main/java/com/portfoliarr/app/StartGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SessionControl.kt` (new), `android/app/src/test/java/com/portfoliarr/app/` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, `android/gradle.properties`, `.github/workflows/build-android.yml`, `tests/test_android_biometric.py`, `project-brief.md`, `AGENTS.md`, `README.md`
 **Depends on:** Nothing
 **Status:** in progress
 

@@ -1,12 +1,17 @@
 // android/app/src/test/java/com/portfoliarr/app/StartGateTest.kt
 // JUnit tests for the cold-start decision — the one question MainActivity
-// asks before it decides to show a fingerprint prompt.
+// asks before it does anything, plus the two pure string helpers that go
+// with it.
 //
-// Every false case here matters as much as the true one. If any of them
-// returned true, the phone would prompt the user for no reason, or — worse —
-// keep prompting in a loop after a failure. The rule is simple: when in
-// doubt, do NOT prompt; just load the page and let the normal password
-// login handle it.
+// NO android.* / androidx.* imports on purpose; this runs on a plain JVM.
+//
+// The governing rule is that a wrong LOAD is cheap and a wrong PROMPT or
+// OFFER is expensive. A needless fingerprint prompt is an annoyance, and a
+// needless one-time OFFER is worse: the previous attempt at this feature
+// (PR #75) was scrapped because the app kept interrupting the user. So
+// every uncertain condition — no secret, no hardware, none enrolled,
+// unknown URL, a different server, a declined offer — answers LOAD and lets
+// the ordinary password login take over silently.
 
 package com.portfoliarr.app
 
@@ -22,81 +27,151 @@ class StartGateTest {
     private fun decide(
         hasStoredSecret: Boolean = true,
         biometricAvailable: Boolean = true,
-        enabledInSettings: Boolean = true,
+        enabledInSettings: Boolean = false,
+        declinedOffer: Boolean = false,
         coldStart: Boolean = true,
         secretOrigin: String? = origin,
         currentOrigin: String? = origin,
-    ) = StartGate.shouldPromptOnStart(
+    ) = StartGate.decideStartAction(
         hasStoredSecret = hasStoredSecret,
         biometricAvailable = biometricAvailable,
         enabledInSettings = enabledInSettings,
+        declinedOffer = declinedOffer,
         coldStart = coldStart,
         secretServerOrigin = secretOrigin,
         currentServerOrigin = currentOrigin,
     )
 
+    // ── the happy paths ───────────────────────────────────────────────
+
     @Test
-    fun `prompts on a cold start with everything in place`() {
-        assertTrue(decide())
+    fun `prompts when enabled with a matching secret`() {
+        assertEquals(StartGate.StartAction.PROMPT, decide(enabledInSettings = true))
     }
 
     @Test
-    fun `no prompt without a stored secret`() {
-        assertFalse(decide(hasStoredSecret = false))
+    fun `offers the feature once when not enabled and not declined`() {
+        assertEquals(StartGate.StartAction.OFFER, decide(enabledInSettings = false))
     }
 
     @Test
-    fun `no prompt when biometrics are unavailable`() {
-        // No hardware, none enrolled, or the sensor is busy. canAuthenticate
-        // already collapses those; the gate just obeys it.
-        assertFalse(decide(biometricAvailable = false))
+    fun `loads when enabled but no secret is stored`() {
+        // The overwhelmingly common first launch: nothing has been saved, so
+        // there is nothing to unlock and nothing to offer.
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(hasStoredSecret = false, enabledInSettings = true)
+        )
+    }
+
+    // ── everything must degrade to LOAD ───────────────────────────────
+
+    @Test
+    fun `loads without a stored secret`() {
+        assertEquals(StartGate.StartAction.LOAD, decide(hasStoredSecret = false))
     }
 
     @Test
-    fun `no prompt when the user turned the feature off`() {
-        assertFalse(decide(enabledInSettings = false))
-    }
-
-    @Test
-    fun `no prompt on a warm start`() {
-        // Rotating the screen or coming back from another app must not ask
-        // again — the user chose cold start only.
-        assertFalse(decide(coldStart = false))
-    }
-
-    @Test
-    fun `no prompt when the secret belongs to a different server`() {
-        assertFalse(decide(secretOrigin = "http://10.0.0.9:9967"))
-    }
-
-    @Test
-    fun `no prompt when the secret has no recorded origin`() {
-        assertFalse(decide(secretOrigin = null))
-        assertFalse(decide(secretOrigin = ""))
-    }
-
-    @Test
-    fun `no prompt when the current server url is unknown`() {
-        assertFalse(decide(currentOrigin = null))
-    }
-
-    @Test
-    fun `settings off wins over everything else`() {
-        assertFalse(
-            decide(enabledInSettings = false, hasStoredSecret = true,
-                biometricAvailable = true, coldStart = true)
+    fun `loads when biometrics are unavailable`() {
+        // No hardware, nothing enrolled, or the sensor is busy. The gate
+        // already collapses those; this obeys it. Note it suppresses the
+        // OFFER too: asking someone to turn on a feature that cannot work
+        // on this device is the definition of nagging.
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(biometricAvailable = false, enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(biometricAvailable = false, enabledInSettings = false)
         )
     }
 
     @Test
-    fun `an http origin is matched exactly, ports included`() {
+    fun `loads on a warm start`() {
+        // Rotating the screen or coming back from another app must neither
+        // prompt nor re-offer.
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(coldStart = false, enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(coldStart = false, enabledInSettings = false)
+        )
+    }
+
+    @Test
+    fun `loads once the offer has been declined`() {
+        // "No thanks" must be permanent. Re-asking after every login is the
+        // behaviour that got PR #75 scrapped.
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(declinedOffer = true, enabledInSettings = false)
+        )
+    }
+
+    @Test
+    fun `a decline never suppresses an already enabled feature`() {
+        // The flag only gates the OFFER. Someone who enabled it and later
+        // declined the (already answered) offer must still get their prompt.
+        assertEquals(
+            StartGate.StartAction.PROMPT,
+            decide(declinedOffer = true, enabledInSettings = true)
+        )
+    }
+
+    @Test
+    fun `loads when the secret belongs to a different server`() {
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(secretOrigin = "http://10.0.0.9:9967", enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(secretOrigin = "http://10.0.0.9:9967", enabledInSettings = false)
+        )
+    }
+
+    @Test
+    fun `loads when either origin is unknown`() {
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(secretOrigin = null, enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(secretOrigin = "", enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(currentOrigin = null, enabledInSettings = true)
+        )
+        assertEquals(
+            StartGate.StartAction.LOAD,
+            decide(currentOrigin = "   ", enabledInSettings = true)
+        )
+    }
+
+    @Test
+    fun `an exact origin match is required ports included`() {
         // A cookie is scoped to its host and port. "http://host" and
         // "http://host:9967" are different origins, so they must not
         // silently share a stored secret.
-        assertFalse(decide(secretOrigin = "http://192.168.1.50"))
-        assertFalse(decide(secretOrigin = "http://192.168.1.50:5000"))
-        assertFalse(decide(secretOrigin = "https://192.168.1.50:9967"))
+        for (other in listOf(
+            "http://192.168.1.50",
+            "http://192.168.1.50:5000",
+            "https://192.168.1.50:9967",
+        )) {
+            assertEquals(
+                "must not accept $other",
+                StartGate.StartAction.LOAD,
+                decide(secretOrigin = other, enabledInSettings = true)
+            )
+        }
     }
+
+    // ── normalizeOrigin ───────────────────────────────────────────────
 
     @Test
     fun `a trailing slash difference still matches`() {
@@ -128,6 +203,14 @@ class StartGateTest {
         assertEquals("", StartGate.normalizeOrigin("javascript:alert(1)"))
         assertEquals("", StartGate.normalizeOrigin("file:///etc/passwd"))
         assertEquals("", StartGate.normalizeOrigin("ftp://host/"))
+    }
+
+    @Test
+    fun `normalize refuses a bare host with no scheme`() {
+        // MainActivity already requires an explicit scheme when saving a
+        // URL, so reaching here without one means the value is not ours.
+        // Reject rather than guess.
+        assertEquals("", StartGate.normalizeOrigin("192.168.1.50:9967"))
     }
 
     @Test

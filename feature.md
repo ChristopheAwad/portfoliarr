@@ -19,21 +19,24 @@ revert the eight changed ones, and the app returns to today's exact
 behaviour. The web app, the database, and every Flask route are NOT modified
 by this feature at all.
 
-`VERSION` and `VERSION_CODE` are deliberately NOT bumped. That happens at APK
-release time, per `AGENTS.md`, and nothing has been approved for release.
+`VERSION` stays 1.1 so the web app's About page is unaffected and the server
+needs no redeploy. `VERSION_CODE` IS bumped 2 → 6, which is not cosmetic: it is
+the only reason the APK would install at all over the 5-code baseline on the
+user's phone.
 
-New files (5):
+New files (7):
 - `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (pure)
 - `android/app/src/main/java/com/portfoliarr/app/StartGate.kt` (pure)
 - `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt`
 - `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt`
+- `android/app/src/main/java/com/portfoliarr/app/SessionControl.kt`
 - `android/app/src/test/java/com/portfoliarr/app/` — two JUnit suites
 - `tests/test_android_biometric.py`
 
-Changed (8):
+Changed (9):
 - `MainActivity.kt`, `SettingsActivity.kt`, `activity_settings.xml`,
   `strings.xml`, `AndroidManifest.xml`, `libs.versions.toml`,
-  `build.gradle.kts`, `.github/workflows/build-android.yml`
+  `build.gradle.kts`, `gradle.properties`, `.github/workflows/build-android.yml`
 
 Plus docs: `feature.md`, `roadmap.md`, `project-brief.md`, `AGENTS.md`,
 `README.md`.
@@ -95,11 +98,49 @@ Even though `androidx.webkit:webkit:1.12.1` is already a dependency, blockers 1
 and 2 are infrastructure work (HTTPS + a real hostname, e.g. Tailscale Serve or
 a local CA) and are a separate future decision. NOT in this feature.
 
-## Design (as built)
+## REVISION 2 (2026-09-29) — the questions the user asked after review
 
-1. On a COLD START only, if a stored secret exists, the app calls
-   `BiometricPrompt` (fingerprint, falling back to the device PIN/pattern/
-   password).
+Four things changed after the first implementation, all of them raised by the
+user and all of them correct.
+
+1. **The build would not have installed.** This branch carried
+   `VERSION_CODE=2`, but the replacement baseline APK on
+   `release/android-android-1.4` — the one recommended for reverting — is
+   `VERSION_CODE=5`, as was the scrapped PR #75 trial build. Android refuses a
+   downgrade, so the APK would have failed with "App not installed". Now 6,
+   with a test that fails if it ever drops to 5 or below.
+
+2. **The controls were on a screen that cannot be opened.** `MainActivity`
+   hides the action bar, so the `action_settings` menu item is never shown and
+   `SettingsActivity` is reachable only on the first run. The switch and the
+   "Forget this phone" button were therefore dead. This is the same trap that
+   got PR #75 scrapped: the user rejected making the action bar visible and
+   asked for the gear to be removed. So the gear stays gone and the live path
+   is now a dialog.
+
+3. **Off by default, and it still had to be reachable.** A feature that is off
+   with no way to turn it on is not a feature. Hence the one-time offer: the
+   first cold start after a login exists asks "Use your fingerprint next
+   time?" and "No thanks" is recorded permanently. Defaulting to on is exactly
+   what PR #75 did wrong.
+
+4. **The three-way decision replaced a yes/no.** `shouldPromptOnStart` could
+   not express "ask for a fingerprint" versus "ask whether the user WANTS a
+   fingerprint", and collapsing those is how an opt-in becomes a nag.
+   `StartGate.decideStartAction` returns LOAD / PROMPT / OFFER, and every
+   uncertain condition answers LOAD.
+
+Consequence for the security review: capture of the session cookie is no
+longer gated on the enabled flag, because the one-time offer is only possible
+if a saved login already exists. Pinned by
+`test_login_is_saved_even_while_the_feature_is_off`.
+
+## Design (as built, revision 2)
+
+1. On a COLD START, `StartGate.decideStartAction` picks one of three
+   outcomes. PROMPT runs `BiometricPrompt` (fingerprint, falling back to the
+   device PIN/pattern/password). OFFER shows the one-time dialog. LOAD is
+   today's behaviour, silently.
 2. On success it decrypts the secret with an AES-256-GCM key generated
    through `AndroidKeyStore`. That key is non-exportable, so the ciphertext
    in the app's data directory is worthless to anyone who copies it off the
@@ -313,9 +354,9 @@ F6 is additionally protected by the existing pytest contract in
 
 ## Test results
 
-- `python -m pytest` → **1196 passed**, no regressions. Includes 24 new
+- `python -m pytest` → **1205 passed**, no regressions. Includes 33 new
   assertions in `tests/test_android_biometric.py`.
-- Kotlin JVM suites (pure helpers) → **40 tests, all green**.
+- Kotlin JVM suites (pure helpers) → **42 tests, all green**.
 - Whole-app Kotlin compile against API stubs → clean.
 - `assembleDebug` and on-device behaviour → **not run here**; see below.
 

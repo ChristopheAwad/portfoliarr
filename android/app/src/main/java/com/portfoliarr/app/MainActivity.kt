@@ -12,6 +12,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
 /**
@@ -42,6 +44,9 @@ class MainActivity : AppCompatActivity() {
     // app's JS-level problem, not a full-page recovery case.
     private var loadFailed = false
 
+    // The cold-start page load, issued at most once. See loadOnce().
+    private var loadIssued = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
@@ -70,36 +75,116 @@ class MainActivity : AppCompatActivity() {
 
         // THE GATE. This must run before the first loadUrl: the whole point
         // is that the portfolio is not on screen until the user has
-        // authenticated. If biometrics are unavailable, the feature is off,
-        // there is no secret, or the user cancels, we simply load — and the
-        // server's own auth gate redirects to the login form as usual.
-        if (StartGate.shouldPromptOnStart(
-                hasStoredSecret = secretStore.hasSecret(),
-                biometricAvailable = biometricGate.isAvailable(),
-                enabledInSettings = secretStore.isEnabled,
-                coldStart = AppState.processFresh,
-                secretServerOrigin = secretStore.secretOrigin(),
-                currentServerOrigin = StartGate.normalizeOrigin(url),
-            )
-        ) {
-            promptThenLoad(url)
-            return
-        }
-
+        // authenticated. Three outcomes, and two of them are interruptions,
+        // so decideStartAction answers LOAD unless every condition for
+        // asking is genuinely met.
+        val action = StartGate.decideStartAction(
+            hasStoredSecret = secretStore.hasSecret(),
+            biometricAvailable = biometricGate.isAvailable(),
+            enabledInSettings = secretStore.isEnabled,
+            declinedOffer = secretStore.declinedOffer,
+            coldStart = AppState.processFresh,
+            secretServerOrigin = secretStore.secretOrigin(),
+            currentServerOrigin = StartGate.normalizeOrigin(url),
+        )
+        // Whatever we are about to do, this process has asked its one
+        // question. Flipped before any dialog or prompt, so an Activity
+        // rebuilt while either is up cannot ask a second time.
         AppState.processFresh = false
+
+        when (action) {
+            StartGate.StartAction.PROMPT -> promptThenLoad(url)
+            StartGate.StartAction.OFFER -> offerThenLoad(url)
+            StartGate.StartAction.LOAD -> webView.loadUrl(url)
+        }
+    }
+
+    /**
+     * The page load, issued at most once per Activity instance.
+     *
+     * Three different things want to trigger it — the prompt's answer, the
+     * offer's dismissal, and a timeout rescue — and they race each other.
+     * Without this guard a double trigger would reload the page underneath
+     * the user, discarding whatever they were doing.
+     */
+    private fun loadOnce(url: String) {
+        if (loadIssued) return
+        loadIssued = true
         webView.loadUrl(url)
     }
 
     /**
-     * Ask for the fingerprint, then load the page — exactly once, whichever
-     * happens first.
+     * Ask ONCE whether the user wants fingerprint unlock at all, then load.
      *
-     * Two guards, because there are two ways this could go wrong:
+     * This is the only way the feature turns itself on, because the
+     * Settings screen that carries the switch is unreachable in the shipped
+     * UI (MainActivity hides the action bar, and the gear lived in it — the
+     * user rejected having it shown). So the question has to be asked where
+     * the user already is, which is nowhere more intrusive than this.
+     *
+     * The dismissal listener is a guarantee, not a nicety: back button, tap
+     * outside, or either button all converge on the load. A dialog that
+     * could be dismissed without ever loading would leave a blank screen.
+     */
+    private fun offerThenLoad(url: String) {
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.biometric_offer_title)
+            .setMessage(R.string.biometric_offer_message)
+            .setPositiveButton(R.string.biometric_offer_accept) { _, _ ->
+                // The saved login is already there (capture runs whether or
+                // not the feature is on), so this is all it takes to arm it.
+                secretStore.setEnabled(true)
+            }
+            .setNegativeButton(R.string.biometric_offer_decline) { _, _ ->
+                // Permanent. Re-asking after every sign-in is the nagging
+                // that got PR #75 scrapped.
+                secretStore.markDeclined()
+            }
+            .create()
+
+        dialog.setOnDismissListener { loadOnce(url) }
+        dialog.show()
+    }
+
+    /**
+     * The prompt was cancelled, refused, or errored. Put the login page up
+     * immediately — someone who cancelled wants their password, not another
+     * wait — and float the ways out of this on top of it.
+     *
+     * The page is loaded before the dialog appears, so the dialog's own
+     * dismissal needs no load: loadOnce has already fired and a second call
+     * is a no-op.
+     */
+    private fun showCancelChoice() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.biometric_cancel_title)
+            .setMessage(R.string.biometric_cancel_message)
+            .setPositiveButton(R.string.biometric_use_my_password, null)
+            .setNeutralButton(R.string.biometric_stop_asking) { _, _ ->
+                // Both parts, deliberately. setEnabled(false) clears the
+                // stored secret; without the decline the one-time offer
+                // would come straight back after the next sign-in.
+                secretStore.setEnabled(false)
+                secretStore.markDeclined()
+            }
+            .setNegativeButton(R.string.biometric_forget) { _, _ ->
+                SessionControl.forgetPhone(this, secretStore)
+                Toast.makeText(
+                    this, R.string.biometric_forget_done, Toast.LENGTH_SHORT
+                ).show()
+            }
+            .show()
+    }
+
+    /**
+     * Ask for the fingerprint, then load the page.
+     *
+     * Two one-shot guards, because there are two ways this could go wrong:
      *
      *   * [answered] makes the unlock a one-shot. BiometricPrompt reports
      *     through several callbacks and the timeout below races them, and
      *     without it a double answer would load twice and restore twice.
-     *   * [loadIssued] makes the LOAD a one-shot, independently. The cookie
+     *   * [loadOnce] makes the LOAD a one-shot, independently. The cookie
      *     write is asynchronous, so the page load is issued from inside its
      *     callback; if that callback were ever swallowed, only the timeout
      *     could still rescue the screen, and it must not be blocked by
@@ -112,25 +197,24 @@ class MainActivity : AppCompatActivity() {
      * page, which is always a working answer.
      */
     private fun promptThenLoad(url: String) {
-        // Flipped before prompting, so an Activity rebuilt while the prompt
-        // is up cannot ask a second time.
-        AppState.processFresh = false
-
-        var loadIssued = false
-        fun loadOnce() {
-            if (loadIssued) return
-            loadIssued = true
-            webView.loadUrl(url)
-        }
-
         var answered = false
         fun answer(unlocked: Boolean) {
             if (answered) return
             answered = true
             if (unlocked) {
-                restoreSavedSession(url, ::loadOnce)
+                restoreSavedSession(url) { loadOnce(url) }
             } else {
-                loadOnce()
+                // Cancelled, refused, or the sensor failed. The login page
+                // goes up now and the ways out of this float on top of it.
+                loadOnce(url)
+                // Posted rather than shown inline: BiometricPrompt pauses
+                // the Activity, and its callback is delivered around the
+                // resume. Showing a dialog in the same breath can beat the
+                // window token and throw BadTokenException, which on this
+                // path would mean a crash on the exact tap the user made to
+                // escape the prompt. One message later is invisible and
+                // cannot lose the race.
+                Handler(Looper.getMainLooper()).post { showCancelChoice() }
             }
         }
 
@@ -140,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             // Belt and braces: answer(false) normally issues the load
             // itself, but if a cookie write is stuck this is what still
             // gets the page on screen.
-            loadOnce()
+            loadOnce(url)
         }, UNLOCK_TIMEOUT_MS)
 
         biometricGate.authenticate(
@@ -190,15 +274,17 @@ class MainActivity : AppCompatActivity() {
      * cookie exists: the login POST redirects, onPageFinished fires, and the
      * jar now holds it.
      *
-     * The stored cookie's hash is compared rather than its value, because
-     * reading the value would mean decrypting, which must never happen from
-     * the background.
+     * Deliberately NOT gated on the enabled flag. The one-time offer can
+     * only happen if a login is already saved, and the user can only arm the
+     * feature from that offer — so gating capture on the flag would make the
+     * feature unreachable. What is stored is a cookie the app already holds
+     * in memory, encrypted under a non-exportable key, and "Stop asking"
+     * and "Forget this phone" both delete it.
      *
-     * No cookie means the user is sitting on the login page, and the stored
-     * secret is left alone — a bad capture must never destroy a good one.
+     * The stored value is compared by SHA-256, not read back, so sampling
+     * never prompts from the background.
      */
     private fun captureSessionCookie(url: String) {
-        if (!secretStore.isEnabled) return
         val origin = StartGate.normalizeOrigin(url)
         if (origin.isEmpty()) return
 

@@ -1,51 +1,93 @@
 // android/app/src/main/java/com/portfoliarr/app/StartGate.kt
-// The one question MainActivity asks before deciding to show a fingerprint
-// prompt, plus the server-origin comparison that goes with it.
+// What the app does when it is opened, plus two pure string helpers.
 //
 // NO android.* / androidx.* imports on purpose — StartGateTest.kt runs this
 // on a plain JVM.
 //
-// The governing rule is that a wrong `true` is much worse than a wrong
-// `false`. A needless prompt is an annoyance; a prompt that reappears after a
-// failure is a loop the user cannot escape. So every uncertain condition — no
-// secret, no hardware, none enrolled, unknown URL, a different server, a
-// disabled setting, a warm start — answers false and falls through to the
-// ordinary password login.
+// The governing rule is that a wrong LOAD is cheap and a wrong PROMPT or
+// OFFER is expensive. A needless prompt is an annoyance; a needless
+// one-time offer is worse, because the previous attempt at this feature
+// (PR #75) was scrapped after the user rejected the on-device trial for
+// changing how the app opens. So every uncertain condition answers LOAD and
+// falls through to the ordinary password login, silently.
 
 package com.portfoliarr.app
 
 object StartGate {
 
     /**
-     * True only when there is a stored secret to unlock, the user has
-     * switched the feature on, biometrics are actually usable, this is a
-     * genuine cold start, and the secret belongs to the server we are about
-     * to load.
+     * What MainActivity should do on a cold start.
+     *
+     * Three outcomes, not a yes/no. A boolean could not express the
+     * difference between "ask for a fingerprint" and "ask whether the user
+     * WANTS a fingerprint", and collapsing them is how an opt-in turns into
+     * a nag.
      */
-    fun shouldPromptOnStart(
+    enum class StartAction {
+        /** Load the page. Today's behaviour, exactly. */
+        LOAD,
+
+        /** Ask for a fingerprint, then restore the saved login. */
+        PROMPT,
+
+        /** Ask ONCE whether the user wants this feature at all. */
+        OFFER,
+    }
+
+    /**
+     * The one question MainActivity asks before doing anything.
+     *
+     * The ordering below is the whole design, and it is deliberately
+     * conservative: every check that could produce an interruption is a
+     * reason to answer LOAD. A wrong LOAD is invisible (the user types their
+     * password, exactly as before). A wrong PROMPT is an unwanted
+     * fingerprint scan. A wrong OFFER is the worst of the three, because
+     * the previous attempt at this feature (PR #75) was scrapped when the
+     * app kept interrupting the user — so OFFER additionally requires that
+     * biometrics actually work on this device and that the user has not
+     * already said no.
+     */
+    fun decideStartAction(
         hasStoredSecret: Boolean,
         biometricAvailable: Boolean,
         enabledInSettings: Boolean,
+        declinedOffer: Boolean,
         coldStart: Boolean,
         secretServerOrigin: String?,
         currentServerOrigin: String?,
-    ): Boolean {
-        // Cheapest and most absolute first: the user turned it off.
-        if (!enabledInSettings) return false
-        // Cold start only. A rotation or a return from another app must not
-        // ask again.
-        if (!coldStart) return false
-        // Nothing to unlock.
-        if (!hasStoredSecret) return false
-        // No hardware, nothing enrolled, or the sensor is busy.
-        if (!biometricAvailable) return false
-        // A secret with no recorded origin, or a server we cannot compare it
-        // against, is not safe to offer. Handing a cookie to the wrong origin
-        // would leak a live session to another host.
-        if (secretServerOrigin.isNullOrBlank()) return false
-        if (currentServerOrigin.isNullOrBlank()) return false
-        if (secretServerOrigin != currentServerOrigin) return false
-        return true
+    ): StartAction {
+        // Only a genuinely new process may ask anything. A rotation or a
+        // return from another app must be invisible.
+        if (!coldStart) return StartAction.LOAD
+        // No hardware, nothing enrolled, sensor busy: nothing to ask with.
+        if (!biometricAvailable) return StartAction.LOAD
+        // No stored login means nothing to unlock and nothing to offer.
+        if (!hasStoredSecret) return StartAction.LOAD
+        // A secret belonging to some other server is useless here, and
+        // offering a feature that could not then work would be a lie.
+        if (!originMatches(secretServerOrigin, currentServerOrigin)) {
+            return StartAction.LOAD
+        }
+        return when {
+            // Already on: prompt. The decline flag cannot suppress this —
+            // it only ever silenced the offer.
+            enabledInSettings -> StartAction.PROMPT
+            // Off, but never asked: ask once.
+            !declinedOffer -> StartAction.OFFER
+            // Off, and already declined: say nothing, forever.
+            else -> StartAction.LOAD
+        }
+    }
+
+    /**
+     * True only when a stored secret provably belongs to the server we are
+     * about to load. A cookie handed to the wrong origin would leak a live
+     * session, so an unknown or mismatched origin is a hard no.
+     */
+    private fun originMatches(secretOrigin: String?, currentOrigin: String?): Boolean {
+        if (secretOrigin.isNullOrBlank()) return false
+        if (currentOrigin.isNullOrBlank()) return false
+        return secretOrigin == currentOrigin
     }
 
     /**

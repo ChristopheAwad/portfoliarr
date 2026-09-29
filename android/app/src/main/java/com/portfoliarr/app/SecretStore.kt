@@ -70,12 +70,49 @@ class SecretStore(context: Context) {
      */
     fun storedCookieHash(): String? = prefs.getString(KEY_HASH, null)
 
+    /**
+     * Whether the user has turned fingerprint unlock ON.
+     *
+     * Defaults to FALSE. This is a deliberate reversal of the obvious
+     * choice: the previous attempt at this feature shipped enabled and was
+     * scrapped after the user rejected it, because a lock that changes how
+     * the app opens the moment it is installed is a surprise. A feature
+     * that has to be asked for can never surprise anyone.
+     */
     val isEnabled: Boolean
-        get() = prefs.getBoolean(KEY_ENABLED, true)
+        get() = prefs.getBoolean(KEY_ENABLED, false)
 
+    /**
+     * True once the user has said "not now" to the one-time offer.
+     *
+     * Separate from [isEnabled] because they answer different questions. A
+     * decline is permanent: re-asking after every login is precisely the
+     * nagging that got PR #75 scrapped, and nothing about signing in again
+     * should change the answer.
+     */
+    val declinedOffer: Boolean
+        get() = prefs.getBoolean(KEY_DECLINED, false)
+
+    /**
+     * Turn the feature on or off. Turning it OFF also deletes the stored
+     * login, so "off" really does remove the feature from the phone — but
+     * it deliberately does NOT sign the user out, which is what
+     * "Forget this phone" is for.
+     */
     fun setEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_ENABLED, enabled).apply()
         if (!enabled) clear()
+    }
+
+    /**
+     * Record that the user does not want to be asked again.
+     *
+     * "Stop asking" calls this AND setEnabled(false). Both are needed:
+     * setEnabled clears the secret, and without the decline the offer would
+     * return the moment the user signs in again.
+     */
+    fun markDeclined() {
+        prefs.edit().putBoolean(KEY_DECLINED, true).apply()
     }
 
     /**
@@ -251,5 +288,6 @@ class SecretStore(context: Context) {
         private const val KEY_ORIGIN = "origin"
         private const val KEY_HASH = "cookie_hash"
         private const val KEY_ENABLED = "enabled"
+        private const val KEY_DECLINED = "declined_offer"
     }
 }

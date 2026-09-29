@@ -175,13 +175,109 @@ def test_cookie_helpers_ignore_the_wrong_case_name():
 
 def test_biometric_gate_runs_before_the_first_page_load():
     main = source(f"{KOTLIN}/MainActivity.kt")
-    gate = main.find("promptThenLoad")     # performs BiometricPrompt
+    gate = main.find("decideStartAction")   # picks PROMPT / OFFER / LOAD
     first_load = main.find("webView.loadUrl(")
-    assert gate != -1, "MainActivity must call the unlock path"
+    assert gate != -1, "MainActivity must consult the start decision"
     assert first_load != -1
     assert gate < first_load, (
-        "the fingerprint prompt must be started BEFORE the first loadUrl, "
-        "otherwise the portfolio renders before the user authenticates"
+        "the start decision must be made BEFORE the first loadUrl, otherwise "
+        "the portfolio renders before the user authenticates"
+    )
+
+
+# ── the three-way decision ───────────────────────────────────────────────
+
+def test_start_gate_decides_between_load_prompt_and_offer():
+    gate = code(f"{KOTLIN}/StartGate.kt")
+    assert "enum class StartAction" in gate
+    for action in ("LOAD", "PROMPT", "OFFER"):
+        assert action in gate
+    assert "fun decideStartAction" in gate
+
+
+def test_feature_is_off_until_the_user_turns_it_on():
+    # Off by default on purpose: PR #75 added a lock that the user rejected
+    # on the on-device trial, and a feature that changes how the app opens
+    # the moment it is installed is exactly that mistake again.
+    store = code(f"{KOTLIN}/SecretStore.kt")
+    assert 'getBoolean(KEY_ENABLED, false)' in store, (
+        "the feature must default to OFF, not ON"
+    )
+
+
+def test_offers_the_feature_exactly_once():
+    store = code(f"{KOTLIN}/SecretStore.kt")
+    assert "KEY_DECLINED" in store
+    assert "declinedOffer" in store
+    main = code(f"{KOTLIN}/MainActivity.kt")
+    # "Stop asking" must record the decline as well as switching off, or
+    # clearing the secret would let the offer return after the next login.
+    assert "markDeclined" in main
+
+
+def test_login_is_saved_even_while_the_feature_is_off():
+    # The one-time offer is only possible because there is a saved login to
+    # restore. Capture must therefore NOT be gated on the enabled flag —
+    # otherwise the offer can never fire and the feature is unreachable.
+    main = code(f"{KOTLIN}/MainActivity.kt")
+    capture = main[main.index("private fun captureSessionCookie"):]
+    capture = capture[:capture.index("\n    }")]
+    assert "if (!secretStore.isEnabled) return" not in capture, (
+        "capture must run regardless of the enabled flag; the OFFER needs a "
+        "stored secret to exist"
+    )
+
+
+def test_the_settings_gear_stays_gone():
+    # Hard-won: PR #75 made the action bar visible to reach the lock's
+    # settings, the user rejected the resulting app, and asked for both the
+    # gear and the lock to be removed. The controls are reachable from the
+    # cancel dialog instead. Nothing may reintroduce a visible gear.
+    main = code(f"{KOTLIN}/MainActivity.kt")
+    assert "supportActionBar?.hide()" in main, (
+        "the action bar must stay hidden; the user rejected it being shown"
+    )
+    # No new layout may add a settings button to the main screen.
+    layout = source(f"{ANDROID}/res/layout/activity_settings.xml")
+    assert "action_settings" not in layout
+
+
+def test_cancelling_offers_the_three_way_choice():
+    main = code(f"{KOTLIN}/MainActivity.kt")
+    for name in ("biometric_use_my_password", "biometric_stop_asking",
+                 "biometric_forget"):
+        assert f"R.string.{name}" in main, f"{name} must be offered on cancel"
+    # Stop asking must both disable AND record the decline; disabling alone
+    # clears the secret, which lets the one-time offer return after the next
+    # sign-in.
+    assert "markDeclined" in main
+    assert "setEnabled(false)" in main
+    # Forget must go through the shared action, not a second copy.
+    assert "forgetPhone" in main
+
+
+def test_settings_screen_is_documented_as_unreachable():
+    # Honest bookkeeping: the switch and Forget button live on a screen the
+    # user cannot open, because the only route is an action-bar item in a
+    # hidden action bar. The dialog is the live path. A future change that
+    # makes the gear reachable should remove this note, not forget it.
+    settings = source(f"{KOTLIN}/SettingsActivity.kt")
+    assert "unreachable" in settings.lower() or "hidden action bar" in settings
+
+
+# ── release hygiene ──────────────────────────────────────────────────────
+
+def test_version_code_is_high_enough_to_install_over_the_baseline_apk():
+    # The scrapped PR #75 trial build and the replacement baseline APK on
+    # branch release/android-baseline-1.4 are VERSION_CODE 5. Android
+    # refuses a DOWNGRADE, so a build from this branch would fail to install
+    # with "App not installed" unless the code is strictly higher.
+    props = source("android/gradle.properties")
+    match = re.search(r"^VERSION_CODE=(\d+)$", props, re.MULTILINE)
+    assert match, "VERSION_CODE missing from android/gradle.properties"
+    assert int(match.group(1)) > 5, (
+        "VERSION_CODE must exceed 5 (the release/android-baseline-1.4 APK) "
+        f"or Android rejects the update; found {match.group(1)}"
     )
 
 
@@ -223,6 +319,28 @@ def test_unlock_always_reaches_the_page_load():
     assert "if (loadIssued) return" in main
 
 
+def test_dialogs_cannot_block_the_load():
+    # The offer and the cancel choice are dialogs standing between the user
+    # and the page. Neither may ever prevent the load: a dialog that cannot
+    # be dismissed would leave a blank screen, which is the one failure mode
+    # with no user-visible workaround.
+    main = code(f"{KOTLIN}/MainActivity.kt")
+
+    # A dismissal listener is the guarantee: back button, tap-outside, or a
+    # button all converge on the load.
+    assert "setOnDismissListener" in main, (
+        "the dialogs must load the page on dismissal, not only on a button"
+    )
+
+    # All three outcomes of the decision must be handled in onCreate.
+    on_create = main[main.index("override fun onCreate"):]
+    on_create = on_create[:on_create.index("\n    private fun")]
+    for action in ("StartAction.PROMPT", "StartAction.OFFER"):
+        assert action in on_create, f"{action} is never handled"
+    # And the plain LOAD path is still there as the default.
+    assert "webView.loadUrl(url)" in on_create
+
+
 def test_page_load_waits_for_the_cookie_write():
     # CookieManager.setCookie is ASYNCHRONOUS. Loading the page in the same
     # breath would race the cookie write and land on the login form even
@@ -237,7 +355,7 @@ def test_page_load_waits_for_the_cookie_write():
     # ...and restoreSavedSession must take a continuation, so the caller
     # cannot accidentally load before the cookie is in place.
     assert "then: () -> Unit" in restore
-    assert "restoreSavedSession(url, ::loadOnce)" in main
+    assert "restoreSavedSession(url) { loadOnce(url) }" in main
 
 
 def test_capture_never_overwrites_a_good_secret_with_nothing():
@@ -303,10 +421,22 @@ def test_settings_switch_populating_does_not_wipe_the_secret():
 
 
 def test_forget_button_also_clears_the_webview_cookie():
-    # Clearing only the encrypted blob leaves a live, unencrypted copy in
-    # the WebView's own cookie jar — the "forget" would not forget.
-    settings = source(f"{KOTLIN}/SettingsActivity.kt")
-    assert "removeAllCookies" in settings
+    # Clearing only the encrypted blob leaves a live copy in the WebView's
+    # own cookie jar — the "forget" would not forget. Worse, because Flask's
+    # session cookie is a stateless signed blob, the stored copy stays valid
+    # and the next cold start would sign the user straight back in.
+    #
+    # The wipe lives in SessionControl so the cancel dialog and the Settings
+    # button cannot drift apart, and BOTH must call it.
+    control = code(f"{KOTLIN}/SessionControl.kt")
+    assert "removeAllCookies" in control
+    assert "flush()" in control
+    assert "clear()" in control
+
+    for caller in ("MainActivity.kt", "SettingsActivity.kt"):
+        assert "SessionControl.forgetPhone" in code(f"{KOTLIN}/{caller}"), (
+            f"{caller} must go through the shared forget action"
+        )
 
 
 # ── CI ───────────────────────────────────────────────────────────────────
