@@ -13,7 +13,6 @@
 
 package com.portfoliarr.app
 
-import android.content.Context
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
