@@ -95,6 +95,12 @@ was removed at the user's request, so the dialogs are the reachable path.
 **Files:** `android/app/src/main/java/com/portfoliarr/app/BiometricGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SecretStore.kt` (new), `android/app/src/main/java/com/portfoliarr/app/CookieHeader.kt` (new), `android/app/src/main/java/com/portfoliarr/app/StartGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/SessionControl.kt` (new), `android/app/src/test/java/com/portfoliarr/app/` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/java/com/portfoliarr/app/SettingsActivity.kt`, `android/app/src/main/res/layout/activity_settings.xml`, `android/app/src/main/res/values/strings.xml`, `android/app/src/main/AndroidManifest.xml`, `android/gradle/libs.versions.toml`, `android/app/build.gradle.kts`, `android/gradle.properties`, `.github/workflows/build-android.yml`, `tests/test_android_biometric.py`, `project-brief.md`, `AGENTS.md`, `README.md`
 **Depends on:** Nothing
 **Status:** shipped 2026-09-29 (PR #98)
+**Revert:** if the on-device trial fails, the whole feature comes out of main
+with `git revert f00a5b9` (the PR #98 merge). No server, web, or database code
+was touched, so the revert stays inside `android/`, `tests/test_android_biometric.py`,
+and docs. To return the phone itself to the old behaviour, uninstall the code-6
+APK first — Android refuses a downgrade to the code-5 stock build — then install
+the APK from branch `release/android-baseline-1.4` and re-enter the server URL once.
 
 ---
 
