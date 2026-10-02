@@ -438,8 +438,13 @@
         for (const token of tokens) {
             const row = document.createElement("li");
             row.dataset.id = token.id;
+            // A watchlist token names no portfolio (#59); label it plainly.
+            // A portfolio token whose portfolio row is gone (only via a
+            // manual DB edit) still deserves a label.
+            const displayName = token.scope === "watchlist"
+                ? "Watchlist" : (token.portfolio_name ?? "Portfolio");
             const name = document.createElement("span");
-            name.textContent = token.portfolio_name;
+            name.textContent = displayName;
             // Dates are ISO-8601 UTC from the server; only the day part is
             // useful in a management list.
             const meta = document.createElement("small");
@@ -451,7 +456,7 @@
             revoke.dataset.action = "revoke";
             revoke.textContent = "Revoke";
             revoke.setAttribute(
-                "aria-label", `Revoke widget access to ${token.portfolio_name}`);
+                "aria-label", `Revoke widget access to ${displayName}`);
             row.append(name, meta, revoke);
             list.append(row);
         }

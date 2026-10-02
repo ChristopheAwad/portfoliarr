@@ -67,6 +67,34 @@ object WidgetApi {
         return read(connection)
     }
 
+    /**
+     * The watchlist widget's connect step (#59): mint a user-scoped token.
+     * No portfolio is picked — the watchlist belongs to the signed-in person.
+     */
+    fun createWatchlistToken(
+        baseUrl: String,
+        cookieHeader: String,
+    ): CreatedToken {
+        val json = post(
+            "${base(baseUrl)}/api/widget/tokens",
+            cookieHeader,
+            JSONObject().put("scope", "watchlist").toString(),
+        )
+        return CreatedToken(
+            json.getInt("id"),
+            json.getString("token"),
+            "Watchlist",
+        )
+    }
+
+    /** The watchlist widget's read path (#59): bearer token only. */
+    fun fetchWatchlist(baseUrl: String, token: String): String {
+        val connection = open("${base(baseUrl)}/api/widget/watchlist")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Authorization", BEARER_PREFIX + token)
+        return read(connection)
+    }
+
     private fun get(url: String, cookieHeader: String): String {
         val connection = open(url)
         connection.setRequestProperty("Accept", "application/json")

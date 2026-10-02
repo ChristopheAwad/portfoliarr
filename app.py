@@ -345,13 +345,15 @@ def start_request_timer():
 # signed-out request may still reach. `static` is exempt so the login
 # page can load its stylesheet, fonts, and favicon.
 #
-# `widget_summary` is the one exempt DATA endpoint, and it does not leak
-# anything: the gadget has no session (it is a home-screen widget), so it
-# presents its own scoped bearer token, and the ROUTE validates it and
-# answers 401 itself. The exemption only lets the request reach that
-# check. Every other /api/ route still needs a signed-in session.
+# `widget_summary` and `widget_watchlist` are the two exempt DATA
+# endpoints, and they do not leak anything: a gadget has no session (it is a
+# home-screen widget), so it presents its own scoped bearer token, and each
+# ROUTE validates it and answers 401 itself. The exemption only lets the
+# request reach that check. Every other /api/ route still needs a signed-in
+# session.
 AUTH_EXEMPT_ENDPOINTS = frozenset(
-    {"auth_login", "auth_setup", "auth_signup", "static", "widget_summary"})
+    {"auth_login", "auth_setup", "auth_signup", "static", "widget_summary",
+     "widget_watchlist"})
 
 
 @app.before_request
@@ -2002,14 +2004,42 @@ def _widget_portfolio_id(body):
 def widget_tokens_api():
     """List (GET) or create (POST) widget tokens for the signed-in user.
 
-    Creation takes `{"portfolio_id": N}`; the ownership check is explicit
-    because this path sits outside the portfolio hook's scope. The reply
-    carries the plaintext token ONCE — the list endpoint never repeats it.
+    Creation takes either `{"portfolio_id": N}` (the portfolio widget) or
+    `{"scope": "watchlist"}` (the watchlist widget, #59). The ownership
+    check for a portfolio is explicit because this path sits outside the
+    portfolio hook's scope. The reply carries the plaintext token ONCE —
+    the list endpoint never repeats it.
     """
     if request.method == "GET":
         return jsonify(db.list_widget_tokens(g.user["id"]))
 
-    portfolio_id = _widget_portfolio_id(request.get_json(silent=True))
+    body = request.get_json(silent=True)
+    scope = body.get("scope") if isinstance(body, dict) else None
+    if scope == "watchlist":
+        if "portfolio_id" in body:
+            # Ambiguous: a watchlist token names no portfolio.
+            return jsonify({"error": "watchlist tokens take no portfolio_id"}), 400
+        token = secrets.token_urlsafe(32)
+        created_at = _now_iso_utc()
+        token_id = db.create_widget_token(
+            g.user["id"], None, _hash_widget_token(token), created_at,
+            scope="watchlist")
+        app.logger.info(
+            "event=widget_token_created request_id=%s scope=watchlist"
+            " token_id=%d", g.request_id, token_id)
+        return jsonify({
+            "id": token_id,
+            "token": token,
+            "scope": "watchlist",
+            "created_at": created_at,
+        }), 201
+
+    # An explicit "portfolio" scope is accepted as a synonym for the
+    # portfolio_id path below; any other value is an unknown scope.
+    if scope is not None and scope != "portfolio":
+        return jsonify({"error": "unknown scope"}), 400
+
+    portfolio_id = _widget_portfolio_id(body)
     if portfolio_id is None:
         return jsonify({"error": "portfolio_id must be a positive integer"}), 400
     portfolio = db.get_portfolio(portfolio_id, g.user["id"])
@@ -2027,6 +2057,7 @@ def widget_tokens_api():
     return jsonify({
         "id": token_id,
         "token": token,
+        "scope": "portfolio",
         "portfolio_id": portfolio["id"],
         "portfolio_name": portfolio["name"],
         "created_at": created_at,
@@ -2046,10 +2077,12 @@ def widget_token_api(token_id):
 
 @app.route("/api/widget/summary")
 def widget_summary():
-    """The widget's data: one bearer token in, the small CAD payload out.
+    """The portfolio widget's data: one bearer token in, the CAD payload out.
 
     This route is in AUTH_EXEMPT_ENDPOINTS because a widget has no
-    session; the token check below IS the authentication. The reply is a
+    session; the token check below IS the authentication. Only a
+    `scope='portfolio'` token is accepted here (#59's watchlist token is
+    401). The reply is a
     deliberate SUBSET of the dashboard summary — only what the widget
     paints (no holdings, no cost basis) — and the numbers come from the
     same `_portfolio_summary_data` helper, so the two can never drift.
@@ -2059,7 +2092,10 @@ def widget_summary():
     header = request.headers.get("Authorization", "")
     token = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
     row = db.get_widget_token(_hash_widget_token(token)) if token else None
-    if row is None:
+    if (row is None or row["scope"] != "portfolio"
+            or row["portfolio_name"] is None):
+        # Fail closed: a portfolio token whose portfolio row is gone (only
+        # reachable by editing the DB by hand) must not serve zeros.
         return jsonify({"error": "authentication required"}), 401
 
     db.touch_widget_token(row["id"], _now_iso_utc())
@@ -2074,6 +2110,29 @@ def widget_summary():
         "total_gain_pct": data["total_gain_pct"],
         "unpriced": data["unpriced"],
     })
+
+
+@app.route("/api/widget/watchlist")
+def widget_watchlist():
+    """The watchlist widget's data (#59): one bearer token in, the
+    watchlist quotes out.
+
+    Same exemption and same self-check as widget_summary. Only a
+    `scope='watchlist'` token is accepted here; a portfolio token is 401.
+    The reply is the SAME `{symbols, quotes}` shape the session
+    /api/watchlist route serves, through the shared
+    `_watchlist_quotes_payload` helper, so the two can never drift. The
+    token names its owner, so no query can steer it.
+    """
+    header = request.headers.get("Authorization", "")
+    token = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+    row = db.get_widget_token(_hash_widget_token(token)) if token else None
+    if row is None or row["scope"] != "watchlist":
+        return jsonify({"error": "authentication required"}), 401
+
+    db.touch_widget_token(row["id"], _now_iso_utc())
+    return jsonify(_watchlist_quotes_payload(
+        row["user_id"], g.request_id, "widget_watchlist"))
 
 
 # ---------------------------------------------------------------------------
@@ -2659,7 +2718,7 @@ def portfolio_allocation():
     })
 
 
-# JSON endpoint powering the live watchlist. One route, two payloads:
+# JSON payload powering the live watchlist. One shape, two consumers:
 #   "symbols" — the full stored list (source of truth for which rows exist)
 #   "quotes"  — per-symbol quote dicts, successes only
 # Why send both? The market overview's cells are fixed in HTML, so the
@@ -2667,14 +2726,16 @@ def portfolio_allocation():
 # the browser learns the list from THIS response — including rows whose
 # quote failed this cycle (those render as "—", mirroring the market
 # overview's gap-fill).
-@app.route("/api/watchlist")
-def watchlist_quotes():
+#
+# Shared by the session route below and the widget bearer route
+# (`/api/widget/watchlist`, #59), so the two can never drift. `operation`
+# only labels the degradation log line.
+def _watchlist_quotes_payload(user_id, request_id, operation):
     # The DB read is the source of truth for what should be displayed —
-    # and of WHOM: every read/write below belongs to the signed-in user.
-    user_id = g.user["id"]
+    # and of WHOM: every read below belongs to the passed-in user.
     symbols = db.get_symbols(user_id)
     if not symbols:
-        return jsonify({"symbols": [], "quotes": []})
+        return {"symbols": [], "quotes": []}
 
     # Fetch all watchlist symbols in parallel — each needs a quote + name,
     # both independent yfinance calls. Threading cuts wall time from
@@ -2718,14 +2779,14 @@ def watchlist_quotes():
                 name_failures.append((symbol, name_error))
 
     _log_aggregate_degradation(
-        "market_quotes_degraded", "watchlist", len(symbols), len(quotes_map),
+        "market_quotes_degraded", operation, len(symbols), len(quotes_map),
         quote_failures,
     )
     for symbol, error_type in name_failures:
         app.logger.debug(
-            "event=market_name_unavailable request_id=%s operation=watchlist "
+            "event=market_name_unavailable request_id=%s operation=%s "
             "symbol=%r error_type=%s",
-            g.request_id, symbol, error_type,
+            request_id, operation, symbol, error_type,
         )
 
     # Preserve original symbol order for deterministic output.
@@ -2733,7 +2794,13 @@ def watchlist_quotes():
 
     # An empty watchlist is a normal state, not an error — the frontend
     # shows a friendly "nothing here yet" message.
-    return jsonify({"symbols": symbols, "quotes": quotes})
+    return {"symbols": symbols, "quotes": quotes}
+
+
+@app.route("/api/watchlist")
+def watchlist_quotes():
+    return jsonify(_watchlist_quotes_payload(
+        g.user["id"], g.request_id, "watchlist"))
 
 
 # Add a ticker to the watchlist. The browser POSTs JSON like {"symbol": "aapl"}.
