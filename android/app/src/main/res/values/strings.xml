@@ -30,4 +30,27 @@
     <string name="biometric_forget_confirm_message">This signs you out on this phone. You will need your username and password to get back in.</string>
     <string name="cancel">Cancel</string>
     <string name="forget">Forget</string>
+
+    <!-- #58 in-app update. The manual menu item is dormant in the shipped UI
+         (the action bar is hidden, like the Settings gear) but tested, so it
+         is ready the day the bar returns. The automatic cold-start box is the
+         live path. -->
+    <string name="update_check_menu">Check for update</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_message">Version %1$s is ready (%2$s MB). Updates never touch your data or settings.</string>
+    <string name="update_download">Download</string>
+    <string name="update_later">Later</string>
+    <string name="update_skip">Skip this version</string>
+    <string name="update_downloading_title">Downloading update</string>
+    <string name="update_up_to_date">You are on the latest version</string>
+    <string name="update_check_failed">Could not check for updates</string>
+    <string name="update_download_failed">Download failed</string>
+    <string name="update_download_cancelled">Download cancelled</string>
+    <string name="update_hash_mismatch">Update file failed verification and was deleted</string>
+    <string name="update_install_ready_title">Update downloaded</string>
+    <string name="update_install_ready_message">Install version %1$s now?</string>
+    <string name="update_install">Install</string>
+    <string name="update_unknown_sources_title">Permission needed</string>
+    <string name="update_unknown_sources_message">Android needs your permission before Portfoliarr can install updates.</string>
+    <string name="update_open_settings">Open settings</string>
 </resources>

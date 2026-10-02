@@ -9,6 +9,10 @@
          off. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <!-- #58 in-app update: installing an APK needs this on API 26+. It is a
+         normal permission on API 24-25 and changes nothing until the update
+         flow runs; the per-app grant is requested at install time. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -28,6 +32,19 @@
         </activity>
 
         <activity android:name=".SettingsActivity" />
+
+        <!-- #58 in-app update: hands the verified APK to the system
+             installer. Exposes exactly one directory (res/xml/file_paths.xml)
+             and nothing else; unexported, grant-only. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.portfoliarr.app.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

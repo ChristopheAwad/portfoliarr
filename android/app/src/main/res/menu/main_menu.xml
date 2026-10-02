@@ -8,4 +8,12 @@
         android:title="Settings"
         app:showAsAction="ifRoom" />
 
+    <!-- #58 in-app update: dormant while the action bar is hidden, like the
+         Settings gear above. The automatic cold-start check is the live path;
+         this is the natural home for the manual trigger. -->
+    <item
+        android:id="@+id/action_check_update"
+        android:title="@string/update_check_menu"
+        app:showAsAction="never" />
+
 </menu>

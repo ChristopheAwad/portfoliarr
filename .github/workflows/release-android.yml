@@ -1,0 +1,123 @@
+# Publish Android release (roadmap #58).
+#
+# Publishes the phone build to a GitHub Release the app can offer to install
+# itself: tag android-<VERSION>-<VERSION_CODE>, one APK asset named
+# portfoliarr-<VERSION>-<VERSION_CODE>.apk, and a SHA-256: line in the notes.
+# UpdateGate.parseReleaseTag parses exactly this shape; tests/test_android_update.py
+# pins both sides so CI and the app cannot drift apart unnoticed.
+#
+# Idempotent by tag: re-running on an already-published commit exits 0 at the
+# `gh release view` step without rebuilding or touching the release. NEVER add
+# --draft or --prerelease: both are invisible to the releases/latest API the
+# app polls, so either flag breaks in-app updates silently.
+#
+# Every VERSION_CODE bump merged to main now ships to the phone. Bump it only
+# when a build is meant to be offered.
+
+name: Publish Android release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - "VERSION"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# gh CLI needs GH_TOKEN in Actions. The default token is enough to create a
+# release because of the contents: write permission above.
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      # Same deterministic license acceptance as Build Android APK: GitHub's
+      # ubuntu runners ship a preinstalled SDK, and AGP reads these hashes
+      # before auto-downloading missing components during the build.
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo "8933bad161af4178b1185d1a37fbf41ea5269c55"  > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" >> "$ANDROID_HOME/licenses/android-sdk-license"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Resolve first, build later: the tag decides whether there is anything
+      # to do at all, and a build for an existing tag is wasted CI time.
+      - name: Resolve release tag
+        id: tag
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          VERSION_CODE="$(grep -E '^VERSION_CODE=' android/gradle.properties | cut -d= -f2)"
+          TAG="android-${VERSION}-${VERSION_CODE}"
+          ASSET="portfoliarr-${VERSION}-${VERSION_CODE}.apk"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+
+      # Idempotency: an already-published tag is a no-op success, so pushing
+      # the same commit twice (or re-running the workflow) never rebuilds,
+      # never re-uploads, and never moves the release. The result is written
+      # to a step output and every later step is guarded by it: `exit 0` in a
+      # step would only end that step, not the job, and the build would run
+      # anyway.
+      - name: Check whether the release already exists
+        id: exists
+        run: |
+          if gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.tag.outputs.tag }} already exists — nothing to do."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing ${{ steps.tag.outputs.tag }}."
+          fi
+
+      - name: Build debug APK
+        if: steps.exists.outputs.already == 'false'
+        run: ./gradlew assembleDebug
+        working-directory: android
+
+      - name: Prepare asset and notes
+        if: steps.exists.outputs.already == 'false'
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk "${{ steps.tag.outputs.asset }}"
+          SHA="$(sha256sum "${{ steps.tag.outputs.asset }}" | cut -d' ' -f1)"
+          {
+            echo "Android ${{ steps.tag.outputs.version }} (${{ steps.tag.outputs.code }})"
+            echo ""
+            echo "Install from the app itself: open Portfoliarr and accept the update box."
+            echo ""
+            echo "SHA-256: ${SHA}"
+          } > NOTES.md
+          echo "sha=${SHA}" >> "$GITHUB_ENV"
+
+      # No --draft, no --prerelease: either flag hides the release from the
+      # releases/latest endpoint the app polls. gh is preinstalled on the
+      # runner and authenticates with the workflow's own token.
+      - name: Create release
+        if: steps.exists.outputs.already == 'false'
+        run: |
+          if gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Race: release appeared while building — leaving it alone."
+            exit 0
+          fi
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            "${{ steps.tag.outputs.asset }}" \
+            --title "Android ${{ steps.tag.outputs.version }} (${{ steps.tag.outputs.code }})" \
+            --notes-file NOTES.md

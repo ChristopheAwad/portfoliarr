@@ -371,8 +371,14 @@ def test_dialogs_cannot_block_the_load():
     on_create = on_create[:on_create.index("\n    private fun")]
     for action in ("StartAction.PROMPT", "StartAction.OFFER"):
         assert action in on_create, f"{action} is never handled"
-    # And the plain LOAD path is still there as the default.
-    assert "webView.loadUrl(url)" in on_create
+    # And the plain LOAD path is still there as the default. Since roadmap
+    # #58 it goes through loadOnce — which performs the load AND runs the
+    # automatic update check — so that a phone without biometrics still
+    # reaches both.
+    assert "StartGate.StartAction.LOAD" in on_create, \
+        "the plain LOAD path is never handled"
+    assert re.search(r"StartAction\.LOAD\s*->\s*loadOnce\s*\(\s*url\s*\)", on_create), \
+        "the plain LOAD path must route through loadOnce"
 
 
 def test_page_load_waits_for_the_cookie_write():
