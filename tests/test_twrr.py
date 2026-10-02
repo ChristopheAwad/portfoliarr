@@ -1,7 +1,7 @@
 # tests/test_twrr.py — locks for the TIME-WEIGHTED RETURN (TWR)
 # feature: the dashboard's "Performance" chart view.
 #
-# The math (see feature.md): per-bar chaining over the value series with
+# The math: per-bar chaining over the value series with
 # cash flows removed.  Portfoliarr has no separate cash account, so
 # transactions ARE the cash movements — a BUY injects cash (a positive
 # contribution), a SELL withdraws it (a negative one).  The flow is

@@ -1097,8 +1097,8 @@ def search_tickers(query, limit=8):
         type      "Equity", "ETF", "Index", "Cryptocurrency" — lets the
                   dropdown badge what kind of thing each hit is
 
-    No cache, on purpose (decision recorded in feature.md): searches are
-    user-typed and effectively unique, so a cache would almost never hit —
+    No cache, on purpose: searches are user-typed and effectively unique,
+    so a cache would almost never hit —
     unlike quotes (same symbol every 60s) or names (never change).
 
     Returns [] when nothing matches — a normal state, not an error.

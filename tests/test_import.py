@@ -32,7 +32,7 @@ import app as app_module
 
 # ── Helpers & fixtures ────────────────────────────────────────────────
 
-# The feature.md sample format: four TAB-separated columns. \t in a normal
+# The sample format: four TAB-separated columns. \t in a normal
 # Python string IS the tab character — no need for raw strings here.
 PASTE = "CM\t16 Mar 2026\t132.55\t1.296383"
 
@@ -70,7 +70,7 @@ def fake_market(monkeypatch):
 # ── Parser unit tests (pure — no Flask, no DB, no network) ────────────
 
 def test_parse_happy_path():
-    """The feature.md sample line, end to end: tab-split, uppercase
+    """The sample line, end to end: tab-split, uppercase
     ticker, ISO date, floats, forced BUY, no error."""
     rows = app_module.parse_import_text(PASTE)
     assert rows == [{

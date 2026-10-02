@@ -21,8 +21,8 @@ The y-scale is deliberately OUT of scope: it keeps its own
 maxTicksLimit: 6 by design (short price labels never crowded).
 x_scale_body() slices the x block out so these tests can't bleed into it.
 
-The full label spec lives in feature.md and in the comment block above
-buildXTickLabels in common.js.
+The full label spec lives in the comment block above buildXTickLabels in
+common.js.
 """
 
 from pathlib import Path

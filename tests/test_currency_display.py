@@ -4,7 +4,7 @@
 # CAD|NATIVE — the one endpoint the ledger's "Show USD in USD" toggle
 # flips — plus the regression pinning the watchlist to native currency.
 #
-# THE TWO-RATE CONTRACT (feature.md): in CAD mode,
+# THE TWO-RATE CONTRACT: in CAD mode,
 #   - price_display  = stored price × the row's STORED fx_rate — a past
 #                      fact, frozen at the buy-date's USDCAD close;
 #   - value / day_gain = live quote × the LIVE rate — today's CAD value

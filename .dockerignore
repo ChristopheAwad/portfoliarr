@@ -32,6 +32,7 @@ instance/
 .github/
 AGENTS.md
 project-brief.md
+roadmap.md
 feature.md
 
 # Design-source assets — nothing at runtime reads assets/ (the served

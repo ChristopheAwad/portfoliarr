@@ -1342,9 +1342,9 @@ Algorithm: walk every trading day in the range forward, keeping a
     # ONE live USDCAD rate per request, fetched only when a held ticker
     # actually trades in USD (a CAD-only portfolio makes no FX call). The
     # rate applies FLAT to every point — history is context, not a sell
-    # price, so a per-point historical rate was deliberately skipped
-    # (documented in project-brief.md). If the rate is unavailable, USD
-    # tickers contribute 0: no honest CAD number, no fake 1:1 rate.
+    # price, so a per-point historical rate was deliberately skipped. If
+    # the rate is unavailable, USD tickers contribute 0: no honest CAD
+    # number, no fake 1:1 rate.
     usd_tickers = sorted(
         symbol for symbol, currency in currency_by_symbol.items()
         if currency == "USD"
@@ -1678,10 +1678,10 @@ Algorithm: walk every trading day in the range forward, keeping a
 # The answers are close but never identical by design: a quote is "the
 # last traded price", a daily bar's close is "where that day ended".
 #
-# CURRENCY (permanent decision, documented in project-brief.md's Design
-# Rules): the summary displays in CAD — ALWAYS, regardless of the
-# dashboard's "Show USD in USD" ledger toggle (that toggle flips only the
-# ledger; the portfolio total is deliberately untouched by it). USD
+# CURRENCY (permanent design decision): the summary always displays in
+# CAD, regardless of the dashboard's "Show USD in USD" ledger toggle
+# (that toggle flips only the ledger; the portfolio total is deliberately
+# untouched by it). USD
 # amounts convert at the LIVE USDCAD rate (current value = a potential
 # sell), while the cost basis converts each transaction at its OWN stored
 # fx_rate (a past fact — see _derive_fx_rate). A CAD total gain therefore
@@ -3473,7 +3473,7 @@ def remove_ticker_transactions(symbol):
 # ---------------------------------------------------------------------------
 # TRANSACTION IMPORTER — bulk-load a pasted batch of transactions.
 #
-# The source format (feature.md): tab-separated rows, four columns each —
+# The source format: tab-separated rows, four columns each —
 #     CM<TAB>16 Mar 2026<TAB>132.55<TAB>1.296383
 # No side column (every row is a BUY) and no currency (derived from
 # yfinance, exactly as POST /api/transactions does for hand-logged rows).
@@ -3595,8 +3595,8 @@ def parse_import_text(text):
             continue
 
         # The format has no side column: every imported row is a BUY.
-        # (Rework trigger documented in feature.md: the day the source
-        # includes sells, this fixed assignment becomes a column read.)
+        # (Rework trigger: the day the source includes sells, this fixed
+        # assignment becomes a column read.)
         row["transaction_type"] = "BUY"
 
     return rows
