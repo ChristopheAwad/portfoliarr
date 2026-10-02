@@ -72,6 +72,8 @@ dependencies {
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.biometric)
+    // #51 home-screen widget refresh scheduling.
+    implementation(libs.androidx.work.runtime)
 
     // JVM unit tests for the pure helpers (CookieHeader, StartGate). They
     // carry no android.* imports precisely so these run here, on a plain

@@ -33,6 +33,37 @@
 
         <activity android:name=".SettingsActivity" />
 
+        <!-- #51 home-screen widget. exported="false": the system still
+             delivers APPWIDGET_UPDATE to the provider (the documented
+             pattern), and no other app can poke it. The custom REFRESH
+             action is what the widget's refresh tap broadcasts. -->
+        <receiver
+            android:name=".widget.PortfolioWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.portfoliarr.app.widget.action.REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <!-- #51 widget connect screen. The launcher starts it when a widget
+             is added (android:configure in widget_info.xml), so it must be
+             exported; it only displays data and stores the resulting token
+             in this app's private preferences. It never returns a token to
+             the caller and never logs the session. -->
+        <activity
+            android:name=".widget.WidgetConfigActivity"
+            android:exported="true"
+            android:label="@string/widget_config_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <!-- #58 in-app update: hands the verified APK to the system
              installer. Exposes exactly one directory (res/xml/file_paths.xml)
              and nothing else; unexported, grant-only. -->

@@ -53,4 +53,27 @@
     <string name="update_unknown_sources_title">Permission needed</string>
     <string name="update_unknown_sources_message">Android needs your permission before Portfoliarr can install updates.</string>
     <string name="update_open_settings">Open settings</string>
+
+    <!-- #51 home-screen widget. The labels mirror the dashboard strip's
+         "Today" and "Total" wording; messages cover the states the widget
+         can show when it has no data. Creation is native: the connect
+         screen talks to the server with the app's saved login. -->
+    <string name="widget_label">Portfoliarr</string>
+    <string name="widget_description">Your portfolio total, today\'s change, and total return.</string>
+    <string name="widget_refresh">Refresh</string>
+    <string name="widget_asof">as of %1$s</string>
+    <string name="widget_today">Today</string>
+    <string name="widget_total">Total</string>
+    <string name="widget_no_server">Open Portfoliarr and set your server first</string>
+    <string name="widget_no_token">Tap to connect this widget</string>
+    <string name="widget_error">Couldn\'t refresh. Tap to retry.</string>
+    <string name="widget_config_title">Connect widget</string>
+    <string name="widget_config_explainer">Pick the portfolio this widget shows. The widget can only read totals; you can revoke it in Portfoliarr under Preferences.</string>
+    <string name="widget_config_connect">Connect</string>
+    <string name="widget_config_retry">Retry</string>
+    <string name="widget_config_loading">Loading portfolios...</string>
+    <string name="widget_config_no_server">Set your server in Portfoliarr first, then try again.</string>
+    <string name="widget_config_no_session">Open Portfoliarr and sign in first, then try again.</string>
+    <string name="widget_config_error">Could not reach the server.</string>
+    <string name="widget_config_open_app">Open Portfoliarr</string>
 </resources>

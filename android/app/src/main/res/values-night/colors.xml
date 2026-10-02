@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #51 widget colors under system dark mode. These are the web app's dark
+     theme money colors, so the widget matches the dashboard. -->
+<resources>
+    <color name="widget_bg">#1A1A2E</color>
+    <color name="widget_text">#F9FAFB</color>
+    <color name="widget_text_muted">#9CA3AF</color>
+    <color name="widget_up">#34D399</color>
+    <color name="widget_down">#F87171</color>
+    <color name="widget_stale">#6B7280</color>
+</resources>

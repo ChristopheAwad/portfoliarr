@@ -409,3 +409,93 @@
 
     loadPeople();
 })();
+
+// ---------------------------------------------------------------------------
+// PHONE WIDGETS — the read-only tokens the Android home-screen widget uses
+// (#51). The PHONE creates a token when the user connects a widget; this
+// card only lists them and offers Revoke. The plaintext token is never
+// present here: the server returns it once, to the phone, and stores only
+// a hash. Revoking makes the widget show its connect state on the next
+// refresh. Same shapes as the cards above: one fetch helper, one error
+// line, a toast on success.
+// ---------------------------------------------------------------------------
+(function manageWidgetTokens() {
+    const list = document.getElementById("widget-list");
+    const errorEl = document.getElementById("widget-error");
+    if (!list) return;
+
+    function report(message) {
+        errorEl.textContent = message;
+        errorEl.hidden = !message;
+    }
+
+    function day(iso) {
+        return iso ? iso.slice(0, 10) : "";
+    }
+
+    function render(tokens) {
+        list.replaceChildren();
+        for (const token of tokens) {
+            const row = document.createElement("li");
+            row.dataset.id = token.id;
+            const name = document.createElement("span");
+            name.textContent = token.portfolio_name;
+            // Dates are ISO-8601 UTC from the server; only the day part is
+            // useful in a management list.
+            const meta = document.createElement("small");
+            const used = token.last_used_at
+                ? `last used ${day(token.last_used_at)}` : "never used";
+            meta.textContent = `created ${day(token.created_at)} · ${used}`;
+            const revoke = document.createElement("button");
+            revoke.type = "button";
+            revoke.dataset.action = "revoke";
+            revoke.textContent = "Revoke";
+            revoke.setAttribute(
+                "aria-label", `Revoke widget access to ${token.portfolio_name}`);
+            row.append(name, meta, revoke);
+            list.append(row);
+        }
+    }
+
+    async function load() {
+        report("");
+        try {
+            const response = await fetch("/api/widget/tokens");
+            if (!response.ok) {
+                report(`Could not load widgets (HTTP ${response.status})`);
+                return;
+            }
+            render(await response.json());
+        } catch {
+            report("Could not reach the server.");
+        }
+    }
+
+    list.addEventListener("click", async (event) => {
+        const target = event.target.closest("button[data-action='revoke']");
+        const row = target?.closest("li[data-id]");
+        if (!row) return;
+        const confirmed = await showPrompt({
+            title: "Revoke this widget?",
+            message: "The widget stops updating until you connect it again.",
+            confirmLabel: "Revoke", danger: true,
+        });
+        if (confirmed === null) return;
+        report("");
+        try {
+            const response = await fetch(
+                `/api/widget/tokens/${encodeURIComponent(row.dataset.id)}`,
+                { method: "DELETE" });
+            if (response.status === 204) {
+                showToast("Widget access revoked", "success");
+                await load();
+            } else {
+                report(`Could not revoke the widget (HTTP ${response.status})`);
+            }
+        } catch {
+            report("Could not reach the server.");
+        }
+    });
+
+    load();
+})();
