@@ -19,8 +19,9 @@
 #     "2026-03-16" stored
 #   - best-effort: a dead ticker or a broken line fails ALONE — its
 #     neighbours still import
-#   - the no-dedup decision: committing the same text twice doubles the
-#     rows (documented behavior, so test that it's what actually happens)
+#   - the commit-stays-all-or-nothing rule: committing the same text
+#     twice doubles the rows (a preview may flag duplicates, #31, but
+#     the write is never blocked)
 
 from types import SimpleNamespace
 
@@ -350,10 +351,11 @@ def test_commit_database_failure_is_reported_per_row(
 
 
 def test_commit_recommitting_duplicates_by_design(client, fake_market):
-    """THE no-dedup decision, made testable: the ledger has no identity
-    beyond its own auto-numbers, so the same text committed twice lands
-    twice. Documented in the panel's hint text — this test pins that
-    behavior so a future dedup feature must change it consciously."""
+    """Commit is all-or-nothing, made testable: the ledger has no
+    identity beyond its own auto-numbers, so the same text committed
+    twice lands twice. #31 flags such rows at preview (and the browser
+    confirms before the click), but the route never blocks — this test
+    pins that the write still happens."""
     fake_market.quotes["CM"] = make_quote("CM")
     first = client.post("/api/transactions/import/commit", json={"text": PASTE})
     second = client.post("/api/transactions/import/commit", json={"text": PASTE})

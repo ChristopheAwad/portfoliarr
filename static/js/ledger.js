@@ -1637,8 +1637,13 @@ const importCloseBtn = document.querySelector("#import-close-btn");
 const importReportEl = document.querySelector("#import-report");
 let previewPortfolioId = null;
 let previewText = null;
+// How many rows the LAST preview flagged as possible duplicates. Drives
+// the explicit confirmation in the commit handler below; reset whenever
+// the paste changes, because a stale count must never gate a new import.
+let previewDuplicateCount = 0;
 importTextEl.addEventListener("input", () => {
     previewPortfolioId = null;
+    previewDuplicateCount = 0;
     importCommitBtn.hidden = true;
 });
 
@@ -1676,6 +1681,18 @@ function renderImportReport(payload, summaryText) {
         `${payload.valid_count} valid, ${payload.invalid_count} invalid`;
     importReportEl.append(summary);
 
+    // #31: the possible-duplicate count line, bold red. `|| 0` guards the
+    // commit path's partial-failure payload, which has no count key.
+    const duplicateCount = payload.duplicate_count || 0;
+    if (duplicateCount > 0) {
+        const duplicateSummary = document.createElement("p");
+        duplicateSummary.className = "import-duplicate-summary";
+        duplicateSummary.textContent =
+            `Possible Duplicate: ${duplicateCount} ` +
+            `row${duplicateCount === 1 ? "" : "s"}`;
+        importReportEl.append(duplicateSummary);
+    }
+
     for (const row of payload.rows) {
         const line = document.createElement("p");
         if (row.error !== null) {
@@ -1690,6 +1707,14 @@ function renderImportReport(payload, summaryText) {
                 `Line ${row.line}: BUY ${formatNumber(row.qty, 4)} ` +
                 `${row.ticker} @ ${formatNumber(row.price)} ` +
                 `${row.currency} on ${row.transaction_date}`;
+            // The per-row tag: a span (not a string) so only the marker
+            // is bold red — the row's facts stay normal.
+            if (row.duplicate === true) {
+                const tag = document.createElement("span");
+                tag.className = "import-duplicate-tag";
+                tag.textContent = " — Possible Duplicate";
+                line.append(tag);
+            }
         }
         importReportEl.append(line);
     }
@@ -1734,6 +1759,7 @@ importPreviewBtn.addEventListener("click", async () => {
         renderImportReport(payload);
         previewPortfolioId = currentPortfolioId();
         previewText = text;
+        previewDuplicateCount = payload.duplicate_count || 0;
         importCommitBtn.hidden = payload.valid_count === 0;
         importCommitBtn.textContent =
             `Import ${payload.valid_count} row` +
@@ -1750,12 +1776,38 @@ importPreviewBtn.addEventListener("click", async () => {
 // partial. The panel stays OPEN (unlike the original plan's "close
 // panel"): closing it would hide the failure report, and the ledger
 // refresh below is visible either way. The user closes when done.
+// #31: when the last preview flagged possible duplicates, ask once —
+// styled modal, never the browser's blocking confirm — and only then
+// write. Cancelling keeps the Import button visible for a re-preview.
 importCommitBtn.addEventListener("click", async () => {
     if (!currentPortfolioId() || previewPortfolioId !== currentPortfolioId() ||
         previewText !== importTextEl.value) {
         importCommitBtn.hidden = true;
         showImportError("Preview again for this portfolio before importing.");
         return;
+    }
+    if (previewDuplicateCount > 0) {
+        // Singular and plural get their own sentence: "1 row looks like
+        // it already exists" / "2 rows look like they already exist".
+        const duplicateMessage = previewDuplicateCount === 1
+            ? "1 row looks like it already exists in this ledger. " +
+              "Import anyway?"
+            : `${previewDuplicateCount} rows look like they already exist ` +
+              "in this ledger. Import anyway?";
+        const confirmed = await showConfirm({
+            title: "Import possible duplicates?",
+            message: duplicateMessage,
+            confirmLabel: "Import anyway",
+        });
+        if (!confirmed) return; // the button stays visible for a re-preview
+        // The modal is async: the paste or the portfolio may have changed
+        // while it was open, and a stale verdict must not commit.
+        if (!currentPortfolioId() || previewPortfolioId !== currentPortfolioId() ||
+            previewText !== importTextEl.value) {
+            importCommitBtn.hidden = true;
+            showImportError("Preview again for this portfolio before importing.");
+            return;
+        }
     }
     const epoch = portfolioEpoch();
     importCommitBtn.hidden = true;
