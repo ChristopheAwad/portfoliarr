@@ -104,6 +104,29 @@ the APK from branch `release/android-baseline-1.4` and re-enter the server URL o
 
 ---
 
+### 58. Android In-App APK Update
+CI publishes each new phone build to a GitHub Release tagged
+`android-<VERSION>-<VERSION_CODE>` with the APK and a `SHA-256:` line in the
+notes. On every cold start, after the #57 unlock gate resolves, the app asks
+the public releases API over HTTPS whether a strictly higher `versionCode`
+exists and stays silent unless one does. An available update shows what is new
+with Download / Later / Skip-this-version; the download streams to the
+app-private cache with a cancelable progress box, then the file is hash-checked
+and handed to the Android installer through a `FileProvider` that exposes only
+that one directory. A missing or mismatched hash deletes the file and never
+installs. Android always keeps its own final tap on Install — a fully silent
+install is impossible — and its installer remains the signature authority. The
+manual Check-for-update menu item ships as tested but dormant code beside the
+unreachable Settings gear, because the action bar stays hidden. No server, web,
+or database change.
+
+**Effort:** 1–2 days
+**Files:** `android/app/src/main/java/com/portfoliarr/app/UpdateGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/UpdateChecker.kt` (new), `android/app/src/main/java/com/portfoliarr/app/ApkDownloader.kt` (new), `android/app/src/main/java/com/portfoliarr/app/ApkInstaller.kt` (new), `android/app/src/test/java/com/portfoliarr/app/UpdateGateTest.kt` (new), `android/app/src/main/res/xml/file_paths.xml` (new), `.github/workflows/release-android.yml` (new), `tests/test_android_update.py` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/res/menu/main_menu.xml`, `android/app/src/main/res/values/strings.xml`
+**Depends on:** #57 (shipped; the cold-start check hooks after its gate)
+**Status:** in progress
+
+---
+
 ### 18. Ledger Quick Sell
 Add a Sell action to each positively held, currently quoted ticker group in the
 ledger. It prepares the existing transaction form with the ticker, complete net
@@ -772,6 +795,7 @@ Tier 1 (all independent; shipped dependencies are noted but do not block):
   5. Cash Balance ─────────────────────┤
   16. Android Biometric/PIN Lock ────────┤── #57 first: it ships the gate
   57. Android Biometric Unlock ───────────┤   and secret store this reuses
+  58. Android In-App APK Update ──────────┤── needs #57's gate (shipped)
   18. Ledger Quick Sell ─────────────────┤
   19. Date-Aware Price Auto-Fill ────────┤
   21. High-Value Operational Logging ────┤
@@ -869,6 +893,7 @@ For maximum compounding value:
 34. **Quick-Watch Star in Search** → add to the watchlist without leaving the dropdown
 35. **Android Pull-to-Refresh and Share** → the two gestures phone users expect from a client app
 57. **Android Biometric Unlock** → a fingerprint on cold start opens the app and restores the session, so the portfolio is private to you and the monthly password is gone
+58. **Android In-App APK Update** → the phone notices, downloads, verifies, and offers to install new builds itself
 52. **Ticker Fundamentals Expansion** → the cheap stock-page win: more numbers from the profile call the page already makes
 53. **Ticker Position Card** → turns the page from "this security" into "your stake in this security"
 54. **Ticker Financials Table** → revenue/profit/loss context behind the price

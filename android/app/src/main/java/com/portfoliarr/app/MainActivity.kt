@@ -12,6 +12,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +31,11 @@ import androidx.appcompat.app.AppCompatActivity
  */
 object AppState {
     var processFresh: Boolean = true
+
+    // #58: the cold-start update check runs once per process. Set the first
+    // time loadOnce fires (which is after the #57 gate resolves), so neither
+    // a rotation nor a second load path can ask twice.
+    var updateChecked: Boolean = false
 }
 
 class MainActivity : AppCompatActivity() {
@@ -49,6 +56,19 @@ class MainActivity : AppCompatActivity() {
 
     // The pending unlock-timeout handler, so onDestroy can cancel it.
     private var unlockTimeout: Handler? = null
+
+    // #58 in-app update state. The downloader runs on its own thread holding
+    // no Activity reference beyond posted callbacks, but the progress dialog
+    // is window-bound: onDestroy cancels the download and drops the dialog so
+    // neither can fire into a dead Activity. A rotation mid-download is caught
+    // there too, and lets the recreated Activity offer the update again.
+    private var updateDownloader: ApkDownloader? = null
+    private var updateProgressDialog: AlertDialog? = null
+
+    // #58: set when the user is sent to system settings to grant
+    // install-unknown-apps. onResume retries the install they already tapped
+    // if — and only if — the grant is now present.
+    private var pendingInstallAfterPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,7 +117,12 @@ class MainActivity : AppCompatActivity() {
         when (action) {
             StartGate.StartAction.PROMPT -> promptThenLoad(url)
             StartGate.StartAction.OFFER -> offerThenLoad(url)
-            StartGate.StartAction.LOAD -> webView.loadUrl(url)
+            // #58: the plain LOAD path must go through loadOnce too. If it
+            // calls webView.loadUrl directly, the automatic update check —
+            // which lives in loadOnce — never runs for a phone without
+            // biometrics, or after the one-time offer is declined. Those are
+            // the common cases.
+            StartGate.StartAction.LOAD -> loadOnce(url)
         }
     }
 
@@ -113,6 +138,11 @@ class MainActivity : AppCompatActivity() {
         if (loadIssued) return
         loadIssued = true
         webView.loadUrl(url)
+        // #58: the cold-start update check starts here — after the #57 gate
+        // has resolved (prompt answered, offer dismissed, timeout, or plain
+        // load). Renderer-crash rebuilds bypass loadOnce, and
+        // AppState.updateChecked keeps this to once per process.
+        maybeCheckForUpdates(manual = false)
     }
 
     /**
@@ -257,6 +287,19 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         unlockTimeout?.removeCallbacksAndMessages(null)
         unlockTimeout = null
+        // #58: a download outlives nothing — cancel it and drop its dialog
+        // so neither touches this Activity after it is gone.
+        if (updateDownloader != null) {
+            // A download in flight dies with the Activity. Let a recreated
+            // Activity run the check again so the update box and its Download
+            // button come back; otherwise updateChecked would suppress it
+            // until the next cold start.
+            AppState.updateChecked = false
+        }
+        updateDownloader?.cancel()
+        updateDownloader = null
+        updateProgressDialog?.dismiss()
+        updateProgressDialog = null
         super.onDestroy()
     }
 
@@ -348,6 +391,264 @@ class MainActivity : AppCompatActivity() {
             return
         }
         secretStore.save(live, origin)
+    }
+
+    // ── #58 in-app update ────────────────────────────────────────────
+    // The single entry point for BOTH triggers. Automatic (from loadOnce,
+    // once per process) shows a dialog ONLY when there is a newer build the
+    // user has not skipped; every other outcome is silent. Manual (from the
+    // menu) ignores the skip and always reports: up-to-date box, available
+    // box, or failure toast. Neither path ever blocks the dashboard — the
+    // network call runs on its own thread.
+
+    private fun updatePrefs() = getSharedPreferences("portfoliarr", MODE_PRIVATE)
+
+    @Suppress("DEPRECATION")
+    private fun localVersionCode(): Int {
+        // PackageManager, not BuildConfig: AGP 8 generates no BuildConfig by
+        // default and enabling it would widen this diff for one integer.
+        return packageManager.getPackageInfo(packageName, 0).versionCode
+    }
+
+    private fun clearPendingUpdate() {
+        updatePrefs().edit()
+            .remove("pending_update_code")
+            .remove("pending_update_sha")
+            .remove("pending_update_name")
+            .apply()
+    }
+
+    private fun maybeCheckForUpdates(manual: Boolean) {
+        if (manual) {
+            runUpdateCheck(manual = true)
+            return
+        }
+        if (AppState.updateChecked) return
+        AppState.updateChecked = true
+        // A verified-but-uninstalled file from a previous run: offer it
+        // without downloading again. offerPendingUpdate owns the whole
+        // outcome, including a fresh network check when the file is stale.
+        if (offerPendingUpdate()) return
+        runUpdateCheck(manual = false)
+    }
+
+    private fun runUpdateCheck(manual: Boolean) {
+        UpdateChecker().checkLatest { release ->
+            if (isFinishing || isDestroyed) return@checkLatest
+            val skipped = if (updatePrefs().contains("skipped_update_code")) {
+                updatePrefs().getInt("skipped_update_code", -1)
+            } else {
+                null
+            }
+            when (val decision = UpdateGate.decideCheck(
+                localCode = localVersionCode(),
+                remote = release,
+                // Manual checks answer the true question; the skip is an
+                // auto-check courtesy only.
+                skippedCode = if (manual) null else skipped,
+            )) {
+                is UpdateGate.UpdateDecision.Available ->
+                    showUpdateAvailable(decision.release)
+                is UpdateGate.UpdateDecision.UpToDate ->
+                    if (manual) {
+                        if (release == null) {
+                            showUpdateToast(R.string.update_check_failed)
+                        } else {
+                            showUpToDateBox()
+                        }
+                    }
+                // else: silent on auto, unreachable on manual (skip is null
+                // there, so Skipped cannot occur).
+                is UpdateGate.UpdateDecision.Skipped -> Unit
+            }
+        }
+    }
+
+    /**
+     * Offer a previously verified file, if one is still valid. Returns true
+     * when a pending key existed; this method then owns the outcome — it
+     * shows the install box, or, when the file is stale, clears it and falls
+     * through to a fresh network check. Returns false when nothing is pending.
+     *
+     * The SHA-256 runs on a background thread: hashing a full APK on the main
+     * thread at cold start would freeze the dashboard.
+     */
+    private fun offerPendingUpdate(): Boolean {
+        val prefs = updatePrefs()
+        if (!prefs.contains("pending_update_code")) return false
+        val code = prefs.getInt("pending_update_code", -1)
+        val expectedHash = prefs.getString("pending_update_sha", null)
+        val name = prefs.getString("pending_update_name", null)
+        val file = ApkDownloader.updateFile(cacheDir)
+        // Cheap staleness checks on the main thread first. A wrong offer here
+        // is worse than a redundant download, so anything uncertain clears.
+        if (code <= localVersionCode() || name == null || !file.exists() ||
+            expectedHash == null
+        ) {
+            clearPendingUpdate()
+            runUpdateCheck(manual = false)
+            return true
+        }
+        Thread {
+            val actual = ApkDownloader.sha256HexOf(file)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (actual != null && actual == expectedHash.lowercase()) {
+                    showInstallReady(file, name)
+                } else {
+                    clearPendingUpdate()
+                    runUpdateCheck(manual = false)
+                }
+            }
+        }.start()
+        return true
+    }
+
+    private fun showUpToDateBox() {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setMessage(R.string.update_up_to_date)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun showUpdateToast(messageRes: Int) {
+        Toast.makeText(this, messageRes, Toast.LENGTH_LONG).show()
+    }
+
+    private fun showUpdateAvailable(release: UpdateGate.ReleaseRef) {
+        if (isFinishing || isDestroyed) return
+        val sizeMb = if (release.sizeBytes > 0) {
+            String.format(java.util.Locale.US, "%.1f", release.sizeBytes / 1048576.0)
+        } else {
+            "?"
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.update_available_title)
+            .setMessage(getString(
+                R.string.update_available_message, release.versionName, sizeMb
+            ))
+            .setPositiveButton(R.string.update_download) { _, _ ->
+                startUpdateDownload(release)
+            }
+            .setNeutralButton(R.string.update_later, null)
+            .setNegativeButton(R.string.update_skip) { _, _ ->
+                // Permanent for exactly this build. A still newer build
+                // later is a different question and is asked normally.
+                updatePrefs().edit()
+                    .putInt("skipped_update_code", release.versionCode)
+                    .apply()
+            }
+            .show()
+    }
+
+    private fun startUpdateDownload(release: UpdateGate.ReleaseRef) {
+        if (isFinishing || isDestroyed) return
+        val downloader = ApkDownloader()
+        updateDownloader = downloader
+        val progressBar = ProgressBar(
+            this, null, android.R.attr.progressBarStyleHorizontal
+        ).apply {
+            isIndeterminate = true
+            max = 100
+        }
+        val density = resources.displayMetrics.density
+        val container = FrameLayout(this).apply {
+            val horizontal = (24 * density).toInt()
+            setPadding(horizontal, (12 * density).toInt(), horizontal, 0)
+            addView(progressBar)
+        }
+        updateProgressDialog = AlertDialog.Builder(this)
+            .setTitle(R.string.update_downloading_title)
+            .setView(container)
+            .setNegativeButton(R.string.cancel) { _, _ -> downloader.cancel() }
+            .setCancelable(false)
+            .create()
+        updateProgressDialog?.show()
+        Thread {
+            val result = downloader.download(release, cacheDir) { read, expected ->
+                runOnUiThread {
+                    if (expected > 0) {
+                        progressBar.isIndeterminate = false
+                        progressBar.progress =
+                            ((read * 100) / expected).toInt().coerceIn(0, 100)
+                    }
+                }
+            }
+            runOnUiThread {
+                updateDownloader = null
+                updateProgressDialog?.dismiss()
+                updateProgressDialog = null
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                when (result) {
+                    is ApkDownloader.DownloadResult.Verified -> {
+                        // Remembered so the next cold start can offer the
+                        // install without re-downloading.
+                        updatePrefs().edit()
+                            .putInt("pending_update_code", release.versionCode)
+                            .putString("pending_update_sha", release.sha256)
+                            .putString("pending_update_name", release.versionName)
+                            .apply()
+                        showInstallReady(result.file, release.versionName)
+                    }
+                    is ApkDownloader.DownloadResult.Failed -> when (result.reason) {
+                        ApkDownloader.FailReason.CANCELLED ->
+                            showUpdateToast(R.string.update_download_cancelled)
+                        ApkDownloader.FailReason.HASH_MISMATCH ->
+                            showUpdateToast(R.string.update_hash_mismatch)
+                        else ->
+                            showUpdateToast(R.string.update_download_failed)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun showInstallReady(file: java.io.File, versionName: String) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.update_install_ready_title)
+            .setMessage(getString(
+                R.string.update_install_ready_message, versionName
+            ))
+            .setPositiveButton(R.string.update_install) { _, _ ->
+                tryInstallUpdate(file)
+            }
+            // Declining keeps the pending keys: the next cold start offers
+            // the install again without re-downloading.
+            .setNegativeButton(R.string.update_later, null)
+            .show()
+    }
+
+    private fun tryInstallUpdate(file: java.io.File) {
+        if (!file.exists()) {
+            clearPendingUpdate()
+            showUpdateToast(R.string.update_download_failed)
+            return
+        }
+        if (!ApkInstaller.canInstallUnknownApps(this)) {
+            // API 26+: without the grant the install intent would die
+            // silently, so route to the exact system screen instead and
+            // retry from onResume when the user returns.
+            pendingInstallAfterPermission = true
+            AlertDialog.Builder(this)
+                .setTitle(R.string.update_unknown_sources_title)
+                .setMessage(R.string.update_unknown_sources_message)
+                .setPositiveButton(R.string.update_open_settings) { _, _ ->
+                    startActivity(ApkInstaller.unknownSourcesSettingsIntent(this))
+                }
+                .setNegativeButton(R.string.cancel) { _, _ ->
+                    pendingInstallAfterPermission = false
+                }
+                .show()
+            return
+        }
+        launchInstaller(file)
+    }
+
+    private fun launchInstaller(file: java.io.File) {
+        val uri = ApkInstaller.contentUriFor(this, file)
+        startActivity(ApkInstaller.buildInstallIntent(uri))
     }
 
     companion object {
@@ -452,6 +753,21 @@ class MainActivity : AppCompatActivity() {
                 webView.loadUrl(url)
             }
         }
+
+        // #58: the user returns from the system unknown-sources screen. The
+        // flag is cleared on EVERY return; the installer fires only when the
+        // grant is genuinely present now. No grant, no loop, no nag.
+        if (pendingInstallAfterPermission) {
+            pendingInstallAfterPermission = false
+            if (ApkInstaller.canInstallUnknownApps(this)) {
+                val file = ApkDownloader.updateFile(cacheDir)
+                if (file.exists()) {
+                    launchInstaller(file)
+                } else {
+                    clearPendingUpdate()
+                }
+            }
+        }
     }
 
     override fun onPause() {
@@ -494,6 +810,12 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_settings -> {
                 startActivity(Intent(this, SettingsActivity::class.java))
+                true
+            }
+            // #58: dormant while the action bar is hidden (see
+            // main_menu.xml), but wired and tested for the day it returns.
+            R.id.action_check_update -> {
+                maybeCheckForUpdates(manual = true)
                 true
             }
             else -> super.onOptionsItemSelected(item)

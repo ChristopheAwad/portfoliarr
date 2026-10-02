@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #58 in-app update: the ONLY files the installer may read. The verified
+     APK lives in cache/updates/; nothing else is exposed — no shared
+     storage, no filesystem root. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
