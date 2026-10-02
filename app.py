@@ -3642,16 +3642,55 @@ def _quote_unique_tickers(rows, include_failures=False):
     return (quotes, failures) if include_failures else quotes
 
 
+def mark_import_duplicates(rows, existing):
+    """Mark each valid preview row that matches an existing transaction.
+
+    The match rule is the same five fields as compute_trade_warnings
+    (#45): ticker, transaction_date, transaction_type, qty and price
+    must all match, with qty/price compared within FLAT_QTY_TOL. FEE IS
+    DELIBERATELY NOT COMPARED: the paste format has no fee column, so an
+    existing row logged with a fee must still flag as a possible
+    duplicate.
+
+    `existing` is db.get_transactions(g.portfolio_id) — the caller
+    scopes it to ONE portfolio. The first match wins, so one row never
+    counts twice. Every row gets a boolean "duplicate" key; rows already
+    carrying an error (parse or quote) are skipped: they cannot be
+    imported, so there is nothing to warn about.
+
+    Pure and side-effect free apart from stamping the rows: no DB, no
+    network. Returns the number of flagged rows. The write routes never
+    call this — duplicates are a preview warning, not a rule.
+    """
+    count = 0
+    for row in rows:
+        row["duplicate"] = False
+        if row["error"] is not None:
+            continue
+        for tx in existing:
+            if (tx["ticker"] == row["ticker"]
+                    and tx["transaction_date"] == row["transaction_date"]
+                    and tx["transaction_type"] == row["transaction_type"]
+                    and abs(tx["qty"] - row["qty"]) <= FLAT_QTY_TOL
+                    and abs(tx["price"] - row["price"]) <= FLAT_QTY_TOL):
+                row["duplicate"] = True
+                count += 1
+                break
+    return count
+
+
 @app.route("/api/transactions/import/preview", methods=["POST"])
 def import_preview():
     """Parse the paste and quote-check its tickers. Writes NOTHING.
 
-    Returns {"rows": [...], "valid_count": n, "invalid_count": m}, where
-    valid rows are decorated with their yfinance-derived "currency" AND
-    the date-derived "fx_rate" (the USDCAD close on that row's own date)
-    — so the user sees exactly what commit will store, conversion fact
-    included. The zero-writes rule is what makes the preview trustworthy:
-    the ledger is untouched, so previewing is always safe.
+    Returns {"rows": [...], "valid_count": n, "invalid_count": m,
+    "duplicate_count": k}, where valid rows are decorated with their
+    yfinance-derived "currency", the date-derived "fx_rate" (the USDCAD
+    close on that row's own date) AND the boolean "duplicate" flag from
+    mark_import_duplicates — so the user sees exactly what commit will
+    store, conversion fact included, plus which rows already exist in
+    the ledger. The zero-writes rule is what makes the preview
+    trustworthy: the ledger is untouched, so previewing is always safe.
     """
     text, error = _import_text_or_error()
     if error:
@@ -3679,11 +3718,17 @@ def import_preview():
     # shows the conversion rate of ITS OWN date (memoized per date).
     _derive_fx_rates_for_rows(rows, quotes)
 
+    # The ledger is READ, never written: preview stays zero-writes. The
+    # comparison is scoped to the caller's portfolio by the hook.
+    duplicate_count = mark_import_duplicates(
+        rows, db.get_transactions(g.portfolio_id))
+
     valid_count = sum(1 for row in rows if row["error"] is None)
     return jsonify({
         "rows": rows,
         "valid_count": valid_count,
         "invalid_count": len(rows) - valid_count,
+        "duplicate_count": duplicate_count,
     })
 
 
