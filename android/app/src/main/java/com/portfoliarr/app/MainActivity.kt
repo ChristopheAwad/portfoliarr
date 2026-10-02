@@ -1,5 +1,6 @@
 package com.portfoliarr.app
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -568,6 +569,9 @@ class MainActivity : AppCompatActivity() {
         Thread {
             val result = downloader.download(release, cacheDir) { read, expected ->
                 runOnUiThread {
+                    // A late progress post can land after onDestroy; touching
+                    // the dead dialog's bar then would crash.
+                    if (isFinishing || isDestroyed) return@runOnUiThread
                     if (expected > 0) {
                         progressBar.isIndeterminate = false
                         progressBar.progress =
@@ -648,7 +652,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun launchInstaller(file: java.io.File) {
         val uri = ApkInstaller.contentUriFor(this, file)
-        startActivity(ApkInstaller.buildInstallIntent(uri))
+        try {
+            startActivity(ApkInstaller.buildInstallIntent(uri))
+        } catch (_: ActivityNotFoundException) {
+            // No installer on the device: report it instead of crashing.
+            showUpdateToast(R.string.update_download_failed)
+        }
     }
 
     companion object {

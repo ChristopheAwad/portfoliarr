@@ -32,6 +32,10 @@ class UpdateChecker {
         // socket from holding that thread (and the user's patience) forever.
         const val CONNECT_TIMEOUT_MS = 15_000
         const val READ_TIMEOUT_MS = 15_000
+
+        // GitHub rejects requests with no User-Agent. Android sends a default
+        // one, but set ours so the API traffic is identifiable.
+        const val USER_AGENT = "Portfoliarr-Android"
     }
 
     /**
@@ -60,6 +64,7 @@ class UpdateChecker {
             // Pin the API version: without this GitHub may one day answer a
             // differently shaped default and the parse below would misread it.
             setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", USER_AGENT)
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
         }
@@ -92,6 +97,11 @@ class UpdateChecker {
         }
         // No usable APK, or an asset row without a download link: not ours.
         if (bestCode < 0 || bestUrl.isEmpty()) return null
+        // The tag code and the APK code must agree. They always do for the
+        // single-APK release workflow; a mismatch means the release is not
+        // shaped the way this app expects, so fail closed rather than offer a
+        // file whose version the tag does not describe.
+        if (bestCode != versionCode) return null
         return UpdateGate.ReleaseRef(
             versionName = versionName,
             versionCode = versionCode,
