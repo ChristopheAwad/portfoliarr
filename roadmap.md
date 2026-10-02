@@ -123,7 +123,7 @@ or database change.
 **Effort:** 1–2 days
 **Files:** `android/app/src/main/java/com/portfoliarr/app/UpdateGate.kt` (new), `android/app/src/main/java/com/portfoliarr/app/UpdateChecker.kt` (new), `android/app/src/main/java/com/portfoliarr/app/ApkDownloader.kt` (new), `android/app/src/main/java/com/portfoliarr/app/ApkInstaller.kt` (new), `android/app/src/test/java/com/portfoliarr/app/UpdateGateTest.kt` (new), `android/app/src/main/res/xml/file_paths.xml` (new), `.github/workflows/release-android.yml` (new), `tests/test_android_update.py` (new), `android/app/src/main/java/com/portfoliarr/app/MainActivity.kt`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/res/menu/main_menu.xml`, `android/app/src/main/res/values/strings.xml`
 **Depends on:** #57 (shipped; the cold-start check hooks after its gate)
-**Status:** in progress
+**Status:** shipped 2026-10-02 (PR #99)
 
 ---
 
