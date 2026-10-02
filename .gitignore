@@ -22,10 +22,12 @@ android/app/build/
 .vscode/
 .opencode/
 
-# AI agent instructions and the design authority (local working notes, not
-# part of the app)
+# AI agent instructions and planning docs (local working notes, not part of
+# the app)
 AGENTS.md
 project-brief.md
+roadmap.md
+feature.md
 
 # Screenshots (local captures, not part of the app)
 *.png
