@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.content.ContextCompat
@@ -108,11 +109,15 @@ object WatchlistWidgetRenderer {
 
         views.setViewVisibility(R.id.widget_watchlist_empty, View.GONE)
         views.setViewVisibility(R.id.widget_watchlist_list, View.VISIBLE)
-        views.setRemoteAdapter(
-            R.id.widget_watchlist_list,
-            Intent(context, WatchlistWidgetService::class.java)
-                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
-        )
+        // A unique data URI per widget: without it, two watchlist widgets
+        // can be treated as the same collection and share one factory,
+        // showing the first widget's appWidgetId (and data).
+        val adapterIntent = Intent(
+            context, WatchlistWidgetService::class.java)
+            .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+        adapterIntent.data = Uri.parse(
+            "portfoliarr://watchlist-widget/$appWidgetId")
+        views.setRemoteAdapter(R.id.widget_watchlist_list, adapterIntent)
 
         views.setViewVisibility(R.id.widget_watchlist_asof, View.VISIBLE)
         views.setTextViewText(

@@ -130,6 +130,13 @@ def test_portfolio_token_reply_has_scope(client):
     assert body["portfolio_name"] == "Main"
 
 
+def test_create_accepts_explicit_portfolio_scope(client):
+    body = {"scope": "portfolio", "portfolio_id": main_portfolio_id()}
+    res = client.post("/api/widget/tokens", json=body)
+    assert res.status_code == 201
+    assert res.get_json()["scope"] == "portfolio"
+
+
 def test_list_includes_scope_for_both(client):
     create_portfolio_token(client)
     create_watchlist_token(client)

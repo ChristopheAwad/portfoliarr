@@ -157,8 +157,8 @@ def test_factory_reads_only_cache():
     factory = code(f"{WIDGET}/WatchlistWidgetFactory.kt")
     assert "WidgetStore" in factory
     assert "payload" in factory
-    for forbidden in ("HttpURLConnection", "fetch(", "CookieManager",
-                      "SecretStore"):
+    for forbidden in ("HttpURLConnection", "fetch(", "fetchWatchlist",
+                      "WidgetApi", "CookieManager", "SecretStore", "URL("):
         assert forbidden not in factory, \
             f"the factory must paint from cache only; found {forbidden}"
 

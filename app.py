@@ -2014,7 +2014,8 @@ def widget_tokens_api():
         return jsonify(db.list_widget_tokens(g.user["id"]))
 
     body = request.get_json(silent=True)
-    if isinstance(body, dict) and body.get("scope") == "watchlist":
+    scope = body.get("scope") if isinstance(body, dict) else None
+    if scope == "watchlist":
         if "portfolio_id" in body:
             # Ambiguous: a watchlist token names no portfolio.
             return jsonify({"error": "watchlist tokens take no portfolio_id"}), 400
@@ -2033,7 +2034,9 @@ def widget_tokens_api():
             "created_at": created_at,
         }), 201
 
-    if isinstance(body, dict) and "scope" in body:
+    # An explicit "portfolio" scope is accepted as a synonym for the
+    # portfolio_id path below; any other value is an unknown scope.
+    if scope is not None and scope != "portfolio":
         return jsonify({"error": "unknown scope"}), 400
 
     portfolio_id = _widget_portfolio_id(body)
@@ -2089,7 +2092,10 @@ def widget_summary():
     header = request.headers.get("Authorization", "")
     token = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
     row = db.get_widget_token(_hash_widget_token(token)) if token else None
-    if row is None or row["scope"] != "portfolio":
+    if (row is None or row["scope"] != "portfolio"
+            or row["portfolio_name"] is None):
+        # Fail closed: a portfolio token whose portfolio row is gone (only
+        # reachable by editing the DB by hand) must not serve zeros.
         return jsonify({"error": "authentication required"}), 401
 
     db.touch_widget_token(row["id"], _now_iso_utc())

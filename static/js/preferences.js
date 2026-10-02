@@ -439,8 +439,10 @@
             const row = document.createElement("li");
             row.dataset.id = token.id;
             // A watchlist token names no portfolio (#59); label it plainly.
+            // A portfolio token whose portfolio row is gone (only via a
+            // manual DB edit) still deserves a label.
             const displayName = token.scope === "watchlist"
-                ? "Watchlist" : token.portfolio_name;
+                ? "Watchlist" : (token.portfolio_name ?? "Portfolio");
             const name = document.createElement("span");
             name.textContent = displayName;
             // Dates are ISO-8601 UTC from the server; only the day part is
