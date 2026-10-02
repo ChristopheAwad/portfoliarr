@@ -158,6 +158,7 @@ def test_delete_user_cascades_tokens(client, fake_market):
     seed_user("bob")
     assert db.delete_user(CLIENT_USER_ID, "tester") == "deleted"
     assert db.get_widget_token(token_hash(token)) is None
+    assert client.get("/api/widget/summary", headers=auth(token)).status_code == 401
 
 
 # ── /api/widget/summary auth surface ─────────────────────────────────────

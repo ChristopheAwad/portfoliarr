@@ -236,3 +236,13 @@ def test_widget_strings_exist_and_are_ascii():
     for line in strings.splitlines():
         if 'name="widget_' in line:
             line.encode("ascii")  # raises on non-ASCII widget text
+
+
+# ── Origin binding: a repointed server must not replay an old token ──────
+
+def test_widget_read_path_is_origin_bound():
+    combined = code(f"{WIDGET}/WidgetWorker.kt") + code(f"{WIDGET}/WidgetRenderer.kt")
+    assert "normalizeOrigin" in combined, \
+        "the server URL must be normalized before comparing origins"
+    assert ".origin(" in combined, \
+        "the stored token's origin must be compared before fetching or painting"

@@ -35,6 +35,12 @@ class WidgetStore(context: Context) {
             .putInt(key("token_id", appWidgetId), tokenId)
             .putString(key("name", appWidgetId), portfolioName)
             .putString(key("origin", appWidgetId), origin)
+            // A reconfigured widget may now point at a different portfolio;
+            // the previous portfolio's cached numbers must never be painted
+            // under the new name (even tinted stale).
+            .remove(key("payload", appWidgetId))
+            .remove(key("fetched_at", appWidgetId))
+            .remove(key("failed", appWidgetId))
             .apply()
     }
 

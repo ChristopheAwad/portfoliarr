@@ -489,7 +489,7 @@
             if (response.status === 204) {
                 showToast("Widget access revoked", "success");
                 await load();
-            } else if (response.status !== 401) {
+            } else {
                 report(`Could not revoke the widget (HTTP ${response.status})`);
             }
         } catch {
