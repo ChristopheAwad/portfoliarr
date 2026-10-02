@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The watchlist widget connect screen (#59): status line, Connect, and two
+     fallback buttons. Shown by the launcher when the widget is added. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/watchlist_config_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="16sp" />
+
+    <Button
+        android:id="@+id/watchlist_config_connect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/widget_watchlist_config_connect"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/watchlist_config_retry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/widget_watchlist_config_retry"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/watchlist_config_open_app"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/widget_watchlist_config_open_app"
+        android:visibility="gone" />
+</LinearLayout>

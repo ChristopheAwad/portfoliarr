@@ -53,7 +53,7 @@ def test_init_creates_widget_tokens_table(fresh_db):
             row[1] for row in conn.execute("PRAGMA table_info(widget_tokens)")
         }
     assert columns == {
-        "id", "user_id", "portfolio_id", "token_hash", "created_at",
+        "id", "user_id", "portfolio_id", "scope", "token_hash", "created_at",
         "last_used_at",
     }
 
@@ -106,9 +106,11 @@ def test_list_shows_portfolio_name_created_and_last_used(client):
     create_token(client)
     item = client.get("/api/widget/tokens").get_json()[0]
     assert set(item) == {
-        "id", "portfolio_id", "portfolio_name", "created_at", "last_used_at",
+        "id", "portfolio_id", "portfolio_name", "scope", "created_at",
+        "last_used_at",
     }
     assert item["portfolio_name"] == "Main"
+    assert item["scope"] == "portfolio"
     assert item["created_at"]
     assert item["last_used_at"] is None
 

@@ -76,4 +76,17 @@
     <string name="widget_config_no_session">Open Portfoliarr and sign in first, then try again.</string>
     <string name="widget_config_error">Could not reach the server.</string>
     <string name="widget_config_open_app">Open Portfoliarr</string>
+
+    <!-- #59 watchlist widget. Same scoped-token model as #51, but the list is
+         the signed-in person's watchlist: price and day change per symbol. -->
+    <string name="widget_watchlist_label">Portfoliarr Watchlist</string>
+    <string name="widget_watchlist_description">Your watched tickers with price and today\'s change.</string>
+    <string name="widget_watchlist_title">Watchlist</string>
+    <string name="widget_watchlist_empty">No symbols yet. Open Portfoliarr to add some.</string>
+    <string name="widget_watchlist_config_title">Connect watchlist widget</string>
+    <string name="widget_watchlist_config_explainer">This widget shows your watchlist. It can only read your watched tickers and their prices; you can revoke it in Portfoliarr under Preferences.</string>
+    <string name="widget_watchlist_config_connect">Connect</string>
+    <string name="widget_watchlist_config_retry">Retry</string>
+    <string name="widget_watchlist_config_loading">Connecting...</string>
+    <string name="widget_watchlist_config_open_app">Open Portfoliarr</string>
 </resources>

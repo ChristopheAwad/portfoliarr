@@ -105,11 +105,11 @@ with sync_playwright() as p:
     page.locator("#people-card").scroll_into_view_if_needed()
     for_themes(page, lambda t: shot(page, f"people-signup-on-{t}"))
 
-    # ── 3b. Phone widgets card (#51) ─────────────────────────────────
-    # The phone normally creates this token when a widget is connected;
-    # the capture server has no phone, so seed one through the same
-    # session-authenticated endpoint the connect screen calls, then
-    # capture the management card in both themes.
+    # ── 3b. Phone widgets card (#51 + #59) ───────────────────────────
+    # The phone normally creates these tokens when a widget is connected;
+    # the capture server has no phone, so seed one of each scope through
+    # the same session-authenticated endpoint the connect screen calls,
+    # then capture the management card in both themes.
     portfolio_id = page.evaluate(
         "fetch('/api/portfolios').then(r => r.json()).then(l => l[0].id)")
     page.evaluate(
@@ -117,6 +117,10 @@ with sync_playwright() as p:
         " headers: {'Content-Type': 'application/json'},"
         " body: JSON.stringify({portfolio_id: id})})",
         portfolio_id)
+    page.evaluate(
+        "fetch('/api/widget/tokens', {method: 'POST',"
+        " headers: {'Content-Type': 'application/json'},"
+        " body: JSON.stringify({scope: 'watchlist'})})")
     page.reload()
     settle(page)
     page.locator("#widget-card").scroll_into_view_if_needed()

@@ -64,6 +64,38 @@
             </intent-filter>
         </activity>
 
+        <!-- #59 watchlist widget. Same private-provider pattern as #51; its
+             ListView rows are bound through the RemoteViewsService below. -->
+        <receiver
+            android:name=".widget.WatchlistWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_watchlist_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.portfoliarr.app.widget.action.WATCHLIST_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_watchlist_info" />
+        </receiver>
+
+        <!-- The watchlist widget's collection service. The system binds to
+             it; nothing else may. -->
+        <service
+            android:name=".widget.WatchlistWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
+        <!-- #59 watchlist widget connect screen (exported for the launcher). -->
+        <activity
+            android:name=".widget.WatchlistWidgetConfigActivity"
+            android:exported="true"
+            android:label="@string/widget_watchlist_config_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <!-- #58 in-app update: hands the verified APK to the system
              installer. Exposes exactly one directory (res/xml/file_paths.xml)
              and nothing else; unexported, grant-only. -->

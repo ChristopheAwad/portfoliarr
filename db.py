@@ -304,26 +304,59 @@ def init():
             " WHERE currency = 'CAD' AND fx_rate IS NULL"
         )
 
-        # Scoped read-only credentials for the Android home-screen widget
-        # (#51). ONE row per widget the user connected: the token itself is
-        # never stored — only its SHA-256 hash — so a copy of this database
-        # cannot be replayed as a widget credential. The row names BOTH the
-        # owner (who may manage/revoke it) and the single portfolio it may
-        # read, which is what keeps the bearer endpoint portfolio-scoped.
-        # created_at / last_used_at are ISO-8601 UTC strings (SQLite has no
-        # timestamp type), display-only facts.
+        # Scoped read-only credentials for the Android home-screen widgets
+        # (#51 portfolio widget, #59 watchlist widget). ONE row per widget
+        # the user connected: the token itself is never stored — only its
+        # SHA-256 hash — so a copy of this database cannot be replayed as a
+        # widget credential. The row names the owner (who may manage/revoke
+        # it) and a `scope`: 'portfolio' rows name ONE portfolio to read (the
+        # portfolio widget); 'watchlist' rows have portfolio_id NULL and read
+        # the owner's own watchlist. created_at / last_used_at are ISO-8601
+        # UTC strings (SQLite has no timestamp type), display-only facts.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS widget_tokens (
                 id           INTEGER PRIMARY KEY,
                 user_id      INTEGER NOT NULL REFERENCES users(id),
-                portfolio_id INTEGER NOT NULL REFERENCES portfolios(id),
+                portfolio_id INTEGER REFERENCES portfolios(id),
+                scope        TEXT NOT NULL DEFAULT 'portfolio',
                 token_hash   TEXT NOT NULL UNIQUE,
                 created_at   TEXT NOT NULL,
                 last_used_at TEXT
             )
             """
         )
+        widget_token_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(widget_tokens)").fetchall()
+        }
+        if "scope" not in widget_token_columns:
+            # Migration: a pre-scope table has portfolio_id NOT NULL and no
+            # scope. SQLite cannot drop NOT NULL in place, so rebuild. Every
+            # pre-scope row was a portfolio credential by definition.
+            conn.execute(
+                """
+                CREATE TABLE widget_tokens_scoped (
+                    id           INTEGER PRIMARY KEY,
+                    user_id      INTEGER NOT NULL REFERENCES users(id),
+                    portfolio_id INTEGER REFERENCES portfolios(id),
+                    scope        TEXT NOT NULL DEFAULT 'portfolio',
+                    token_hash   TEXT NOT NULL UNIQUE,
+                    created_at   TEXT NOT NULL,
+                    last_used_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO widget_tokens_scoped"
+                " (id, user_id, portfolio_id, scope, token_hash, created_at,"
+                " last_used_at)"
+                " SELECT id, user_id, portfolio_id, 'portfolio', token_hash,"
+                " created_at, last_used_at FROM widget_tokens"
+            )
+            conn.execute("DROP TABLE widget_tokens")
+            conn.execute(
+                "ALTER TABLE widget_tokens_scoped RENAME TO widget_tokens")
 
 
 # ---------------------------------------------------------------------------
@@ -912,19 +945,22 @@ def delete_transactions_for_ticker(ticker, portfolio_id):
 # readable or revocable by anyone but its user.
 # ---------------------------------------------------------------------------
 
-def create_widget_token(user_id, portfolio_id, token_hash, created_at):
+def create_widget_token(user_id, portfolio_id, token_hash, created_at,
+                        scope="portfolio"):
     """Insert one scoped credential. Returns the new row's id.
 
-    The route has already proven the portfolio belongs to the user; this
-    is the dumb writer, like add_transaction. `token_hash` is the SHA-256
-    hex of the plaintext token, which is never stored.
+    The route has already proven the portfolio belongs to the user (for a
+    'portfolio' token) or that the caller owns the watchlist (for a
+    'watchlist' token, where portfolio_id is None). This is the dumb
+    writer, like add_transaction. `token_hash` is the SHA-256 hex of the
+    plaintext token, which is never stored.
     """
     with _connect() as conn:
         cursor = conn.execute(
             "INSERT INTO widget_tokens"
-            " (user_id, portfolio_id, token_hash, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            (user_id, portfolio_id, token_hash, created_at),
+            " (user_id, portfolio_id, scope, token_hash, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (user_id, portfolio_id, scope, token_hash, created_at),
         )
         return cursor.lastrowid
 
@@ -932,21 +968,22 @@ def create_widget_token(user_id, portfolio_id, token_hash, created_at):
 def get_widget_token(token_hash):
     """Resolve one bearer token hash to its row, or None.
 
-    The JOIN carries the portfolio's current name so the reply can label
-    which portfolio the widget shows (a rename shows through). A token
-    whose portfolio row is gone cannot be returned: the delete paths
-    remove its tokens in the same transaction, so the JOIN can never
-    orphan. Returns id, user_id, portfolio_id, created_at, last_used_at,
-    portfolio_name.
+    The LEFT JOIN carries the portfolio's current name so a portfolio
+    widget can label which portfolio it shows (a rename shows through),
+    while a watchlist token (portfolio_id NULL) still resolves with
+    portfolio_name None. A token whose portfolio row is gone cannot be
+    returned: the portfolio-delete path removes its tokens in the same
+    transaction. Returns id, user_id, portfolio_id, scope, created_at,
+    last_used_at, portfolio_name.
     """
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT t.id, t.user_id, t.portfolio_id, t.created_at,
+            SELECT t.id, t.user_id, t.portfolio_id, t.scope, t.created_at,
                    t.last_used_at, p.name AS portfolio_name
             FROM widget_tokens t
-            JOIN portfolios p ON p.id = t.portfolio_id
+            LEFT JOIN portfolios p ON p.id = t.portfolio_id
             WHERE t.token_hash = ?
             """,
             (token_hash,),
@@ -970,17 +1007,18 @@ def list_widget_tokens(user_id):
 
     The Preferences list renders these rows; the plaintext token exists
     only in the one creation reply, so there is nothing secret to return
-    here. The portfolio name comes through the JOIN so revoked/renamed
-    portfolios stay honest.
+    here. The portfolio name comes through the LEFT JOIN so renamed
+    portfolios stay honest and a watchlist token (portfolio_id NULL) shows
+    a null name.
     """
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT t.id, t.portfolio_id, t.created_at, t.last_used_at,
-                   p.name AS portfolio_name
+            SELECT t.id, t.portfolio_id, t.scope, t.created_at,
+                   t.last_used_at, p.name AS portfolio_name
             FROM widget_tokens t
-            JOIN portfolios p ON p.id = t.portfolio_id
+            LEFT JOIN portfolios p ON p.id = t.portfolio_id
             WHERE t.user_id = ?
             ORDER BY t.id
             """,
