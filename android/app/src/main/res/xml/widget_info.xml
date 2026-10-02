@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's published shape (#51): one resizable horizontal strip.
+     2 cells wide is the small layout (value + day change); stretching to
+     4 cells reveals the total-return column. updatePeriodMillis is 0
+     because WorkManager drives the ~30-minute refresh; the system only
+     calls onUpdate on add, resize, and restore. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_small"
+    android:configure="com.portfoliarr.app.widget.WidgetConfigActivity"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable"
+    android:description="@string/widget_description" />

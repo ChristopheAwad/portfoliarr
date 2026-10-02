@@ -1,4 +1,5 @@
 import getpass
+import hashlib
 import logging
 import math
 import os
@@ -11,7 +12,7 @@ import sys
 # by the request-timing hook in the LOGGING section below.
 import time
 import uuid
-from datetime import timedelta
+from datetime import timedelta, timezone
 from logging.config import dictConfig
 
 # ThreadPoolExecutor runs one callable across MANY OS threads and
@@ -343,8 +344,14 @@ def start_request_timer():
 # Endpoint names (Flask derives them from the route functions) that a
 # signed-out request may still reach. `static` is exempt so the login
 # page can load its stylesheet, fonts, and favicon.
+#
+# `widget_summary` is the one exempt DATA endpoint, and it does not leak
+# anything: the gadget has no session (it is a home-screen widget), so it
+# presents its own scoped bearer token, and the ROUTE validates it and
+# answers 401 itself. The exemption only lets the request reach that
+# check. Every other /api/ route still needs a signed-in session.
 AUTH_EXEMPT_ENDPOINTS = frozenset(
-    {"auth_login", "auth_setup", "auth_signup", "static"})
+    {"auth_login", "auth_setup", "auth_signup", "static", "widget_summary"})
 
 
 @app.before_request
@@ -1688,10 +1695,15 @@ Algorithm: walk every trading day in the range forward, keeping a
 # includes currency movement, which is the honest CAD picture.
 # ---------------------------------------------------------------------------
 
-@app.route("/api/portfolio/summary")
-def portfolio_summary():
+def _portfolio_summary_data(portfolio_id, request_id):
     """Return the portfolio header's headline numbers as raw floats, in
     CAD.
+
+    Shared by the dashboard route below and the Android widget's
+    GET /api/widget/summary (#51), so the two can never disagree. The
+    caller has already resolved WHICH portfolio this is (the session hook
+    or a widget token); this helper makes no ownership decision and logs
+    under the caller's request id.
 
     No parameters: the ledger decides WHAT is held; live quotes decide
     what it's worth; the live USDCAD rate converts it. Shape of the reply:
@@ -1717,7 +1729,7 @@ def portfolio_summary():
     """
     # The ledger is the source of truth for what is held. Order doesn't
     # matter here — everything below is sums, not a forward walk.
-    transactions = db.get_transactions(g.portfolio_id)
+    transactions = db.get_transactions(portfolio_id)
 
     # Pass 1 — FACTS ONLY (no network): fold every transaction into per-
     # ticker figures.
@@ -1819,7 +1831,7 @@ def portfolio_summary():
             app.logger.warning(
                 "event=market_fx_degraded request_id=%s "
                 "operation=portfolio_summary pair=USDCAD error_type=%s",
-                g.request_id, type(exc).__name__,
+                request_id, type(exc).__name__,
             )
 
     # Pass 2 — price the priced slice in CAD. held == 0 (fully-sold
@@ -1844,7 +1856,7 @@ def portfolio_summary():
             app.logger.warning(
                 "event=market_currency_unsupported request_id=%s "
                 "operation=portfolio_summary symbol=%r currency=%r",
-                g.request_id, symbol, currency,
+                request_id, symbol, currency,
             )
             unpriced.append(symbol)
             continue
@@ -1916,7 +1928,7 @@ def portfolio_summary():
         total_gain / cost_basis * 100 if cost_basis > 0 else None
     )
 
-    return jsonify({
+    return {
         "total_value": total_value,
         "day_gain": day_gain,
         "day_gain_pct": day_gain_pct,
@@ -1926,6 +1938,141 @@ def portfolio_summary():
         "unpriced": unpriced,
         "currency": "CAD",
         "holdings": holdings,
+    }
+
+
+@app.route("/api/portfolio/summary")
+def portfolio_summary():
+    """The dashboard header's data. Thin wrapper over the shared helper:
+    the session hook resolved g.portfolio_id against the signed-in user."""
+    return jsonify(_portfolio_summary_data(g.portfolio_id, g.request_id))
+
+
+# ---------------------------------------------------------------------------
+# WIDGET TOKENS — the Android home-screen widget's scoped read-only access
+# (#51).
+#
+# The problem: a home-screen widget has no browser session; it runs on its
+# own schedule and cannot type a password. Handing it the session cookie
+# would give it the whole account and make revocation impossible (Flask
+# cookies are stateless signed blobs). So the phone mints a narrow
+# credential instead, at the moment the user connects the widget:
+#
+#   POST   /api/widget/tokens          session-auth; names ONE portfolio
+#   GET    /api/widget/tokens          session-auth; list for Preferences
+#   DELETE /api/widget/tokens/<id>     session-auth; revoke
+#   GET    /api/widget/summary         BEARER-ONLY data for the widget
+#
+# Only the SHA-256 hash is stored; the plaintext is returned exactly once,
+# to the phone that created it. The bearer route is in the auth gate's
+# exempt set (a widget has no session) and validates the token itself; the
+# token is accepted on THAT ROUTE ONLY — every other API still needs a
+# session. Tokens never expire, but revoking one, deleting its portfolio,
+# or deleting its owner answers 401 immediately afterwards. The token and
+# the Authorization header are never logged.
+# ---------------------------------------------------------------------------
+
+def _hash_widget_token(token):
+    """SHA-256 hex of a bearer token. One-way: the DB holds only this."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _now_iso_utc():
+    """Second-resolution ISO-8601 UTC — the tokens table's timestamp text
+    (SQLite has no datetime type). Timezone-aware on purpose: display can
+    format it without guessing whether a naive value was local or UTC."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _widget_portfolio_id(body):
+    """A positive integer portfolio_id from a JSON body, or None.
+
+    bool is checked FIRST because `isinstance(True, int)` is True in
+    Python — without it, `{"portfolio_id": true}` would be read as id 1.
+    """
+    if not isinstance(body, dict):
+        return None
+    pid = body.get("portfolio_id")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid < 1:
+        return None
+    return pid
+
+
+@app.route("/api/widget/tokens", methods=["GET", "POST"])
+def widget_tokens_api():
+    """List (GET) or create (POST) widget tokens for the signed-in user.
+
+    Creation takes `{"portfolio_id": N}`; the ownership check is explicit
+    because this path sits outside the portfolio hook's scope. The reply
+    carries the plaintext token ONCE — the list endpoint never repeats it.
+    """
+    if request.method == "GET":
+        return jsonify(db.list_widget_tokens(g.user["id"]))
+
+    portfolio_id = _widget_portfolio_id(request.get_json(silent=True))
+    if portfolio_id is None:
+        return jsonify({"error": "portfolio_id must be a positive integer"}), 400
+    portfolio = db.get_portfolio(portfolio_id, g.user["id"])
+    if portfolio is None:
+        return jsonify({"error": "portfolio not found"}), 404
+
+    token = secrets.token_urlsafe(32)
+    created_at = _now_iso_utc()
+    token_id = db.create_widget_token(
+        g.user["id"], portfolio["id"], _hash_widget_token(token), created_at)
+    # Audit without the credential: ids and the portfolio only.
+    app.logger.info(
+        "event=widget_token_created request_id=%s portfolio_id=%d token_id=%d",
+        g.request_id, portfolio["id"], token_id)
+    return jsonify({
+        "id": token_id,
+        "token": token,
+        "portfolio_id": portfolio["id"],
+        "portfolio_name": portfolio["name"],
+        "created_at": created_at,
+    }), 201
+
+
+@app.route("/api/widget/tokens/<int:token_id>", methods=["DELETE"])
+def widget_token_api(token_id):
+    """Revoke one token. Another user's token reads as a 404, the same
+    rule as every other owned row in this file."""
+    if not db.delete_widget_token(token_id, g.user["id"]):
+        return jsonify({"error": "token not found"}), 404
+    app.logger.info("event=widget_token_revoked request_id=%s token_id=%d",
+                    g.request_id, token_id)
+    return "", 204
+
+
+@app.route("/api/widget/summary")
+def widget_summary():
+    """The widget's data: one bearer token in, the small CAD payload out.
+
+    This route is in AUTH_EXEMPT_ENDPOINTS because a widget has no
+    session; the token check below IS the authentication. The reply is a
+    deliberate SUBSET of the dashboard summary — only what the widget
+    paints (no holdings, no cost basis) — and the numbers come from the
+    same `_portfolio_summary_data` helper, so the two can never drift.
+    An explicit ?portfolio_id= query is ignored: the token names its
+    portfolio, and nothing may steer it.
+    """
+    header = request.headers.get("Authorization", "")
+    token = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+    row = db.get_widget_token(_hash_widget_token(token)) if token else None
+    if row is None:
+        return jsonify({"error": "authentication required"}), 401
+
+    db.touch_widget_token(row["id"], _now_iso_utc())
+    data = _portfolio_summary_data(row["portfolio_id"], g.request_id)
+    return jsonify({
+        "portfolio_name": row["portfolio_name"],
+        "currency": data["currency"],
+        "total_value": data["total_value"],
+        "day_gain": data["day_gain"],
+        "day_gain_pct": data["day_gain_pct"],
+        "total_gain": data["total_gain"],
+        "total_gain_pct": data["total_gain_pct"],
+        "unpriced": data["unpriced"],
     })
 
 

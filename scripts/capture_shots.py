@@ -105,6 +105,23 @@ with sync_playwright() as p:
     page.locator("#people-card").scroll_into_view_if_needed()
     for_themes(page, lambda t: shot(page, f"people-signup-on-{t}"))
 
+    # ── 3b. Phone widgets card (#51) ─────────────────────────────────
+    # The phone normally creates this token when a widget is connected;
+    # the capture server has no phone, so seed one through the same
+    # session-authenticated endpoint the connect screen calls, then
+    # capture the management card in both themes.
+    portfolio_id = page.evaluate(
+        "fetch('/api/portfolios').then(r => r.json()).then(l => l[0].id)")
+    page.evaluate(
+        "id => fetch('/api/widget/tokens', {method: 'POST',"
+        " headers: {'Content-Type': 'application/json'},"
+        " body: JSON.stringify({portfolio_id: id})})",
+        portfolio_id)
+    page.reload()
+    settle(page)
+    page.locator("#widget-card").scroll_into_view_if_needed()
+    for_themes(page, lambda t: shot(page, f"widget-card-{t}"))
+
     # ── 4. Log out → login page now carries the signup link ─────────
     page.click("#profile-btn")
     page.wait_for_selector("#profile-dropdown:not([hidden])")

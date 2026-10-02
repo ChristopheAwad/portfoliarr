@@ -1,9 +1,10 @@
 """SQLite persistence layer.
 
-Stores five things: the user accounts (multi-user auth), the per-boot
+Stores six things: the user accounts (multi-user auth), the per-boot
 app settings (one row: the session secret), each user's watchlist symbol
-list, each user's named portfolios, and the transaction ledger (every
-BUY/SELL the user records).
+list, each user's named portfolios, the transaction ledger (every
+BUY/SELL the user records), and the scoped widget tokens (#51) the
+Android home-screen widget presents.
 
 The ledger's design rule: store IMMUTABLE FACTS ONLY. Any value that
 depends on the live market price (total value, gain $/%) would freeze
@@ -303,6 +304,27 @@ def init():
             " WHERE currency = 'CAD' AND fx_rate IS NULL"
         )
 
+        # Scoped read-only credentials for the Android home-screen widget
+        # (#51). ONE row per widget the user connected: the token itself is
+        # never stored — only its SHA-256 hash — so a copy of this database
+        # cannot be replayed as a widget credential. The row names BOTH the
+        # owner (who may manage/revoke it) and the single portfolio it may
+        # read, which is what keeps the bearer endpoint portfolio-scoped.
+        # created_at / last_used_at are ISO-8601 UTC strings (SQLite has no
+        # timestamp type), display-only facts.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS widget_tokens (
+                id           INTEGER PRIMARY KEY,
+                user_id      INTEGER NOT NULL REFERENCES users(id),
+                portfolio_id INTEGER NOT NULL REFERENCES portfolios(id),
+                token_hash   TEXT NOT NULL UNIQUE,
+                created_at   TEXT NOT NULL,
+                last_used_at TEXT
+            )
+            """
+        )
+
 
 # ---------------------------------------------------------------------------
 # SERVER SETTINGS — one key/value row today: the session secret. Settings
@@ -448,6 +470,7 @@ def delete_user(user_id, confirmation):
             return "mismatch"
         conn.execute("""DELETE FROM transactions WHERE portfolio_id IN
             (SELECT id FROM portfolios WHERE user_id = ?)""", (user_id,))
+        conn.execute("DELETE FROM widget_tokens WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM portfolios WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM watchlist WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
@@ -577,6 +600,10 @@ def delete_portfolio(portfolio_id, user_id, confirmation):
         if confirmation != row[0]:
             return "mismatch"
         conn.execute("DELETE FROM transactions WHERE portfolio_id = ?", (portfolio_id,))
+        # A token can only read its portfolio; the portfolio is going away,
+        # so the credential goes with it (latest refresh answers 401).
+        conn.execute("DELETE FROM widget_tokens WHERE portfolio_id = ?",
+                     (portfolio_id,))
         conn.execute("DELETE FROM portfolios WHERE id = ? AND user_id = ?",
                      (portfolio_id, user_id))
         ids = [r[0] for r in conn.execute("SELECT id FROM portfolios WHERE user_id = ? ORDER BY sort_order, id",
@@ -874,3 +901,103 @@ def delete_transactions_for_ticker(ticker, portfolio_id):
             (ticker, portfolio_id),
         )
         return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# WIDGET TOKENS — the scoped read-only credentials the Android home-screen
+# widget presents (#51). Hashing is ROUTE policy (the route layer owns
+# `secrets` and `hashlib`); these functions store and look up the finished
+# hash and know nothing about token generation. Every function takes the
+# owner EXPLICITLY, matching the ownership spine above: a token is never
+# readable or revocable by anyone but its user.
+# ---------------------------------------------------------------------------
+
+def create_widget_token(user_id, portfolio_id, token_hash, created_at):
+    """Insert one scoped credential. Returns the new row's id.
+
+    The route has already proven the portfolio belongs to the user; this
+    is the dumb writer, like add_transaction. `token_hash` is the SHA-256
+    hex of the plaintext token, which is never stored.
+    """
+    with _connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO widget_tokens"
+            " (user_id, portfolio_id, token_hash, created_at)"
+            " VALUES (?, ?, ?, ?)",
+            (user_id, portfolio_id, token_hash, created_at),
+        )
+        return cursor.lastrowid
+
+
+def get_widget_token(token_hash):
+    """Resolve one bearer token hash to its row, or None.
+
+    The JOIN carries the portfolio's current name so the reply can label
+    which portfolio the widget shows (a rename shows through). A token
+    whose portfolio row is gone cannot be returned: the delete paths
+    remove its tokens in the same transaction, so the JOIN can never
+    orphan. Returns id, user_id, portfolio_id, created_at, last_used_at,
+    portfolio_name.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT t.id, t.user_id, t.portfolio_id, t.created_at,
+                   t.last_used_at, p.name AS portfolio_name
+            FROM widget_tokens t
+            JOIN portfolios p ON p.id = t.portfolio_id
+            WHERE t.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def touch_widget_token(token_id, used_at):
+    """Record that a token just served a request. Display-only (the
+    Preferences list shows "last used"); a failure here is not the
+    fetcher's business, so nothing is returned."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE widget_tokens SET last_used_at = ? WHERE id = ?",
+            (used_at, token_id),
+        )
+
+
+def list_widget_tokens(user_id):
+    """Every credential one user owns, oldest first, WITHOUT the hash.
+
+    The Preferences list renders these rows; the plaintext token exists
+    only in the one creation reply, so there is nothing secret to return
+    here. The portfolio name comes through the JOIN so revoked/renamed
+    portfolios stay honest.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT t.id, t.portfolio_id, t.created_at, t.last_used_at,
+                   p.name AS portfolio_name
+            FROM widget_tokens t
+            JOIN portfolios p ON p.id = t.portfolio_id
+            WHERE t.user_id = ?
+            ORDER BY t.id
+            """,
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_widget_token(token_id, user_id):
+    """Revoke one credential. Returns True when a row was actually
+    deleted, False for an unknown id OR a token owned by somebody else —
+    the route turns both into the same 404, exactly like portfolio
+    ownership (another person's row is indistinguishable from a made-up
+    one)."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM widget_tokens WHERE id = ? AND user_id = ?",
+            (token_id, user_id),
+        )
+        return cursor.rowcount > 0

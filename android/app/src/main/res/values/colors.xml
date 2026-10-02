@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="status_bar">#1a1a2e</color>
+
+    <!-- #51 home-screen widget. Up/down match the web app's money colors
+         (light theme). values-night/colors.xml carries the dark set. -->
+    <color name="widget_bg">#FFFFFF</color>
+    <color name="widget_text">#1A1A2E</color>
+    <color name="widget_text_muted">#6B7280</color>
+    <color name="widget_up">#047857</color>
+    <color name="widget_down">#B91C1C</color>
+    <color name="widget_stale">#9CA3AF</color>
 </resources>

@@ -20,6 +20,22 @@
                 <ul id="portfolio-list" class="portfolio-manage-list"></ul>
             </div>
 
+            <!-- PHONE WIDGETS — the Android home-screen widget's scoped
+                 read-only tokens (#51). The phone creates them when the
+                 user connects a widget; this card is where they are seen
+                 and revoked. It never creates a token and never renders
+                 one: the server returns the plaintext exactly once, to
+                 the phone. preferences.js fills the list from
+                 /api/widget/tokens. -->
+            <div class="card preferences-card" id="widget-card">
+                <h3>Phone widgets</h3>
+                <p>Add the Portfoliarr widget on your phone and pick a
+                    portfolio there. Each widget gets its own read-only
+                    access. Revoke one here to disconnect that widget.</p>
+                <p id="widget-error" class="action-error" role="alert" hidden></p>
+                <ul id="widget-list" class="portfolio-manage-list"></ul>
+            </div>
+
             <!-- PEOPLE — user accounts for this server. The signed-in
                  user's id rides in data-current-uid (the People card needs
                  it to hide the delete control on its own row; the server
