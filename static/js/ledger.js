@@ -1843,7 +1843,10 @@ importCommitBtn.addEventListener("click", async () => {
         } else {
             showImportSuccess(payload.imported);
         }
-        importCommitBtn.hidden = true; // one paste, one commit — re-preview first
+        // One paste, one commit — the next write needs a fresh preview:
+        // clear the duplicate count with the button's stale verdict.
+        importCommitBtn.hidden = true;
+        previewDuplicateCount = 0;
         // Pull the truth immediately rather than waiting for the next poll
         // (same rule as the log form's submit handler).
         refreshLedgerViews();
