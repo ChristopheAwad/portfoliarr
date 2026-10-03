@@ -23,6 +23,13 @@ def png_size(path):
     return struct.unpack(">II", data[16:24])
 
 
+def png_color_type(path):
+    """Return the PNG IHDR color type byte (2 = RGB, 6 = RGBA)."""
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{path} is not a PNG"
+    return data[25]
+
+
 # ── Exports: favicon, master, Android ────────────────────────────────
 
 def test_favicon_is_64_square():
@@ -45,6 +52,9 @@ def test_android_launcher_icon(density, size):
         / f"mipmap-{density}" / "ic_launcher.png"
     )
     assert png_size(path) == (size, size)
+    # RGBA (type 6), not the old bar-chart RGB (type 2): the coin-stack
+    # master has transparent rounded corners.
+    assert png_color_type(path) == 6
 
 
 # ── Source: canonical mark + web wire-up ─────────────────────────────
@@ -78,3 +88,35 @@ def test_base_logo_mark_is_coin_stack():
     assert "<ellipse" in region, "mark must contain the two coin ellipses"
     assert "polyline" not in region, "old sparkline polyline must be gone"
     assert 'class="logo-accent"' in html
+
+
+# ── Android adaptive icon (API 26+) ──────────────────────────────────
+
+ANDROID_RES = PROJECT_ROOT / "android" / "app" / "src" / "main" / "res"
+
+
+def test_adaptive_icon_points_at_brand_layers():
+    text = (ANDROID_RES / "mipmap-anydpi-v26" / "ic_launcher.xml").read_text()
+    assert "<adaptive-icon" in text
+    assert "@color/ic_launcher_background" in text
+    assert "@drawable/ic_launcher_foreground" in text
+
+
+def test_adaptive_background_is_brand_navy():
+    text = (ANDROID_RES / "values" / "ic_launcher_background.xml").read_text()
+    assert "ic_launcher_background" in text
+    assert "#1c3a5e" in text
+
+
+def test_adaptive_foreground_is_gold_glyph():
+    text = (ANDROID_RES / "drawable" / "ic_launcher_foreground.xml").read_text()
+    assert 'android:viewportWidth="1024"' in text
+    assert "#d0a959" in text
+    assert text.count("a8.6,3.1") == 4, "both coin ellipses (two arcs each) must be in the vector"
+    assert "M12 5.6" in text, "the growth arrow must be in the vector"
+
+
+def test_manifest_keeps_ic_launcher_name():
+    text = (PROJECT_ROOT / "android" / "app" / "src" / "main"
+            / "AndroidManifest.xml").read_text()
+    assert 'android:icon="@mipmap/ic_launcher"' in text

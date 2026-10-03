@@ -770,6 +770,22 @@ the target table from #28 and quotes already loaded. Lower priority.
 
 ---
 
+### 60. Android Launcher Icon Port
+Roadmap #25 replaced the web logo with the coin-stack mark but deliberately
+left the Android launcher icons on the old blue/green bar chart. Port the web
+mark to Android: an adaptive icon (navy `#1c3a5e` background, gold `#d0a959`
+vector glyph) for API 26+, and legacy PNG mipmaps (48–192 px, transparent
+rounded corners) regenerated from `assets/logo/portfoliarr-icon.png` for API
+24–25. No manifest, Kotlin, or workflow change. The normal
+`VERSION`/`VERSION_CODE` bump ships it through the in-app update channel.
+
+**Effort:** 0.5 day
+**Files:** `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`, `android/app/src/main/res/values/ic_launcher_background.xml`, `android/app/src/main/res/drawable/ic_launcher_foreground.xml`, `android/app/src/main/res/mipmap-*/ic_launcher.png`, `tests/test_brand_assets.py`, `VERSION`, `android/gradle.properties`
+**Depends on:** #25 (shipped)
+**Status:** shipped 2026-10-02
+
+---
+
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
@@ -880,6 +896,7 @@ Tier 2.5:
   32. Server-Side User Preferences ───── independent
   33. Watchlist Target Prices ────────── independent
   50. Rebalance Share Counts ─────────── depends on #28
+  60. Android Launcher Icon Port ─────── depends on #25 (shipped)
 
 Tier 3 (all independent):
   11. Search Caching ──────────────────┐
@@ -946,6 +963,7 @@ For maximum compounding value:
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
 25. **Coin-Stack Brand Mark** → one consistent brand across web and Android
+60. **Android Launcher Icon Port** → the deferred Android half of #25
 
 Back burner (user request): #2 CSV Export, #16 Android Biometric/PIN Lock (now only the background-timeout half; #57 shipped the gate it reuses), and #50 Rebalance Share Counts.
 

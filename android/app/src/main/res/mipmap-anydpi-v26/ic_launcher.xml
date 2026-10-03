@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 8+ (API 26+) adaptive icon. The launcher draws the navy
+     background full-bleed and masks it to its own shape; the gold coin
+     stack sits in the foreground safe zone. The five legacy PNG mipmaps
+     below cover API 24-25. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+</adaptive-icon>
