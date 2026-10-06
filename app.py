@@ -935,6 +935,7 @@ _CLIENT_STATIC_ENDPOINTS = frozenset({
     "/api/portfolio/history", "/api/portfolio/allocation",
     "/api/portfolio/realized", "/api/portfolio/position",
     "/api/transactions", "/api/search", "/api/perf", "/api/perf/client",
+    "/api/transactions/import/preview", "/api/transactions/import/commit",
 })
 _CLIENT_DYNAMIC_ENDPOINTS = (
     (re.compile(r"/api/quote/[^/]+"), "/api/quote/:symbol"),
