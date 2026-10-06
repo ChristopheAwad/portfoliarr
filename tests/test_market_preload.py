@@ -19,6 +19,9 @@ def js():
     engine.eval("""
         var clock = 1000;
         Date.now = () => clock;
+        // perf.js defines perfMark in the browser; the sandbox only needs
+        // the no-op stub so the market block's render mark can run.
+        var perfMark = function () {};
         var keys = ['north-america', 'europe', 'asia-pacific',
                     'crypto', 'commodities', 'currencies'];
         var pending = [];

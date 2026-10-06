@@ -3511,3 +3511,50 @@ input[type="date"]::-moz-placeholder {
     }
     .ledger-card .fx-toggle { margin-left: 0; }
 }
+
+/* ---------------------------------------------------------------------------
+   PERF OVERLAY — the opt-in ?perf=1 / localStorage "perfDebug" readout that
+   perf.js builds. Fixed to the top-right, monospace, scrollable, and above
+   every card. Never present unless explicitly enabled.
+   --------------------------------------------------------------------------- */
+#perf-overlay {
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    z-index: 9999;
+    max-width: min(420px, 92vw);
+    max-height: 60vh;
+    overflow: auto;
+    padding: 8px 10px;
+    border: 1px solid var(--border, #444);
+    border-radius: 8px;
+    background: rgba(20, 20, 20, 0.92);
+    color: #e8e8e8;
+    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#perf-overlay strong { margin-right: 10px; }
+
+#perf-overlay button {
+    float: right;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    padding: 0 6px;
+    cursor: pointer;
+}
+
+#perf-overlay pre {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+#perf-readout .perf-heading {
+    margin: 10px 0 0;
+    font-size: 0.85em;
+    font-weight: 600;
+    opacity: 0.75;
+}

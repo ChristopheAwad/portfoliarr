@@ -124,6 +124,7 @@ async function refreshStockQuote() {
         // Feed the previous close into the chart handle so the 1D view
         // can draw a horizontal reference line at yesterday's close.
         if (stockChartHandle) stockChartHandle.updatePrevClose(quote.previous_close);
+        perfMark("stock:quote");
     } catch (err) {
         console.error("stock quote refresh failed:", err);
         // Distinguish "Yahoo doesn't know this symbol" (permanent — stop
@@ -442,6 +443,7 @@ async function refreshStockStats() {
             await fetch(`/api/stock/${encodeURIComponent(symbol)}/stats`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         paintStats(await response.json());
+        perfMark("stock:stats");
     } catch (err) {
         console.error("stock stats refresh failed:", err);
         // The shipped "…" placeholders would imply endless loading —
@@ -664,6 +666,7 @@ async function refreshStockFinancials() {
             await fetch(`/api/stock/${encodeURIComponent(symbol)}/financials`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         paintFinancials(await response.json());
+        perfMark("stock:financials");
     } catch (err) {
         console.error("stock financials refresh failed:", err);
         // Having no statement is normal for ETFs/crypto/indices — keep
@@ -749,6 +752,7 @@ async function refreshStockEvents() {
             await fetch(`/api/stock/${encodeURIComponent(symbol)}/events`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         paintEvents(await response.json());
+        perfMark("stock:events");
     } catch (err) {
         console.error("stock events refresh failed:", err);
         // Having no calendar is normal for crypto/ETFs/indices — keep
@@ -926,7 +930,10 @@ refreshPosition();
 refreshStockStats();
 refreshStockFinancials();
 refreshStockEvents();
-if (stockChartHandle) stockChartHandle.refresh();
+if (stockChartHandle) {
+    const stockChartReady = stockChartHandle.refresh();
+    stockChartReady?.then?.(() => perfMark("stock:chart"));
+}
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).
 // The position card rides the same heartbeat (facts + quote move together).

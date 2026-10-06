@@ -35,6 +35,14 @@ from pathlib import Path
 # It talks to a self-contained database file on disk.
 import sqlite3
 
+# time gives perf_counter(), the monotonic clock the metrics sink wants.
+import time
+
+# Pure metrics sink: only the connection cost is recorded here. Individual
+# statements are NOT timed — SQLite is local and has never been a plausible
+# bottleneck; if /api/perf ever says otherwise, wrap queries at this layer.
+import perf
+
 # Resolve the database path relative to THIS file, not the current working
 # directory. That way the app finds its data no matter where you launch
 # `python app.py` from.
@@ -57,8 +65,10 @@ def _connect():
     with zero setup.
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
+    perf.record("db.connect", (time.perf_counter() - started) * 1000)
     return conn
 
 

@@ -146,6 +146,21 @@
                 </div>
             </div>
 
+            <!-- PERFORMANCE — process-memory measurements since the app
+                 last started (perf.py). Cleared by a restart, so it answers
+                 "is it slow right now, and where?" rather than "how was
+                 last week". preferences.js fills it from /api/perf; the
+                 optional ?perf=1 overlay is the per-page detail view. -->
+            <div class="card preferences-card" id="perf-card">
+                <h3>Performance</h3>
+                <p>Server and page timings since the app last started.
+                    These numbers clear when the server restarts.</p>
+                <p id="perf-error" class="action-error" role="alert" hidden></p>
+                <div id="perf-readout"></div>
+                <button type="button" class="btn-text" id="perf-reload">
+                    Refresh</button>
+            </div>
+
             <div class="card preferences-card">
                 <h3>About</h3>
                 <div class="pref-row">

@@ -35,9 +35,21 @@ const REFRESH_MS = 60000;
 // login page to itself would loop forever. The wrapper re-exports the
 // same Response object, so no caller changes shape.
 // ---------------------------------------------------------------------------
+// Falls back to a no-op if perf.js ever fails to load, so page scripts can
+// call perfMark() unconditionally.
+window.perfMark = window.perfMark || function () {};
+
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
+    // perf.js (loaded before this file) times every request here; the
+    // try/catch guarantees measurement can never break a fetch.
+    const started = performance.now();
     const response = await nativeFetch(...args);
+    try {
+        if (window.PortfoliarrPerf) {
+            window.PortfoliarrPerf.recordFetch(args[0], started, response);
+        }
+    } catch { /* measurement is best-effort */ }
     if (response.status === 401
         && !window.location.pathname.startsWith("/auth/")) {
         window.location.assign("/auth/login");
@@ -2627,6 +2639,7 @@ function setupTimeframeChart(
         // Runs on a mode-only repaint too, handing back the same twrr_pct —
         // the metric is mode-independent.
         emitPeriodSummary(period, data);
+        perfMark("chart:paint");
     }
 
     // The highlighted button describes the data that successfully reached

@@ -168,6 +168,7 @@ function refreshMarketOverview(category = activeMarketCategory, { force = false 
                 }
             });
             marketFetchedAt[category] = Date.now();
+            perfMark("dashboard:markets");
         } catch (err) {
             if (marketRequestTokens[category] !== requestToken) return; // stale
             delete marketFetchedAt[category];
@@ -401,6 +402,7 @@ async function refreshWatchlist() {
                 changeEl.classList.remove("pos", "neg");
             }
         });
+        perfMark("dashboard:watchlist");
     } catch (err) {
         console.error("watchlist refresh failed:", err);
         // If we have rows from an earlier successful cycle, degrade them to
@@ -829,6 +831,7 @@ async function refreshPortfolioSummary() {
                         : null
                 );
             }
+            perfMark("dashboard:summary");
         } catch (err) {
             if (epoch !== portfolioEpoch()) return;
             console.error("portfolio summary refresh failed:", err);
@@ -1623,6 +1626,7 @@ async function refreshVolumeLeaders() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         const leaders = data.leaders;
+        perfMark("dashboard:volume");
 
         volumeLeadersEl.textContent = "";
         if (leaders.length === 0) {
@@ -1686,6 +1690,7 @@ const chartReady = portfolioReady.then(() => refreshPortfolioChart());
 // against Chart.js CDN failure (refreshPortfolioChart returns undefined).
 const ALL_PERIODS = ["1D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
 chartReady?.then?.(() => {
+    perfMark("dashboard:chart");
     for (const period of ALL_PERIODS) {
         refreshPortfolioChart(period, { silent: true });
     }

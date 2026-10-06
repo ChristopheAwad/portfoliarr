@@ -29,16 +29,21 @@ from werkzeug.security import generate_password_hash
 
 import db
 import market_data
+import perf
 import app as app_module
 from app import app
 
 
 @pytest.fixture(autouse=True)
 def fresh_market_caches():
-    """Empty every process-memory market cache around every test."""
+    """Empty every process-memory market cache and metric around every test."""
     market_data.clear_market_caches()
+    perf.reset()
+    app_module._perf_last_summary_total = 0
     yield
     market_data.clear_market_caches()
+    perf.reset()
+    app_module._perf_last_summary_total = 0
 
 
 @pytest.fixture
