@@ -193,7 +193,10 @@
     <!-- Shared JS loads FIRST: common.js defines the formatting helpers,
          the shared chart factory, and the search-dropdown logic as plain
          globals. The page script (the block below) depends on them, so
-         ORDER MATTERS — the same reason Chart.js sits in <head> above. -->
+         ORDER MATTERS — the same reason Chart.js sits in <head> above.
+         perf.js is loaded before common.js so the fetch wrapper can time
+         every request and the page scripts can call perfMark(). -->
+    <script src="{{ url_for('static', filename='js/perf.js') }}"></script>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     {% block scripts %}{% endblock %}
 

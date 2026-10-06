@@ -16,6 +16,11 @@ from numbers import Real
 
 import yfinance as yf
 
+# Pure, thread-safe metrics sink (no Flask, no logging): every cache
+# boundary and upstream Yahoo call records its duration here, tagged with
+# the cache outcome. The route layer reads and logs it.
+import perf
+
 # date/timedelta build the lookup window for get_fx_rate_on: it fetches a
 # small calendar range of daily bars around the transaction's date and
 # picks the close on-or-before it.
@@ -261,10 +266,13 @@ def get_quote(symbol):
     """
     # 1. Cache check under the lock — is our copy young enough to trust?
     #    If not, either join an in-flight fetch for this symbol or start one.
+    started = time.perf_counter()
     now = time.time()
     with _market_lock:
         entry = _cache.get(symbol)
         if entry and (now - entry["fetched_at"]) < TTL_SECONDS:
+            perf.record("market.get_quote",
+                        (time.perf_counter() - started) * 1000, cache="hit")
             return dict(entry["data"])  # callers cannot mutate the cache
 
         in_flight = _inflight_quotes.get(symbol)
@@ -279,7 +287,10 @@ def get_quote(symbol):
     #    on their future (outside the lock) and hand back a defensive copy
     #    of whatever they learned — success or the exact same failure.
     if waiter is not None:
-        return dict(waiter.result())
+        data = dict(waiter.result())
+        perf.record("market.get_quote",
+                    (time.perf_counter() - started) * 1000, cache="wait")
+        return data
 
     # 3. Owner path: pay the network cost, exactly as in the scratch script.
     try:
@@ -316,8 +327,12 @@ def get_quote(symbol):
         with _market_lock:
             _cache[symbol] = {"data": data, "fetched_at": time.time()}
         future.set_result(data)
+        perf.record("market.get_quote",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         return dict(data)
     except Exception as exc:
+        perf.record("market.get_quote",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         future.set_exception(exc)
         raise
     finally:
@@ -339,20 +354,32 @@ def get_name(symbol):
     this layer reports problems, the route layer decides the HTTP response.
     """
     # Cache check: after the first success this is a pure dict lookup.
+    started = time.perf_counter()
     if symbol in _name_cache:
+        perf.record("market.get_name",
+                    (time.perf_counter() - started) * 1000, cache="hit")
         return _name_cache[symbol]
 
     # Cache miss: pay the (slow) network cost once.
-    info = yf.Ticker(symbol).info
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception:
+        perf.record("market.get_name",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
     # shortName is Yahoo's display name; longName is the fuller legal one.
     # `or` falls back when shortName is missing or empty — either is fine
     # to show, so we take whichever exists.
     name = info.get("shortName") or info.get("longName")
 
     if not name:
+        perf.record("market.get_name",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no name available for {symbol}")
 
     _name_cache[symbol] = name
+    perf.record("market.get_name",
+                (time.perf_counter() - started) * 1000, cache="miss")
     return name
 
 
@@ -428,19 +455,27 @@ def get_stats(symbol):
     raises — the boundary rule: this layer reports, the route layer
     decides the HTTP response.
     """
-    info = yf.Ticker(symbol).info
+    started = time.perf_counter()
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception:
+        perf.record("market.get_stats",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # An empty profile means Yahoo knows nothing about this symbol —
     # fail loudly with a named error instead of returning a long list of
     # Nones that would masquerade as "real but empty" stats.
     if not info:
+        perf.record("market.get_stats",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(f"no stats data for {symbol}")
 
     # .get() everywhere: absent fields become None (see docstring). The
     # prev_close fallback covers Yahoo's two spellings of the same fact —
     # most tickers carry "regularMarketPreviousClose", a few only
     # "previousClose". (Same `or` fallback pattern as get_name.)
-    return {
+    stats = {
         "open": _finite_number(info.get("open")),
         "day_high": _finite_number(info.get("dayHigh")),
         "day_low": _finite_number(info.get("dayLow")),
@@ -505,6 +540,8 @@ def get_stats(symbol):
         # The longest field: the free-text company description.
         "business_summary": info.get("longBusinessSummary"),
     }
+    perf.record("market.get_stats", (time.perf_counter() - started) * 1000)
+    return stats
 
 
 def get_financials(symbol):
@@ -547,10 +584,13 @@ def get_financials(symbol):
     reports problems, the route layer decides the HTTP response.
     """
     # 1. Cache check — is our copy young enough to trust?
+    started = time.perf_counter()
     now = time.time()
     with _market_lock:
         entry = _financials_cache.get(symbol)
         if entry and (now - entry["fetched_at"]) < _FINANCIALS_TTL:
+            perf.record("market.get_financials",
+                        (time.perf_counter() - started) * 1000, cache="hit")
             return {
                 "years": list(entry["data"]["years"]),
                 "rows": {
@@ -559,12 +599,19 @@ def get_financials(symbol):
                 },
             }
 
-    df = yf.Ticker(symbol).income_stmt
+    try:
+        df = yf.Ticker(symbol).income_stmt
+    except Exception:
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
 
     # An empty statement means Yahoo has no income data for this symbol —
     # fail loudly with a named error instead of returning null rows that
     # would masquerade as "real but empty" financials.
     if df is None or df.empty or len(df.columns) == 0:
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no financials data for {symbol}")
 
     # Columns are fiscal-year timestamps (newest first from Yahoo): sort
@@ -599,6 +646,8 @@ def get_financials(symbol):
     # an empty frame: nothing to paint, so raise for the route's 404
     # rather than serve a table of "—".
     if all(cell is None for values in rows.values() for cell in values):
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no financials data for {symbol}")
 
     data = {"years": years, "rows": rows}
@@ -608,6 +657,8 @@ def get_financials(symbol):
     # their own lists rather than the cached objects.
     with _market_lock:
         _financials_cache[symbol] = {"data": data, "fetched_at": time.time()}
+    perf.record("market.get_financials",
+                (time.perf_counter() - started) * 1000, cache="miss")
     return {
         "years": list(data["years"]),
         "rows": {key: list(values) for key, values in data["rows"].items()},
@@ -715,10 +766,13 @@ def get_events(symbol):
     # not — one cache entry per symbol either way (the get_quote rule).
     symbol = symbol.strip().upper()
     # 1. Cache check — is our copy young enough to trust?
+    started = time.perf_counter()
     now = time.time()
     with _market_lock:
         entry = _events_cache.get(symbol)
         if entry and (now - entry["fetched_at"]) < _EVENTS_TTL:
+            perf.record("market.get_events",
+                        (time.perf_counter() - started) * 1000, cache="hit")
             return {
                 "earnings_date": entry["data"]["earnings_date"],
                 "ex_dividend_date": entry["data"]["ex_dividend_date"],
@@ -728,9 +782,14 @@ def get_events(symbol):
                            for item in entry["data"]["recent"]],
             }
 
-    ticker = yf.Ticker(symbol)
-    calendar = ticker.calendar
-    dividends = ticker.dividends
+    try:
+        ticker = yf.Ticker(symbol)
+        calendar = ticker.calendar
+        dividends = ticker.dividends
+    except Exception:
+        perf.record("market.get_events",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
 
     earnings_date = _calendar_date(
         calendar, "Earnings Date", "Earnings Dates", "Earnings")
@@ -762,6 +821,8 @@ def get_events(symbol):
 
     if earnings_date is None and ex_dividend_date is None \
             and dividend_date is None and not pairs:
+        perf.record("market.get_events",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no events data for {symbol}")
 
     recent = [{"date": date_str, "amount": amount}
@@ -793,6 +854,8 @@ def get_events(symbol):
     # callers get their own lists rather than the cached objects.
     with _market_lock:
         _events_cache[symbol] = {"data": data, "fetched_at": time.time()}
+    perf.record("market.get_events",
+                (time.perf_counter() - started) * 1000, cache="miss")
     return {
         "earnings_date": data["earnings_date"],
         "ex_dividend_date": data["ex_dividend_date"],
@@ -833,8 +896,11 @@ def get_profile(symbol):
     """
     # 1. Cache check under the lock, plus in-flight coordination: join an
     #    existing fetch for this symbol or start (own) one.
+    started = time.perf_counter()
     with _market_lock:
         if symbol in _profile_cache:
+            perf.record("market.get_profile",
+                        (time.perf_counter() - started) * 1000, cache="hit")
             return dict(_profile_cache[symbol])
 
         in_flight = _inflight_profiles.get(symbol)
@@ -847,7 +913,10 @@ def get_profile(symbol):
 
     # 2. Waiter path: share the owner's result (or its failure).
     if waiter is not None:
-        return dict(waiter.result())
+        profile = dict(waiter.result())
+        perf.record("market.get_profile",
+                    (time.perf_counter() - started) * 1000, cache="wait")
+        return profile
 
     # 3. Owner path: pay the (slow) network cost once.
     try:
@@ -871,8 +940,12 @@ def get_profile(symbol):
         with _market_lock:
             _profile_cache[symbol] = profile
         future.set_result(profile)
+        perf.record("market.get_profile",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         return dict(profile)
     except Exception as exc:
+        perf.record("market.get_profile",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         future.set_exception(exc)
         raise
     finally:
@@ -928,16 +1001,26 @@ def get_history(symbol, period_key):
     # Cache check — is our copy young enough to trust? The TTL depends on
     # the data's age profile: a "live" series (1D, 5D) includes today's
     # still-moving bar, so 120s; settled history (1M–MAX) keeps 600s.
+    started = time.perf_counter()
     now = time.time()
     ttl = _HISTORY_TTL_LIVE if timeframe["live"] else _HISTORY_TTL_SETTLED
     entry = _history_cache.get((symbol, period_key))
     if entry and (now - entry["fetched_at"]) < ttl:
+        perf.record("market.get_history",
+                    (time.perf_counter() - started) * 1000,
+                    cache="hit", period=period_key)
         return dict(entry["data"])  # cache hit: no network involved
 
-    df = yf.Ticker(symbol).history(
-        period=timeframe["period"],
-        interval=timeframe["interval"],
-    )
+    try:
+        df = yf.Ticker(symbol).history(
+            period=timeframe["period"],
+            interval=timeframe["interval"],
+        )
+    except Exception:
+        perf.record("market.get_history",
+                    (time.perf_counter() - started) * 1000,
+                    cache="miss", period=period_key)
+        raise
 
     # df is a pandas DataFrame indexed by timezone-aware timestamps
     # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
@@ -956,6 +1039,9 @@ def get_history(symbol, period_key):
         "data": result,
         "fetched_at": time.time(),
     }
+    perf.record("market.get_history",
+                (time.perf_counter() - started) * 1000,
+                cache="miss", period=period_key)
     return dict(result)
 
 
@@ -1007,12 +1093,18 @@ def get_fx_rate_on(base, target, date_iso):
     if base == target:
         return 1.0
 
+    started = time.perf_counter()
     d = date.fromisoformat(date_iso)
-    df = yf.Ticker(f"{base}{target}=X").history(
-        start=(d - timedelta(days=10)).isoformat(),
-        end=(d + timedelta(days=1)).isoformat(),
-        interval="1d",
-    )
+    try:
+        df = yf.Ticker(f"{base}{target}=X").history(
+            start=(d - timedelta(days=10)).isoformat(),
+            end=(d + timedelta(days=1)).isoformat(),
+            interval="1d",
+        )
+    except Exception:
+        perf.record("market.get_fx_rate_on",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # Walk the (ascending) bars and keep the last close whose calendar
     # day is on-or-before the target date. A bar AFTER it means we've
@@ -1027,9 +1119,13 @@ def get_fx_rate_on(base, target, date_iso):
             break
 
     if rate is None:
+        perf.record("market.get_fx_rate_on",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(
             f"no {base}{target} close on or before {date_iso}"
         )
+    perf.record("market.get_fx_rate_on",
+                (time.perf_counter() - started) * 1000)
     return rate
 
 
@@ -1055,12 +1151,18 @@ def get_price_on(symbol, date_iso):
     date before the symbol existed) — the route layer turns that into a
     404 and the form leaves the price empty for the user to type.
     """
+    started = time.perf_counter()
     d = date.fromisoformat(date_iso)
-    df = yf.Ticker(symbol).history(
-        start=(d - timedelta(days=10)).isoformat(),
-        end=(d + timedelta(days=1)).isoformat(),
-        interval="1d",
-    )
+    try:
+        df = yf.Ticker(symbol).history(
+            start=(d - timedelta(days=10)).isoformat(),
+            end=(d + timedelta(days=1)).isoformat(),
+            interval="1d",
+        )
+    except Exception:
+        perf.record("market.get_price_on",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # Walk the (ascending) bars and keep the last close whose calendar
     # day is on-or-before the target date. A bar AFTER it means we've
@@ -1075,7 +1177,11 @@ def get_price_on(symbol, date_iso):
             break
 
     if price is None:
+        perf.record("market.get_price_on",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(f"no price for {symbol} on or before {date_iso}")
+    perf.record("market.get_price_on",
+                (time.perf_counter() - started) * 1000)
     return price
 
 
@@ -1105,8 +1211,14 @@ def search_tickers(query, limit=8):
     Raises on network failure — the boundary rule: this layer reports,
     the route layer decides the HTTP response.
     """
+    started = time.perf_counter()
+    try:
+        hits = yf.Search(query, max_results=limit).quotes
+    except Exception:
+        perf.record("market.search", (time.perf_counter() - started) * 1000)
+        raise
     results = []
-    for hit in yf.Search(query, max_results=limit).quotes:
+    for hit in hits:
         symbol = hit.get("symbol")
         # A hit without a symbol can't be navigated to — skip it rather
         # than let the dropdown offer a link to /stock/None.
@@ -1118,6 +1230,7 @@ def search_tickers(query, limit=8):
             "exchange": hit.get("exchDisp") or hit.get("exchange"),
             "type": hit.get("typeDisp"),
         })
+    perf.record("market.search", (time.perf_counter() - started) * 1000)
     return results
 
 
@@ -1173,9 +1286,12 @@ def get_volume_leaders():
     that couldn't answer are simply absent from the result.
     """
     # Cache check
+    started = time.perf_counter()
     now = time.time()
     entry = _volume_cache.get("data")
     if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
+        perf.record("market.get_volume_leaders",
+                    (time.perf_counter() - started) * 1000, cache="hit")
         return [dict(leader) for leader in entry["leaders"]]
 
     # Flatten all candidate symbols (deduplicated — a ticker might appear
@@ -1258,4 +1374,6 @@ def get_volume_leaders():
     _volume_cache["data"] = {
         "leaders": leaders, "fetched_at": time.time(),
     }
+    perf.record("market.get_volume_leaders",
+                (time.perf_counter() - started) * 1000, cache="miss")
     return [dict(leader) for leader in leaders]

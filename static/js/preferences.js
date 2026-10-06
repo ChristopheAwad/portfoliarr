@@ -504,3 +504,152 @@
 
     load();
 })();
+
+// ---------------------------------------------------------------------------
+// PERFORMANCE — the Performance card reads /api/perf once and on demand.
+// Metric keys are bounded (endpoints, cache outcomes, pages), so this is a
+// handful of lists, never per-ticker data.
+// ---------------------------------------------------------------------------
+(function managePerformance() {
+    const card = document.getElementById("perf-card");
+    if (!card) return;
+    const readout = document.getElementById("perf-readout");
+    const errorEl = document.getElementById("perf-error");
+
+    function report(message) {
+        errorEl.textContent = message;
+        errorEl.hidden = !message;
+    }
+
+    function row(label, value) {
+        const el = document.createElement("div");
+        el.className = "pref-row";
+        const name = document.createElement("span");
+        name.className = "pref-label";
+        name.textContent = label;
+        const number = document.createElement("span");
+        number.textContent = value;
+        el.append(name, number);
+        return el;
+    }
+
+    function heading(text) {
+        const el = document.createElement("p");
+        el.className = "perf-heading";
+        el.textContent = text;
+        return el;
+    }
+
+    function byP95(a, b) { return b.p95_ms - a.p95_ms; }
+    function ms(value) { return `${Math.round(value)} ms`; }
+    function plural(count, word) {
+        return `${count} ${word}${count === 1 ? "" : "s"}`;
+    }
+
+    function uptime(seconds) {
+        if (!Number.isFinite(seconds)) return "—";
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes} min`;
+        const hours = Math.floor(minutes / 60);
+        return `${hours} h ${minutes % 60} min`;
+    }
+
+    function render(payload) {
+        readout.replaceChildren();
+        readout.append(
+            row("Uptime", uptime(payload.uptime_s)),
+            row("Requests", String(payload.requests_total ?? "—")),
+        );
+        const metrics = Array.isArray(payload.metrics) ? payload.metrics : [];
+
+        const pageLoads = metrics
+            .filter((item) => item.name === "client.page_load")
+            .sort(byP95);
+        if (pageLoads.length) {
+            readout.append(heading("Page loads"));
+            for (const item of pageLoads) {
+                readout.append(row(
+                    item.tags.page,
+                    `${plural(item.count, "load")} · avg ${ms(item.avg_ms)} · ` +
+                    `p95 ${ms(item.p95_ms)}`));
+            }
+        }
+
+        const byEndpoint = new Map();
+        for (const item of metrics) {
+            if (!item.name.startsWith("http.") || item.count === 0) continue;
+            const name = item.name.slice("http.".length);
+            const existing = byEndpoint.get(name);
+            if (!existing) {
+                byEndpoint.set(name, {
+                    name, count: item.count, p95_ms: item.p95_ms,
+                });
+            } else {
+                existing.count += item.count;
+                existing.p95_ms = Math.max(existing.p95_ms, item.p95_ms);
+            }
+        }
+        const endpoints = [...byEndpoint.values()].sort(byP95).slice(0, 5);
+        if (endpoints.length) {
+            readout.append(heading("Slowest endpoints"));
+            for (const item of endpoints) {
+                readout.append(row(
+                    item.name,
+                    `p95 ${ms(item.p95_ms)} · ${plural(item.count, "call")}`));
+            }
+        }
+
+        const cacheNames = [
+            "market.get_quote", "market.get_history", "market.get_name",
+            "market.get_profile", "market.get_financials",
+            "market.get_events", "market.get_volume_leaders",
+        ];
+        const cacheLines = [];
+        for (const name of cacheNames) {
+            const rows = metrics.filter((item) => item.name === name);
+            if (!rows.length) continue;
+            let hit = 0;
+            let miss = 0;
+            let wait = 0;
+            let missP95 = 0;
+            for (const item of rows) {
+                const outcome = item.tags.cache;
+                if (outcome === "hit") {
+                    hit += item.count;
+                } else if (outcome === "miss") {
+                    miss += item.count;
+                    missP95 = Math.max(missP95, item.p95_ms);
+                } else if (outcome === "wait") {
+                    wait += item.count;
+                }
+            }
+            const calls = hit + miss + wait;
+            const rate = calls ? Math.round((hit / calls) * 100) : 0;
+            cacheLines.push(row(name.replace("market.", ""),
+                `${rate}% cached · miss p95 ${ms(missP95)}`));
+        }
+        if (cacheLines.length) {
+            readout.append(heading("Market data cache"));
+            readout.append(...cacheLines);
+        }
+    }
+
+    async function load() {
+        report("");
+        try {
+            const response = await fetch("/api/perf");
+            if (!response.ok) {
+                report(`Could not load performance data ` +
+                    `(HTTP ${response.status})`);
+                return;
+            }
+            render(await response.json());
+            perfMark("preferences:perf-card");
+        } catch {
+            report("Could not reach the server.");
+        }
+    }
+
+    document.getElementById("perf-reload").addEventListener("click", load);
+    load();
+})();

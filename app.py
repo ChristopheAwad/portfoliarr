@@ -1,5 +1,6 @@
 import getpass
 import hashlib
+import json
 import logging
 import math
 import os
@@ -8,6 +9,9 @@ import re
 import secrets
 import sqlite3
 import sys
+# threading guards the perf-summary interval check against two concurrent
+# requests both crossing the threshold.
+import threading
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
 import time
@@ -52,9 +56,19 @@ from market_data import (
     get_fx_rate, get_fx_rate_on, get_price_on, PERIOD_MAP, get_volume_leaders
 )
 import db
+# Pure, thread-safe metrics sink. The route layer OWNS logging; market_data
+# and db only record durations into this store (see perf.py).
+import perf
 
 
 SLOW_REQUEST_MS = 2000
+# One durable perf_summary block every N completed non-static requests.
+PERF_SUMMARY_EVERY = 200
+# The browser beacon is small by design: JSON object, <= 8 KB, <= 30 fetches.
+CLIENT_PERF_MAX_BYTES = 8192
+CLIENT_PERF_MAX_FETCHES = 30
+CLIENT_PERF_PAGES = frozenset(
+    {"dashboard", "ledger", "stock", "preferences", "other"})
 LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
@@ -351,9 +365,14 @@ def start_request_timer():
 # ROUTE validates it and answers 401 itself. The exemption only lets the
 # request reach that check. Every other /api/ route still needs a signed-in
 # session.
+#
+# `perf_client` is the browser beacon: it ACCEPTS untrusted timing numbers
+# and RETURNS no data (204), so there is nothing to leak to a signed-out
+# caller. Its route caps the body, allowlists page/field names, and drops
+# invalid parts; that strictness is what makes the exemption safe.
 AUTH_EXEMPT_ENDPOINTS = frozenset(
     {"auth_login", "auth_setup", "auth_signup", "static", "widget_summary",
-     "widget_watchlist"})
+     "widget_watchlist", "perf_client"})
 
 
 @app.before_request
@@ -848,17 +867,31 @@ def log_request_duration(response):
     now = time.perf_counter()
     duration_ms = (now - getattr(g, "request_started_at", now)) * 1000
     request_id = getattr(g, "request_id", uuid.uuid4().hex)
+    endpoint = request.endpoint or "unknown"
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "no-referrer"
+    bytes_sent = "-"
+    if endpoint != "static":
+        # Server-Timing is the W3C header browser DevTools shows beside the
+        # network waterfall; the same duration feeds the perf aggregate.
+        response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+        perf.record(f"http.{endpoint}", duration_ms,
+                    method=request.method, status=response.status_code)
+        # Content-Length is set for every current reply (pages and JSON);
+        # a response without it logs "-" instead of buffering the body.
+        bytes_sent = response.content_length
+        if bytes_sent is None:
+            bytes_sent = "-"
+        _note_completed_request()
     log = app.logger.warning if duration_ms >= SLOW_REQUEST_MS \
         else app.logger.debug
     log(
         "event=request_complete request_id=%s method=%s path=%r "
-        "status=%d duration_ms=%.1f",
+        "status=%d duration_ms=%.1f endpoint=%s bytes=%s",
         request_id, request.method, request.path,
-        response.status_code, duration_ms,
+        response.status_code, duration_ms, endpoint, bytes_sent,
     )
     # An after_request hook MUST return the response (modified or not) —
     # forgetting this breaks every route at once.
@@ -889,6 +922,131 @@ def _request_id():
     return "none"
 
 
+_perf_last_summary_total = 0
+_perf_summary_lock = threading.Lock()
+
+# The beacon is untrusted, so its endpoint strings are mapped to a bounded
+# allowlist before they become metric tags. Unknown paths are dropped: a
+# hand-rolled beacon must not be able to grow the aggregate per-symbol.
+_CLIENT_STATIC_ENDPOINTS = frozenset({
+    "/api/portfolios", "/api/auth/signup-toggle", "/api/auth/password",
+    "/api/users", "/api/widget/tokens", "/api/indices", "/api/watchlist",
+    "/api/market/volume-leaders", "/api/portfolio/summary",
+    "/api/portfolio/history", "/api/portfolio/allocation",
+    "/api/portfolio/realized", "/api/portfolio/position",
+    "/api/transactions", "/api/search", "/api/perf", "/api/perf/client",
+    "/api/transactions/import/preview", "/api/transactions/import/commit",
+})
+_CLIENT_DYNAMIC_ENDPOINTS = (
+    (re.compile(r"/api/quote/[^/]+"), "/api/quote/:symbol"),
+    (re.compile(r"/api/stock/[^/]+$"), "/api/stock/:symbol"),
+    (re.compile(r"/api/stock/[^/]+/stats$"), "/api/stock/:symbol/stats"),
+    (re.compile(r"/api/stock/[^/]+/history$"), "/api/stock/:symbol/history"),
+    (re.compile(r"/api/stock/[^/]+/financials$"),
+     "/api/stock/:symbol/financials"),
+    (re.compile(r"/api/stock/[^/]+/events$"), "/api/stock/:symbol/events"),
+    (re.compile(r"/api/transactions/ticker/[^/]+$"),
+     "/api/transactions/ticker/:symbol"),
+    (re.compile(r"/api/transactions/\d+$"), "/api/transactions/:id"),
+    (re.compile(r"/api/watchlist/[^/]+$"), "/api/watchlist/:symbol"),
+    (re.compile(r"/api/portfolios/\d+/move$"), "/api/portfolios/:id/move"),
+    (re.compile(r"/api/portfolios/\d+$"), "/api/portfolios/:id"),
+    (re.compile(r"/api/widget/tokens/\d+$"), "/api/widget/tokens/:id"),
+    (re.compile(r"/api/users/\d+$"), "/api/users/:id"),
+)
+
+
+def _client_endpoint(path):
+    """Normalize a beacon path to a bounded template, or None if unknown.
+
+    Query strings and fragments are stripped first, so even a hand-rolled
+    beacon cannot smuggle them into a tag or break the path match.
+    """
+    clean = path.split("?", 1)[0].split("#", 1)[0]
+    if clean in _CLIENT_STATIC_ENDPOINTS:
+        return clean
+    for pattern, template in _CLIENT_DYNAMIC_ENDPOINTS:
+        if pattern.fullmatch(clean):
+            return template
+    return None
+
+
+def _note_completed_request():
+    """Count one request and emit a durable perf_summary at the interval."""
+    global _perf_last_summary_total
+    total = perf.request_completed()
+    with _perf_summary_lock:
+        if total - _perf_last_summary_total < PERF_SUMMARY_EVERY:
+            return
+        _perf_last_summary_total = total
+    _log_perf_summary(total)
+
+
+def _log_perf_summary(total):
+    """Log the slowest endpoints and cache hit rates as INFO key=value lines.
+
+    This is the durable record: the aggregate itself dies with the
+    process, so `docker logs` is where trends over time live.
+    """
+    snapshot = perf.snapshot()
+    app.logger.info(
+        "event=perf_summary requests=%d uptime_s=%.0f",
+        total, snapshot["uptime_s"],
+    )
+    http_by_name = {}
+    for row in snapshot["metrics"]:
+        if not row["name"].startswith("http.") or row["count"] == 0:
+            continue
+        name = row["name"][len("http."):]
+        existing = http_by_name.get(name)
+        if existing is None:
+            http_by_name[name] = {
+                "name": name, "count": row["count"],
+                "p50_ms": row["p50_ms"], "p95_ms": row["p95_ms"],
+                "max_ms": row["max_ms"],
+            }
+            continue
+        existing["count"] += row["count"]
+        existing["p50_ms"] = max(existing["p50_ms"], row["p50_ms"])
+        existing["p95_ms"] = max(existing["p95_ms"], row["p95_ms"])
+        existing["max_ms"] = max(existing["max_ms"], row["max_ms"])
+    http_rows = sorted(http_by_name.values(),
+                       key=lambda row: row["p95_ms"], reverse=True)
+    for row in http_rows[:3]:
+        app.logger.info(
+            "event=perf_summary endpoint=%s count=%d p50_ms=%.1f "
+            "p95_ms=%.1f max_ms=%.1f",
+            row["name"], row["count"],
+            row["p50_ms"], row["p95_ms"], row["max_ms"],
+        )
+    by_name = {}
+    for row in snapshot["metrics"]:
+        by_name.setdefault(row["name"], []).append(row)
+    for name in ("market.get_quote", "market.get_history",
+                 "market.get_name", "market.get_profile",
+                 "market.get_financials", "market.get_events",
+                 "market.get_volume_leaders"):
+        rows = by_name.get(name)
+        if not rows:
+            continue
+        counts = {"hit": 0, "miss": 0, "wait": 0}
+        miss_p95 = 0.0
+        for row in rows:
+            outcome = row["tags"].get("cache")
+            if outcome in counts:
+                counts[outcome] += row["count"]
+            if outcome == "miss":
+                miss_p95 = max(miss_p95, row["p95_ms"])
+        calls = counts["hit"] + counts["miss"] + counts["wait"]
+        hit_rate = counts["hit"] / calls if calls else 0.0
+        app.logger.info(
+            "event=perf_summary cache=%s hit=%d miss=%d wait=%d "
+            "hit_rate=%.2f miss_p95_ms=%.1f",
+            name, counts["hit"], counts["miss"], counts["wait"],
+            hit_rate, miss_p95,
+        )
+
+
 # The @app.route decorator registers this function as the handler for the
 # root URL "/" (e.g. http://localhost:5000/).
 @app.route("/")
@@ -904,6 +1062,92 @@ def preferences_page():
     """Render the preferences page. No server-side state — all settings
     are stored in the browser's localStorage by preferences.js."""
     return render_template("preferences.html", app_version=APP_VERSION)
+
+
+@app.route("/api/perf")
+def perf_api():
+    """Return the process-memory performance snapshot (signed in).
+
+    Keys are bounded operation/endpoint names — never per-symbol — so the
+    payload stays small no matter how many tickers the ledger holds.
+    """
+    return jsonify(perf.snapshot())
+
+
+def _client_ms(value):
+    """A beacon duration as a clean float in [0, 600000], else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if math.isnan(value) or math.isinf(value):
+        return None
+    if value < 0 or value > 600000:
+        return None
+    return round(float(value), 1)
+
+
+@app.route("/api/perf/client", methods=["POST"])
+def perf_client():
+    """Accept one browser performance beacon (auth-exempt, strictly capped).
+
+    The payload is UNTRUSTED: size-capped, JSON-object-only, allowlisted
+    page names, bounded numbers, capped fetch list. Invalid parts are
+    DROPPED, never rejected — a malformed beacon must not cost the page
+    anything. No query strings, symbols, or financial data are ever
+    logged from here (paths are not logged at all; only the count).
+    """
+    raw = request.get_data(cache=False)
+    if len(raw) > CLIENT_PERF_MAX_BYTES:
+        return jsonify({"error": "payload too large"}), 413
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid json"}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"error": "invalid json"}), 400
+
+    page = payload.get("page")
+    if not isinstance(page, str) or page.lower() not in CLIENT_PERF_PAGES:
+        page = "other"
+
+    ttfb = _client_ms(payload.get("ttfb_ms"))
+    dom = _client_ms(payload.get("dom_ms"))
+    load = _client_ms(payload.get("load_ms"))
+    lcp = _client_ms(payload.get("lcp_ms"))
+    for phase, value in (("ttfb", ttfb), ("dom", dom),
+                         ("load", load), ("lcp", lcp)):
+        if value is not None:
+            perf.record("client.page_phase", value, page=page, phase=phase)
+    if load is not None:
+        perf.record("client.page_load", load, page=page)
+
+    fetches = payload.get("fetches")
+    accepted = 0
+    if isinstance(fetches, list):
+        for item in fetches[:CLIENT_PERF_MAX_FETCHES]:
+            if not isinstance(item, dict):
+                continue
+            raw_endpoint = item.get("endpoint")
+            endpoint = _client_endpoint(raw_endpoint) \
+                if isinstance(raw_endpoint, str) else None
+            if endpoint is None:
+                continue
+            ms = _client_ms(item.get("ms"))
+            if ms is None:
+                continue
+            perf.record("client.fetch", ms, endpoint=endpoint)
+            server_ms = _client_ms(item.get("server_ms"))
+            if server_ms is not None:
+                perf.record("client.server", server_ms, endpoint=endpoint)
+            accepted += 1
+
+    app.logger.info(
+        "event=client_perf request_id=%s page=%s ttfb_ms=%s load_ms=%s "
+        "lcp_ms=%s fetches=%d",
+        _request_id(), page, ttfb if ttfb is not None else "-",
+        load if load is not None else "-",
+        lcp if lcp is not None else "-", accepted,
+    )
+    return "", 204
 
 
 @app.route("/ledger")

@@ -128,7 +128,8 @@ def test_history_refetches_after_ttl_expires(fake_yf, monkeypatch):
     )
     clock = {"now": 1000.0}
     monkeypatch.setattr(market_data, "time",
-                        SimpleNamespace(time=lambda: clock["now"]))
+                        SimpleNamespace(time=lambda: clock["now"],
+                                    perf_counter=lambda: clock["now"]))
 
     market_data.get_history("AAPL", "1M")      # fetch #1, stamped at t=1000
     clock["now"] += 599                        # still inside the 600s TTL
@@ -151,7 +152,8 @@ def test_intraday_history_uses_the_short_ttl(fake_yf, monkeypatch):
     )
     clock = {"now": 1000.0}
     monkeypatch.setattr(market_data, "time",
-                        SimpleNamespace(time=lambda: clock["now"]))
+                        SimpleNamespace(time=lambda: clock["now"],
+                                    perf_counter=lambda: clock["now"]))
 
     market_data.get_history("AAPL", "1D")      # fetch #1
     clock["now"] += 60                         # inside even the short TTL
@@ -174,7 +176,8 @@ def test_5d_history_uses_the_short_live_ttl(fake_yf, monkeypatch):
     )
     clock = {"now": 1000.0}
     monkeypatch.setattr(market_data, "time",
-                        SimpleNamespace(time=lambda: clock["now"]))
+                        SimpleNamespace(time=lambda: clock["now"],
+                                    perf_counter=lambda: clock["now"]))
 
     market_data.get_history("AAPL", "5D")      # fetch #1
     clock["now"] += 60                         # inside even the short TTL

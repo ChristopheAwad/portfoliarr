@@ -1456,6 +1456,7 @@ async function refreshLedger() {
         lastTransactions = transactions; // cache for action-click lookups
         ledgerStale = false; // fresh quotes — live cells and Sell may return
         renderLedger(transactions);
+        perfMark("ledger:rows");
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("ledger refresh failed:", err);
@@ -2080,6 +2081,7 @@ async function refreshClosedSales() {
         const data = await response.json();
         if (epoch !== portfolioEpoch()) return;
         renderClosedSales(data);
+        perfMark("ledger:closed");
     } catch (err) {
         if (epoch !== portfolioEpoch()) return;
         console.error("closed sales refresh failed:", err);
