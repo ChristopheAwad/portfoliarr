@@ -646,6 +646,33 @@ Format), `android/app/src/main/java/com/portfoliarr/app/widget/WidgetApi.kt`,
 
 ---
 
+### 61. Performance Measurement and Instrumentation
+Measure where time goes so improvements can be proven, not guessed. A new pure
+`perf.py` keeps a bounded, process-memory aggregate (count/avg/p50/p95/max per
+metric key). `market_data.py` records cache hit/miss/wait and upstream Yahoo
+durations; `db.py` records connect time; the `app.py` request boundary adds a
+`Server-Timing` header, extends `request_complete` with endpoint/bytes, logs a
+periodic `perf_summary`, and serves `GET /api/perf` (auth) plus a strictly
+validated `POST /api/perf/client` beacon. A new `static/js/perf.js` captures
+navigation phases, LCP, per-fetch wall time, and render-complete marks, with a
+`?perf=1` overlay and a Preferences Performance card. A Playwright harness
+(`scripts/measure_perf.py`, live or fixed-latency stub) writes a committed
+baseline under `docs/perf/`. No external APM, no metrics in SQLite, no
+query-string or symbol-level logging; restart loss accepted.
+
+**Effort:** 2-3 days
+**Files:** `perf.py` (new), `app.py`, `market_data.py`, `db.py`,
+`templates/base.html`, `templates/preferences.html`, `static/js/perf.js` (new),
+`static/js/common.js`, `static/js/main.js`, `static/js/ledger.js`,
+`static/js/stock.js`, `static/js/preferences.js`, `static/style.css`,
+`scripts/perf_server.py` (new), `scripts/measure_perf.py` (new),
+`tests/test_perf.py` (new), `tests/test_perf_js.py` (new), `conftest.py`,
+`docs/perf/` (baseline), `project-brief.md`, `AGENTS.md`
+**Depends on:** Nothing
+**Status:** shipped 2026-10-06 (PR #103)
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout
@@ -882,7 +909,8 @@ Tier 2 (all independent of each other):
   46. Stock-Split Adjustment ───────────┤
   48. Broker-Specific CSV Import Maps ──┤
   51. Android Home-Screen Widget ───────┤
-  59. Android Watchlist Widget (#51) ───┘
+  59. Android Watchlist Widget (#51) ───┤
+  61. Performance Measurement ──────────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -959,6 +987,7 @@ For maximum compounding value:
 56. **Ticker Volume Bars** → trading activity under the price line
 51. **Android Home-Screen Widget** → the portfolio total on the launcher
 59. **Android Watchlist Widget** → the watchlist's prices and day changes on the launcher (#51's scoped-token pattern, one level wider)
+61. **Performance Measurement** → numbers for route, Yahoo, cache, and browser timing so the next optimization is proven, not guessed
 47. **Database Backup and Restore** → a copy of the whole ledger you can put back
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
