@@ -7,6 +7,7 @@ import re
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 import app as app_module
 import market_data
@@ -226,6 +227,16 @@ def test_name_records_hit_and_miss(monkeypatch):
     assert rows[("market.get_name", "hit")]["count"] == 1
 
 
+def test_failed_fetch_still_records_a_miss(monkeypatch):
+    state = {"fast_info": {}, "info": {}, "history": None}
+    monkeypatch.setattr(market_data, "yf", _fake_yf(state))
+    with pytest.raises(ValueError):
+        market_data.get_name("AAPL")
+    rows = {(row["name"], row["tags"].get("cache")): row
+            for row in perf.snapshot()["metrics"]}
+    assert rows[("market.get_name", "miss")]["count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # POST /api/perf/client — the browser beacon
 # ---------------------------------------------------------------------------
@@ -293,11 +304,11 @@ def test_beacon_drops_invalid_items_and_unknown_pages(client, caplog):
         "page": "admin-panel",
         "load_ms": "NaN",
         "fetches": [
-            {"endpoint": "/api/stock/AAPL?secret=private", "ms": 10},
             {"endpoint": 42, "ms": 10},
-            {"endpoint": "/api/ok", "ms": "fast"},
-            {"endpoint": "/api/ok", "ms": 15},
-            {"endpoint": "/api/ok", "ms": 20, "server_ms": float("nan")},
+            {"endpoint": "/api/ok", "ms": 10},
+            {"endpoint": "/api/search", "ms": "fast"},
+            {"endpoint": "/api/search", "ms": 15},
+            {"endpoint": "/api/search", "ms": 20, "server_ms": float("nan")},
         ],
     }
     with caplog.at_level(logging.INFO):
@@ -308,10 +319,56 @@ def test_beacon_drops_invalid_items_and_unknown_pages(client, caplog):
     assert "page=other" in text
     assert "load_ms=-" in text
     assert "fetches=2" in text
-    assert "secret" not in caplog.text
-    assert "private" not in caplog.text
     rows = [row for row in perf.snapshot()["metrics"]
             if row["name"] == "client.fetch"]
     assert len(rows) == 1
-    assert rows[0]["tags"] == {"endpoint": "/api/ok"}
+    assert rows[0]["tags"] == {"endpoint": "/api/search"}
     assert rows[0]["count"] == 2
+
+
+def test_beacon_normalizes_symbol_paths_and_drops_unknown(client):
+    payload = {
+        "page": "stock",
+        "fetches": [
+            {"endpoint": "/api/stock/AAPL?secret=private", "ms": 10},
+            {"endpoint": "/api/stock/AAPL/stats", "ms": 10},
+            {"endpoint": "/api/stock/AAPL/history", "ms": 10},
+            {"endpoint": "/api/stock/AAPL/financials", "ms": 10},
+            {"endpoint": "/api/stock/AAPL/events", "ms": 10},
+            {"endpoint": "/api/quote/MSFT", "ms": 10},
+            {"endpoint": "/api/transactions/12", "ms": 10},
+            {"endpoint": "/api/watchlist/TSLA", "ms": 10},
+            {"endpoint": "/api/ok", "ms": 10},
+        ],
+    }
+    response = client.post("/api/perf/client", json=payload)
+    assert response.status_code == 204
+    rows = [row for row in perf.snapshot()["metrics"]
+            if row["name"] == "client.fetch"]
+    endpoints = sorted(row["tags"]["endpoint"] for row in rows)
+    assert endpoints == [
+        "/api/quote/:symbol", "/api/stock/:symbol",
+        "/api/stock/:symbol/events", "/api/stock/:symbol/financials",
+        "/api/stock/:symbol/history", "/api/stock/:symbol/stats",
+        "/api/transactions/:id", "/api/watchlist/:symbol",
+    ]
+    dumped = json.dumps(perf.snapshot())
+    for leaked in ("AAPL", "MSFT", "TSLA", "secret", "private"):
+        assert leaked not in dumped
+
+
+def test_perf_summary_merges_methods_and_reports_true_miss_p95(caplog):
+    perf.record("http.example", 10.0, method="GET", status=200)
+    perf.record("http.example", 50.0, method="POST", status=400)
+    perf.record("market.get_history", 5.0, cache="miss", period="1M")
+    perf.record("market.get_history", 90.0, cache="miss", period="1Y")
+    with caplog.at_level(logging.INFO):
+        app_module._log_perf_summary(3)
+    endpoint_records = [record for record in messages(caplog, "perf_summary")
+                        if "endpoint=" in record.getMessage()]
+    (endpoint_record,) = endpoint_records
+    assert "endpoint=example count=2" in endpoint_record.getMessage()
+    cache_records = [record for record in messages(caplog, "perf_summary")
+                     if "cache=" in record.getMessage()]
+    (cache_record,) = cache_records
+    assert "miss_p95_ms=90.0" in cache_record.getMessage()

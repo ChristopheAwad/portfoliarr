@@ -9,6 +9,9 @@ import re
 import secrets
 import sqlite3
 import sys
+# threading guards the perf-summary interval check against two concurrent
+# requests both crossing the threshold.
+import threading
 # time gives us perf_counter(), a monotonic high-resolution clock — used
 # by the request-timing hook in the LOGGING section below.
 import time
@@ -876,12 +879,11 @@ def log_request_duration(response):
         response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
         perf.record(f"http.{endpoint}", duration_ms,
                     method=request.method, status=response.status_code)
+        # Content-Length is set for every current reply (pages and JSON);
+        # a response without it logs "-" instead of buffering the body.
         bytes_sent = response.content_length
         if bytes_sent is None:
-            try:
-                bytes_sent = len(response.get_data())
-            except Exception:
-                bytes_sent = "-"
+            bytes_sent = "-"
         _note_completed_request()
     log = app.logger.warning if duration_ms >= SLOW_REQUEST_MS \
         else app.logger.debug
@@ -921,16 +923,61 @@ def _request_id():
 
 
 _perf_last_summary_total = 0
-_CLIENT_ENDPOINT_RE = re.compile(r"^/[A-Za-z0-9/_.:-]{0,63}$")
+_perf_summary_lock = threading.Lock()
+
+# The beacon is untrusted, so its endpoint strings are mapped to a bounded
+# allowlist before they become metric tags. Unknown paths are dropped: a
+# hand-rolled beacon must not be able to grow the aggregate per-symbol.
+_CLIENT_STATIC_ENDPOINTS = frozenset({
+    "/api/portfolios", "/api/auth/signup-toggle", "/api/auth/password",
+    "/api/users", "/api/widget/tokens", "/api/indices", "/api/watchlist",
+    "/api/market/volume-leaders", "/api/portfolio/summary",
+    "/api/portfolio/history", "/api/portfolio/allocation",
+    "/api/portfolio/realized", "/api/portfolio/position",
+    "/api/transactions", "/api/search", "/api/perf", "/api/perf/client",
+})
+_CLIENT_DYNAMIC_ENDPOINTS = (
+    (re.compile(r"/api/quote/[^/]+"), "/api/quote/:symbol"),
+    (re.compile(r"/api/stock/[^/]+$"), "/api/stock/:symbol"),
+    (re.compile(r"/api/stock/[^/]+/stats$"), "/api/stock/:symbol/stats"),
+    (re.compile(r"/api/stock/[^/]+/history$"), "/api/stock/:symbol/history"),
+    (re.compile(r"/api/stock/[^/]+/financials$"),
+     "/api/stock/:symbol/financials"),
+    (re.compile(r"/api/stock/[^/]+/events$"), "/api/stock/:symbol/events"),
+    (re.compile(r"/api/transactions/ticker/[^/]+$"),
+     "/api/transactions/ticker/:symbol"),
+    (re.compile(r"/api/transactions/\d+$"), "/api/transactions/:id"),
+    (re.compile(r"/api/watchlist/[^/]+$"), "/api/watchlist/:symbol"),
+    (re.compile(r"/api/portfolios/\d+/move$"), "/api/portfolios/:id/move"),
+    (re.compile(r"/api/portfolios/\d+$"), "/api/portfolios/:id"),
+    (re.compile(r"/api/widget/tokens/\d+$"), "/api/widget/tokens/:id"),
+    (re.compile(r"/api/users/\d+$"), "/api/users/:id"),
+)
+
+
+def _client_endpoint(path):
+    """Normalize a beacon path to a bounded template, or None if unknown.
+
+    Query strings and fragments are stripped first, so even a hand-rolled
+    beacon cannot smuggle them into a tag or break the path match.
+    """
+    clean = path.split("?", 1)[0].split("#", 1)[0]
+    if clean in _CLIENT_STATIC_ENDPOINTS:
+        return clean
+    for pattern, template in _CLIENT_DYNAMIC_ENDPOINTS:
+        if pattern.fullmatch(clean):
+            return template
+    return None
 
 
 def _note_completed_request():
     """Count one request and emit a durable perf_summary at the interval."""
     global _perf_last_summary_total
     total = perf.request_completed()
-    if total - _perf_last_summary_total < PERF_SUMMARY_EVERY:
-        return
-    _perf_last_summary_total = total
+    with _perf_summary_lock:
+        if total - _perf_last_summary_total < PERF_SUMMARY_EVERY:
+            return
+        _perf_last_summary_total = total
     _log_perf_summary(total)
 
 
@@ -945,14 +992,30 @@ def _log_perf_summary(total):
         "event=perf_summary requests=%d uptime_s=%.0f",
         total, snapshot["uptime_s"],
     )
-    http_rows = [row for row in snapshot["metrics"]
-                 if row["name"].startswith("http.") and row["count"] > 0]
-    http_rows.sort(key=lambda row: row["p95_ms"], reverse=True)
+    http_by_name = {}
+    for row in snapshot["metrics"]:
+        if not row["name"].startswith("http.") or row["count"] == 0:
+            continue
+        name = row["name"][len("http."):]
+        existing = http_by_name.get(name)
+        if existing is None:
+            http_by_name[name] = {
+                "name": name, "count": row["count"],
+                "p50_ms": row["p50_ms"], "p95_ms": row["p95_ms"],
+                "max_ms": row["max_ms"],
+            }
+            continue
+        existing["count"] += row["count"]
+        existing["p50_ms"] = max(existing["p50_ms"], row["p50_ms"])
+        existing["p95_ms"] = max(existing["p95_ms"], row["p95_ms"])
+        existing["max_ms"] = max(existing["max_ms"], row["max_ms"])
+    http_rows = sorted(http_by_name.values(),
+                       key=lambda row: row["p95_ms"], reverse=True)
     for row in http_rows[:3]:
         app.logger.info(
             "event=perf_summary endpoint=%s count=%d p50_ms=%.1f "
             "p95_ms=%.1f max_ms=%.1f",
-            row["name"][len("http."):], row["count"],
+            row["name"], row["count"],
             row["p50_ms"], row["p95_ms"], row["max_ms"],
         )
     by_name = {}
@@ -972,7 +1035,7 @@ def _log_perf_summary(total):
             if outcome in counts:
                 counts[outcome] += row["count"]
             if outcome == "miss":
-                miss_p95 = row["p95_ms"]
+                miss_p95 = max(miss_p95, row["p95_ms"])
         calls = counts["hit"] + counts["miss"] + counts["wait"]
         hit_rate = counts["hit"] / calls if calls else 0.0
         app.logger.info(
@@ -1062,9 +1125,10 @@ def perf_client():
         for item in fetches[:CLIENT_PERF_MAX_FETCHES]:
             if not isinstance(item, dict):
                 continue
-            endpoint = item.get("endpoint")
-            if not isinstance(endpoint, str) \
-                    or not _CLIENT_ENDPOINT_RE.fullmatch(endpoint):
+            raw_endpoint = item.get("endpoint")
+            endpoint = _client_endpoint(raw_endpoint) \
+                if isinstance(raw_endpoint, str) else None
+            if endpoint is None:
                 continue
             ms = _client_ms(item.get("ms"))
             if ms is None:

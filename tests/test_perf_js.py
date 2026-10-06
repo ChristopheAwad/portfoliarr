@@ -57,8 +57,14 @@ def test_perf_js_collects_navigation_lcp_and_server_timing():
 
 def test_perf_js_normalizes_dynamic_paths():
     src = _read("static/js/perf.js")
-    for template in ("/api/stock/:symbol", "/api/quote/:symbol",
-                     "/api/transactions/:id", "/api/widget/tokens/:id"):
+    for template in ("/api/stock/:symbol", "/api/stock/:symbol/stats",
+                     "/api/stock/:symbol/history",
+                     "/api/stock/:symbol/financials",
+                     "/api/stock/:symbol/events", "/api/quote/:symbol",
+                     "/api/transactions/:id",
+                     "/api/transactions/ticker/:symbol",
+                     "/api/watchlist/:symbol", "/api/portfolios/:id",
+                     "/api/widget/tokens/:id", "/api/users/:id"):
         assert template in src
 
 

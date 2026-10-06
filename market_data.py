@@ -361,13 +361,20 @@ def get_name(symbol):
         return _name_cache[symbol]
 
     # Cache miss: pay the (slow) network cost once.
-    info = yf.Ticker(symbol).info
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception:
+        perf.record("market.get_name",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
     # shortName is Yahoo's display name; longName is the fuller legal one.
     # `or` falls back when shortName is missing or empty — either is fine
     # to show, so we take whichever exists.
     name = info.get("shortName") or info.get("longName")
 
     if not name:
+        perf.record("market.get_name",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no name available for {symbol}")
 
     _name_cache[symbol] = name
@@ -449,12 +456,19 @@ def get_stats(symbol):
     decides the HTTP response.
     """
     started = time.perf_counter()
-    info = yf.Ticker(symbol).info
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception:
+        perf.record("market.get_stats",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # An empty profile means Yahoo knows nothing about this symbol —
     # fail loudly with a named error instead of returning a long list of
     # Nones that would masquerade as "real but empty" stats.
     if not info:
+        perf.record("market.get_stats",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(f"no stats data for {symbol}")
 
     # .get() everywhere: absent fields become None (see docstring). The
@@ -585,12 +599,19 @@ def get_financials(symbol):
                 },
             }
 
-    df = yf.Ticker(symbol).income_stmt
+    try:
+        df = yf.Ticker(symbol).income_stmt
+    except Exception:
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
 
     # An empty statement means Yahoo has no income data for this symbol —
     # fail loudly with a named error instead of returning null rows that
     # would masquerade as "real but empty" financials.
     if df is None or df.empty or len(df.columns) == 0:
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no financials data for {symbol}")
 
     # Columns are fiscal-year timestamps (newest first from Yahoo): sort
@@ -625,6 +646,8 @@ def get_financials(symbol):
     # an empty frame: nothing to paint, so raise for the route's 404
     # rather than serve a table of "—".
     if all(cell is None for values in rows.values() for cell in values):
+        perf.record("market.get_financials",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no financials data for {symbol}")
 
     data = {"years": years, "rows": rows}
@@ -759,9 +782,14 @@ def get_events(symbol):
                            for item in entry["data"]["recent"]],
             }
 
-    ticker = yf.Ticker(symbol)
-    calendar = ticker.calendar
-    dividends = ticker.dividends
+    try:
+        ticker = yf.Ticker(symbol)
+        calendar = ticker.calendar
+        dividends = ticker.dividends
+    except Exception:
+        perf.record("market.get_events",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
 
     earnings_date = _calendar_date(
         calendar, "Earnings Date", "Earnings Dates", "Earnings")
@@ -793,6 +821,8 @@ def get_events(symbol):
 
     if earnings_date is None and ex_dividend_date is None \
             and dividend_date is None and not pairs:
+        perf.record("market.get_events",
+                    (time.perf_counter() - started) * 1000, cache="miss")
         raise ValueError(f"no events data for {symbol}")
 
     recent = [{"date": date_str, "amount": amount}
@@ -981,10 +1011,16 @@ def get_history(symbol, period_key):
                     cache="hit", period=period_key)
         return dict(entry["data"])  # cache hit: no network involved
 
-    df = yf.Ticker(symbol).history(
-        period=timeframe["period"],
-        interval=timeframe["interval"],
-    )
+    try:
+        df = yf.Ticker(symbol).history(
+            period=timeframe["period"],
+            interval=timeframe["interval"],
+        )
+    except Exception:
+        perf.record("market.get_history",
+                    (time.perf_counter() - started) * 1000,
+                    cache="miss", period=period_key)
+        raise
 
     # df is a pandas DataFrame indexed by timezone-aware timestamps
     # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
@@ -1059,11 +1095,16 @@ def get_fx_rate_on(base, target, date_iso):
 
     started = time.perf_counter()
     d = date.fromisoformat(date_iso)
-    df = yf.Ticker(f"{base}{target}=X").history(
-        start=(d - timedelta(days=10)).isoformat(),
-        end=(d + timedelta(days=1)).isoformat(),
-        interval="1d",
-    )
+    try:
+        df = yf.Ticker(f"{base}{target}=X").history(
+            start=(d - timedelta(days=10)).isoformat(),
+            end=(d + timedelta(days=1)).isoformat(),
+            interval="1d",
+        )
+    except Exception:
+        perf.record("market.get_fx_rate_on",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # Walk the (ascending) bars and keep the last close whose calendar
     # day is on-or-before the target date. A bar AFTER it means we've
@@ -1078,6 +1119,8 @@ def get_fx_rate_on(base, target, date_iso):
             break
 
     if rate is None:
+        perf.record("market.get_fx_rate_on",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(
             f"no {base}{target} close on or before {date_iso}"
         )
@@ -1110,11 +1153,16 @@ def get_price_on(symbol, date_iso):
     """
     started = time.perf_counter()
     d = date.fromisoformat(date_iso)
-    df = yf.Ticker(symbol).history(
-        start=(d - timedelta(days=10)).isoformat(),
-        end=(d + timedelta(days=1)).isoformat(),
-        interval="1d",
-    )
+    try:
+        df = yf.Ticker(symbol).history(
+            start=(d - timedelta(days=10)).isoformat(),
+            end=(d + timedelta(days=1)).isoformat(),
+            interval="1d",
+        )
+    except Exception:
+        perf.record("market.get_price_on",
+                    (time.perf_counter() - started) * 1000)
+        raise
 
     # Walk the (ascending) bars and keep the last close whose calendar
     # day is on-or-before the target date. A bar AFTER it means we've
@@ -1129,6 +1177,8 @@ def get_price_on(symbol, date_iso):
             break
 
     if price is None:
+        perf.record("market.get_price_on",
+                    (time.perf_counter() - started) * 1000)
         raise ValueError(f"no price for {symbol} on or before {date_iso}")
     perf.record("market.get_price_on",
                 (time.perf_counter() - started) * 1000)
@@ -1162,8 +1212,13 @@ def search_tickers(query, limit=8):
     the route layer decides the HTTP response.
     """
     started = time.perf_counter()
+    try:
+        hits = yf.Search(query, max_results=limit).quotes
+    except Exception:
+        perf.record("market.search", (time.perf_counter() - started) * 1000)
+        raise
     results = []
-    for hit in yf.Search(query, max_results=limit).quotes:
+    for hit in hits:
         symbol = hit.get("symbol")
         # A hit without a symbol can't be navigated to — skip it rather
         # than let the dropdown offer a link to /stock/None.

@@ -575,15 +575,26 @@
             }
         }
 
-        const endpoints = metrics
-            .filter((item) => item.name.startsWith("http.") && item.count > 0)
-            .sort(byP95)
-            .slice(0, 5);
+        const byEndpoint = new Map();
+        for (const item of metrics) {
+            if (!item.name.startsWith("http.") || item.count === 0) continue;
+            const name = item.name.slice("http.".length);
+            const existing = byEndpoint.get(name);
+            if (!existing) {
+                byEndpoint.set(name, {
+                    name, count: item.count, p95_ms: item.p95_ms,
+                });
+            } else {
+                existing.count += item.count;
+                existing.p95_ms = Math.max(existing.p95_ms, item.p95_ms);
+            }
+        }
+        const endpoints = [...byEndpoint.values()].sort(byP95).slice(0, 5);
         if (endpoints.length) {
             readout.append(heading("Slowest endpoints"));
             for (const item of endpoints) {
                 readout.append(row(
-                    item.name.slice("http.".length),
+                    item.name,
                     `p95 ${ms(item.p95_ms)} · ${plural(item.count, "call")}`));
             }
         }
@@ -607,7 +618,7 @@
                     hit += item.count;
                 } else if (outcome === "miss") {
                     miss += item.count;
-                    missP95 = item.p95_ms;
+                    missP95 = Math.max(missP95, item.p95_ms);
                 } else if (outcome === "wait") {
                     wait += item.count;
                 }

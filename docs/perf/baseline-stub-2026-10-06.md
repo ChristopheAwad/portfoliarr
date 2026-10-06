@@ -9,108 +9,108 @@
 
 | page | run | ttfb ms | dom ms | load ms | lcp ms | observed s | fetches |
 |---|---|---|---|---|---|---|---|
-| dashboard | 1 | 5 | 55 | 56 | 52 | 5.2 | 19 |
-| dashboard | 2 | 4 | 101 | 102 | 72 | 5.27 | 19 |
-| ledger | 1 | 28 | 103 | 103 | 112 | 4.8 | 3 |
-| ledger | 2 | 3 | 43 | 44 | 52 | 4.76 | 3 |
-| stock | 1 | 17 | 119 | 119 | 104 | 4.86 | 7 |
-| stock | 2 | 6 | 99 | 99 | 80 | 4.84 | 7 |
-| preferences | 1 | 14 | 63 | 63 | 68 | 4.66 | 5 |
-| preferences | 2 | 4 | 27 | 28 | 40 | 4.62 | 5 |
+| dashboard | 1 | 12 | 92 | 92 | 72 | 5.35 | 19 |
+| dashboard | 2 | 6 | 42 | 42 | 48 | 5.22 | 19 |
+| ledger | 1 | 5 | 36 | 36 | 44 | 4.73 | 3 |
+| ledger | 2 | 6 | 36 | 36 | 48 | 4.74 | 3 |
+| stock | 1 | 7 | 49 | 49 | 56 | 4.73 | 7 |
+| stock | 2 | 3 | 40 | 41 | 36 | 4.72 | 7 |
+| preferences | 1 | 6 | 38 | 38 | 48 | 4.57 | 5 |
+| preferences | 2 | 3 | 23 | 23 | 32 | 4.55 | 5 |
 
 ## Render marks and slowest fetches
 
 ### dashboard run 1
-- marks: dashboard:markets=141 ms  dashboard:watchlist=224 ms  dashboard:volume=242 ms  dashboard:summary=334 ms  chart:paint=335 ms  dashboard:chart=335 ms
-- fetch /api/portfolio/history: 343 ms (server 164)
-- fetch /api/portfolio/history: 342 ms (server 163)
-- fetch /api/portfolio/summary: 261 ms (server 164)
-- fetch /api/portfolio/history: 260 ms (server 164)
-- fetch /api/indices: 190 ms (server 89)
+- marks: dashboard:markets=184 ms  dashboard:watchlist=267 ms  dashboard:volume=296 ms  dashboard:summary=396 ms  chart:paint=399 ms  dashboard:chart=399 ms
+- fetch /api/portfolio/history: 382 ms (server 178)
+- fetch /api/portfolio/history: 381 ms (server 179)
+- fetch /api/portfolio/summary: 287 ms (server 174)
+- fetch /api/portfolio/history: 287 ms (server 173)
+- fetch /api/indices: 214 ms (server 98)
 
 ### dashboard run 2
-- marks: dashboard:markets=174 ms  dashboard:volume=266 ms  dashboard:watchlist=356 ms  dashboard:summary=366 ms  chart:paint=368 ms  dashboard:chart=368 ms
-- fetch /api/portfolio/history: 350 ms (server 165)
-- fetch /api/portfolio/history: 350 ms (server 164)
-- fetch /api/watchlist: 269 ms (server 168)
-- fetch /api/portfolio/history: 256 ms (server 166)
-- fetch /api/portfolio/summary: 253 ms (server 165)
+- marks: dashboard:markets=150 ms  dashboard:volume=245 ms  dashboard:watchlist=332 ms  dashboard:summary=342 ms  chart:paint=343 ms  dashboard:chart=343 ms
+- fetch /api/portfolio/history: 359 ms (server 164)
+- fetch /api/portfolio/history: 355 ms (server 169)
+- fetch /api/watchlist: 292 ms (server 165)
+- fetch /api/portfolio/history: 287 ms (server 171)
+- fetch /api/portfolio/summary: 285 ms (server 167)
 
 ### ledger run 1
-- marks: ledger:closed=115 ms  ledger:rows=280 ms
-- fetch /api/transactions: 170 ms (server 164)
-- fetch /api/portfolios: 14 ms (server 1)
-- fetch /api/portfolio/realized: 7 ms (server 2)
+- marks: ledger:closed=45 ms  ledger:rows=211 ms
+- fetch /api/transactions: 170 ms (server 162)
+- fetch /api/portfolio/realized: 6 ms (server 2)
+- fetch /api/portfolios: 5 ms (server 1)
 
 ### ledger run 2
-- marks: ledger:closed=52 ms  ledger:rows=217 ms
-- fetch /api/transactions: 168 ms (server 163)
-- fetch /api/portfolios: 8 ms (server 1)
-- fetch /api/portfolio/realized: 6 ms (server 1)
+- marks: ledger:closed=46 ms  ledger:rows=208 ms
+- fetch /api/transactions: 167 ms (server 163)
+- fetch /api/portfolios: 7 ms (server 1)
+- fetch /api/portfolio/realized: 6 ms (server 2)
 
 ### stock run 1
-- marks: stock:financials=216 ms  stock:events=217 ms  chart:paint=223 ms  stock:chart=223 ms  stock:quote=292 ms
-- fetch /api/stock/:symbol: 179 ms (server 165)
-- fetch /api/portfolio/position: 97 ms (server 81)
-- fetch /api/stock/AAPL/history: 97 ms (server 83)
-- fetch /api/stock/AAPL/events: 94 ms (server 84)
-- fetch /api/stock/AAPL/financials: 93 ms (server 85)
+- marks: stock:financials=146 ms  stock:events=147 ms  chart:paint=160 ms  stock:chart=160 ms  stock:quote=211 ms
+- fetch /api/stock/:symbol: 171 ms (server 163)
+- fetch /api/portfolio/position: 98 ms (server 81)
+- fetch /api/stock/:symbol/events: 92 ms (server 81)
+- fetch /api/stock/:symbol/financials: 92 ms (server 82)
+- fetch /api/stock/:symbol/history: 91 ms (server 81)
 
 ### stock run 2
-- marks: stock:events=182 ms  chart:paint=186 ms  stock:chart=186 ms  stock:financials=208 ms  stock:quote=263 ms
-- fetch /api/stock/:symbol: 172 ms (server 164)
-- fetch /api/stock/AAPL/financials: 97 ms (server 81)
-- fetch /api/stock/AAPL/events: 89 ms (server 83)
-- fetch /api/stock/AAPL/history: 89 ms (server 82)
-- fetch /api/stock/AAPL/stats: 88 ms (server 82)
+- marks: stock:events=127 ms  stock:financials=138 ms  chart:paint=146 ms  stock:chart=146 ms  stock:quote=208 ms
+- fetch /api/stock/:symbol: 170 ms (server 164)
+- fetch /api/stock/:symbol/history: 104 ms (server 82)
+- fetch /api/stock/:symbol/financials: 92 ms (server 84)
+- fetch /api/stock/:symbol/stats: 91 ms (server 82)
+- fetch /api/stock/:symbol/events: 89 ms (server 81)
 
 ### preferences run 1
-- marks: preferences:perf-card=70 ms
-- fetch /api/portfolios: 14 ms (server 1)
+- marks: preferences:perf-card=49 ms
+- fetch /api/portfolios: 11 ms (server 1)
+- fetch /api/auth/signup-toggle: 10 ms (server 2)
+- fetch /api/perf: 10 ms (server 3)
 - fetch /api/users: 9 ms (server 3)
-- fetch /api/widget/tokens: 9 ms (server 3)
-- fetch /api/auth/signup-toggle: 8 ms (server 3)
-- fetch /api/perf: 6 ms (server 1)
+- fetch /api/widget/tokens: 8 ms (server 2)
 
 ### preferences run 2
-- marks: preferences:perf-card=37 ms
-- fetch /api/users: 11 ms (server 5)
-- fetch /api/widget/tokens: 11 ms (server 4)
-- fetch /api/auth/signup-toggle: 10 ms (server 4)
-- fetch /api/perf: 8 ms (server 3)
-- fetch /api/portfolios: 7 ms (server 1)
+- marks: preferences:perf-card=33 ms
+- fetch /api/portfolios: 13 ms (server 7)
+- fetch /api/users: 11 ms (server 4)
+- fetch /api/widget/tokens: 9 ms (server 3)
+- fetch /api/auth/signup-toggle: 9 ms (server 3)
+- fetch /api/perf: 7 ms (server 1)
 
 ## Server endpoints (p95, process lifetime)
 
 | endpoint | calls | p50 ms | p95 ms | max ms |
 |---|---|---|---|---|
-| portfolio_history | 27 | 164.5 | 169.9 | 170.4 |
-| watchlist_quotes | 3 | 167.8 | 168.6 | 168.6 |
-| portfolio_summary | 3 | 164.1 | 165.4 | 165.4 |
-| stock_quote | 2 | 164.4 | 165.1 | 165.1 |
-| list_transactions | 2 | 162.9 | 163.9 | 163.9 |
-| log_transaction | 2 | 81.7 | 162.1 | 162.1 |
-| index_quotes | 18 | 93.1 | 109.9 | 109.9 |
-| volume_leaders | 3 | 85.3 | 87.2 | 87.2 |
-| stock_financials | 2 | 80.8 | 84.8 | 84.8 |
-| stock_events | 2 | 82.6 | 83.8 | 83.8 |
-| stock_history | 2 | 82.1 | 83.4 | 83.4 |
-| stock_stats | 2 | 82.2 | 83.3 | 83.3 |
-| add_to_watchlist | 2 | 81.2 | 81.8 | 81.8 |
-| portfolio_position | 2 | 80.9 | 81 | 81 |
-| auth_setup | 1 | 67.9 | 67.9 | 67.9 |
-| ledger_page | 2 | 0.6 | 22.1 | 22.1 |
-| stock_page | 2 | 1.8 | 10.8 | 10.8 |
-| index | 3 | 1.3 | 9.5 | 9.5 |
-| preferences_page | 2 | 0.9 | 9.2 | 9.2 |
-| perf_api | 10 | 2.1 | 5.8 | 5.8 |
-| list_users_api | 2 | 3.3 | 5.3 | 5.3 |
-| signup_toggle_api | 2 | 2.9 | 4.5 | 4.5 |
-| auth_setup | 2 | 0.8 | 3.9 | 3.9 |
-| widget_tokens_api | 2 | 3.1 | 3.6 | 3.6 |
-| perf_client | 8 | 1.3 | 2.9 | 2.9 |
-| portfolio_realized | 2 | 1.3 | 1.9 | 1.9 |
-| portfolios_api | 10 | 0.9 | 1.8 | 1.8 |
+| portfolio_history | 27 | 177 | 190.9 | 199.7 |
+| portfolio_summary | 3 | 166.9 | 174.1 | 174.1 |
+| watchlist_quotes | 3 | 165.1 | 174.1 | 174.1 |
+| log_transaction | 2 | 86.2 | 164.6 | 164.6 |
+| stock_quote | 2 | 163.1 | 163.8 | 163.8 |
+| list_transactions | 2 | 162.4 | 163.4 | 163.4 |
+| index_quotes | 18 | 97.7 | 106.4 | 106.4 |
+| add_to_watchlist | 2 | 83.1 | 85.8 | 85.8 |
+| stock_financials | 2 | 81.9 | 84.3 | 84.3 |
+| stock_stats | 2 | 81.7 | 82.7 | 82.7 |
+| volume_leaders | 3 | 82.2 | 82.7 | 82.7 |
+| stock_history | 2 | 81.3 | 82.1 | 82.1 |
+| portfolio_position | 2 | 80.9 | 81.6 | 81.6 |
+| stock_events | 2 | 80.7 | 81.4 | 81.4 |
+| auth_setup | 1 | 69.1 | 69.1 | 69.1 |
+| index | 3 | 3.9 | 9 | 9 |
+| portfolios_api | 10 | 0.8 | 7.1 | 7.1 |
+| list_users_api | 2 | 2.9 | 4.3 | 4.3 |
+| preferences_page | 2 | 0.7 | 3.9 | 3.9 |
+| auth_setup | 2 | 1.1 | 3.7 | 3.7 |
+| stock_page | 2 | 0.7 | 3.7 | 3.7 |
+| ledger_page | 2 | 1.3 | 3.4 | 3.4 |
+| perf_api | 10 | 1.1 | 3.1 | 3.1 |
+| widget_tokens_api | 2 | 2.5 | 3.1 | 3.1 |
+| perf_client | 8 | 0.8 | 2.6 | 2.6 |
+| signup_toggle_api | 2 | 2.1 | 2.6 | 2.6 |
+| portfolio_realized | 2 | 1.6 | 1.6 | 1.6 |
 
 ## Market cache (process lifetime)
 

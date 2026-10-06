@@ -20,9 +20,19 @@
     // and validates these too (it never trusts a beacon).
     const PATH_TEMPLATES = [
         [/^\/api\/stock\/[^/]+$/, "/api/stock/:symbol"],
+        [/^\/api\/stock\/[^/]+\/stats$/, "/api/stock/:symbol/stats"],
+        [/^\/api\/stock\/[^/]+\/history$/, "/api/stock/:symbol/history"],
+        [/^\/api\/stock\/[^/]+\/financials$/, "/api/stock/:symbol/financials"],
+        [/^\/api\/stock\/[^/]+\/events$/, "/api/stock/:symbol/events"],
         [/^\/api\/quote\/[^/]+$/, "/api/quote/:symbol"],
         [/^\/api\/transactions\/\d+$/, "/api/transactions/:id"],
+        [/^\/api\/transactions\/ticker\/[^/]+$/,
+         "/api/transactions/ticker/:symbol"],
+        [/^\/api\/watchlist\/[^/]+$/, "/api/watchlist/:symbol"],
+        [/^\/api\/portfolios\/\d+$/, "/api/portfolios/:id"],
+        [/^\/api\/portfolios\/\d+\/move$/, "/api/portfolios/:id/move"],
         [/^\/api\/widget\/tokens\/\d+$/, "/api/widget/tokens/:id"],
+        [/^\/api\/users\/\d+$/, "/api/users/:id"],
     ];
 
     function normalizePath(path) {
