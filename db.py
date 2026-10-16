@@ -29,11 +29,16 @@ is deliberately disposable.
 
 # pathlib's Path is the modern way to build filesystem paths (no manual
 # string joining with "/", no platform-specific separators to worry about).
+from datetime import datetime, timezone
 from pathlib import Path
 
 # sqlite3 is part of Python's standard library — no pip install needed.
 # It talks to a self-contained database file on disk.
 import sqlite3
+
+# json encodes the manual classification weights (#62): a small dict stored
+# as text in one column, so the table needs no per-label rows.
+import json
 
 # time gives perf_counter(), the monotonic clock the metrics sink wants.
 import time
@@ -368,6 +373,31 @@ def init():
             conn.execute(
                 "ALTER TABLE widget_tokens_scoped RENAME TO widget_tokens")
 
+        # Install-wide manual classification overrides (#62). When Yahoo has
+        # no breakdown for a fund (country/region) or a concept does not apply
+        # (crypto's sector), a signed-in person can enter the weights by hand.
+        # This is OBJECTIVE REFERENCE DATA about a security — the same global
+        # category as the market overview, search, and stock detail — so it is
+        # deliberately OWNERLESS: there is no user_id, and every account shares
+        # the same rows. (The "every row belongs to one account" rule covers
+        # user data, not security metadata; this exception is recorded in
+        # project-brief.md.) `weights` is a JSON object of label→fraction
+        # (stored normalized to sum 1); `as_of` is an optional display-only ISO
+        # date the user typed so stale data is visible.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS classification_overrides (
+                symbol     TEXT NOT NULL,
+                dimension  TEXT NOT NULL
+                    CHECK (dimension IN ('country','sector','asset')),
+                weights    TEXT NOT NULL,
+                as_of      TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, dimension)
+            )
+            """
+        )
+
 
 # ---------------------------------------------------------------------------
 # SERVER SETTINGS — one key/value row today: the session secret. Settings
@@ -393,6 +423,88 @@ def set_setting(key, value):
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+
+# ---------------------------------------------------------------------------
+# CLASSIFICATION OVERRIDES (#62) — install-wide, ownerless manual weights.
+# json is a storage detail: callers pass/receive plain dicts. Weights are
+# already normalized to fractions by the route layer before they reach here;
+# this layer only stores and retrieves.
+# ---------------------------------------------------------------------------
+
+def get_classification_override(symbol, dimension):
+    """One override's {weights, as_of, updated_at}, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT weights, as_of, updated_at FROM classification_overrides"
+            " WHERE symbol = ? AND dimension = ?",
+            (symbol, dimension)).fetchone()
+    if not row:
+        return None
+    return {"weights": json.loads(row[0]), "as_of": row[1],
+            "updated_at": row[2]}
+
+
+def get_classification_overrides(dimension=None, symbol=None):
+    """Every override matching the optional filters, as a list of dicts."""
+    query = ("SELECT symbol, dimension, weights, as_of, updated_at"
+             " FROM classification_overrides")
+    clauses, params = [], []
+    if dimension is not None:
+        clauses.append("dimension = ?")
+        params.append(dimension)
+    if symbol is not None:
+        clauses.append("symbol = ?")
+        params.append(symbol)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY symbol, dimension"
+    with _connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [
+        {"symbol": r[0], "dimension": r[1], "weights": json.loads(r[2]),
+         "as_of": r[3], "updated_at": r[4]}
+        for r in rows
+    ]
+
+
+def set_classification_override(symbol, dimension, weights, as_of=None):
+    """Insert or replace one override, stamping updated_at with now (UTC)."""
+    updated_at = _utc_now_iso()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO classification_overrides"
+            " (symbol, dimension, weights, as_of, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(symbol, dimension) DO UPDATE SET"
+            " weights = excluded.weights, as_of = excluded.as_of,"
+            " updated_at = excluded.updated_at",
+            (symbol, dimension, json.dumps(weights), as_of, updated_at),
+        )
+
+
+def delete_classification_override(symbol, dimension):
+    """Delete one override. True when a row was removed."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM classification_overrides"
+            " WHERE symbol = ? AND dimension = ?",
+            (symbol, dimension))
+    return cursor.rowcount > 0
+
+
+def delete_classification_overrides(symbol):
+    """Delete every override for one symbol. Returns the count removed."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM classification_overrides WHERE symbol = ?",
+            (symbol,))
+    return cursor.rowcount
+
+
+def _utc_now_iso():
+    """The current UTC time as an ISO-8601 string (SQLite has no type)."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

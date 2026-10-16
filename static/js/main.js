@@ -842,6 +842,7 @@ async function refreshPortfolioSummary() {
                     setAllocState("stale-error");
                 } else {
                     updateAllocExcluded([]);
+                    updateAllocUnclassified([]);
                     setAllocState("unavailable");
                 }
             }
@@ -1005,6 +1006,7 @@ const allocPrevBtn = document.getElementById("alloc-prev");
 const allocNextBtn = document.getElementById("alloc-next");
 const allocLabelEl = document.getElementById("alloc-label");
 const allocExcludedEl = document.getElementById("alloc-excluded");
+const allocUnclassifiedEl = document.getElementById("alloc-unclassified");
 const allocDotsEl = document.getElementById("alloc-dots");
 const allocPositionEl = document.getElementById("alloc-position");
 const allocStatusEl = document.getElementById("alloc-status");
@@ -1100,6 +1102,7 @@ const ALLOCATION_VIEWS = [
     { key: "sector", label: "By Sector" },
     { key: "country", label: "By Country" },
     { key: "type",   label: "By Type" },
+    { key: "asset_class", label: "By Asset Class" },
     { key: "cap",    label: "By Cap Bucket" },
     { key: "currency", label: "By Currency" },
 ];
@@ -1207,6 +1210,7 @@ function switchAllocView(newIndex) {
             if (lastSummaryFailed) setAllocState("stale-error");
         } else {
             updateAllocExcluded([]);
+            updateAllocUnclassified([]);
             setAllocState(lastSummaryFailed ? "unavailable" : "loading");
         }
     } else {
@@ -1241,9 +1245,11 @@ async function fetchAllocDimension(by) {
     // their own message via paintAllocation's states.
     if (allocCache[key]) {
         const entry = allocCache[key];
-        paintAllocation(entry.data.slices, entry.data.excluded, by);
+        paintAllocation(entry.data.slices, entry.data.excluded, by,
+                        entry.data.unclassified);
     } else {
         updateAllocExcluded([]);
+        updateAllocUnclassified([]);
         setAllocState("loading");
     }
 
@@ -1278,7 +1284,7 @@ async function fetchAllocDimension(by) {
         // it over the current slide — their next flip reads the cache.
         allocCache[key] = { data, fetchedAt: Date.now() };
         if (isActiveAllocView(by)) {
-            paintAllocation(data.slices, data.excluded, by);
+            paintAllocation(data.slices, data.excluded, by, data.unclassified);
         }
     })().catch((err) => {
         if (epoch !== portfolioEpoch()) return;
@@ -1303,6 +1309,8 @@ async function fetchAllocDimension(by) {
         } else {
             // Nothing for THIS dimension was ever painted. Hide whatever
             // other dimension's data is on the canvas and say so plainly.
+            updateAllocExcluded([]);
+            updateAllocUnclassified([]);
             setAllocState("unavailable");
         }
     }).finally(() => {
@@ -1395,7 +1403,33 @@ function updateAllocExcluded(excluded) {
     }
 }
 
-function paintAllocation(slices, excluded, by = null) {
+// The "unclassified" note (#62): tickers whose donut wedge is an n/a or
+// Unknown placeholder because the data is missing or does not apply. Each
+// links to the stock page, where the classifications card lets the signed-in
+// person enter the real weights. Distinct from the excluded note, which is
+// about holdings that cannot contribute at all.
+function updateAllocUnclassified(unclassified) {
+    if (!allocUnclassifiedEl) return;
+    if (unclassified && unclassified.length > 0) {
+        allocUnclassifiedEl.replaceChildren();
+        const label = document.createTextNode("Not classified: ");
+        allocUnclassifiedEl.append(label);
+        unclassified.forEach((entry, index) => {
+            if (index > 0) allocUnclassifiedEl.append(document.createTextNode("; "));
+            const link = document.createElement("a");
+            link.href = `/stock/${encodeURIComponent(entry.ticker)}#classification-card`;
+            link.textContent = entry.ticker;
+            link.title = `${entry.reason} — set it on the stock page`;
+            allocUnclassifiedEl.append(link);
+        });
+        allocUnclassifiedEl.style.display = "";
+    } else {
+        allocUnclassifiedEl.replaceChildren();
+        allocUnclassifiedEl.style.display = "none";
+    }
+}
+
+function paintAllocation(slices, excluded, by = null, unclassified = []) {
     // No canvas (defensive — index.html ships one) or no Chart.js (the
     // CDN script failed to load): degrade to the unavailable state rather
     // than throwing — same spirit as the chart handle's null guard.
@@ -1407,11 +1441,12 @@ function paintAllocation(slices, excluded, by = null) {
     // built from: a failed revalidation for the SAME dimension can safely
     // keep it (lastAllocPayload.by === by), but no other dimension may be
     // restored into its place.
-    lastAllocPayload = { by: by ?? null, slices, excluded };
+    lastAllocPayload = { by: by ?? null, slices, excluded, unclassified };
     currentHoldings = slices;
     runAllocationCrossfade();
 
     updateAllocExcluded(excluded);
+    updateAllocUnclassified(unclassified);
 
     if (!slices || slices.length === 0) {
         // Empty reply: no wedges. DESTROY any chart a previous cycle
@@ -1731,6 +1766,7 @@ document.addEventListener("portfoliochange", () => {
     lastAllocPayload = null;
     setPortfolioUnavailable("Loading portfolio...");
     updateAllocExcluded([]);
+    updateAllocUnclassified([]);
     setAllocState("loading");
     if (portfolioChartHandle) portfolioChartHandle.invalidate();
     refreshPortfolioSummary();

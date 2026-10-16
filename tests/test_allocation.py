@@ -46,14 +46,18 @@ def make_quote(symbol, price, previous_close, currency="CAD"):
 
 
 def make_profile(sector=None, country=None, quote_type=None,
-                 market_cap=None):
-    """A profile dict in exactly market_data.get_profile's shape (the 4
-    surviving keys after the By Industry / By Exchange cut)."""
+                 market_cap=None, asset_mix=None, sector_mix=None,
+                 fund_degraded=False):
+    """A profile dict in exactly market_data.get_profile's shape. Since #62
+    that is the base 4 keys plus the fund look-through keys."""
     return {
         "sector": sector,
         "country": country,
         "quote_type": quote_type,
         "market_cap": market_cap,
+        "asset_mix": asset_mix,
+        "sector_mix": sector_mix,
+        "fund_degraded": fund_degraded,
     }
 
 
@@ -527,9 +531,10 @@ def test_unpriced_ticker_appears_in_excluded_with_reason(client, fake_market):
     assert "DEAD.TO" in excluded_tickers
 
 
-def test_missing_sector_appears_in_excluded_with_reason(client, fake_market):
-    """Profile fetched but sector field is None (e.g. crypto) → excluded
-    from the sector view with a reason."""
+def test_missing_sector_becomes_na_wedge_not_excluded(client, fake_market):
+    """Profile fetched but no sector data: since #62 a non-equity instrument
+    (crypto) lands in the n/a wedge and the unclassified list — it is NOT
+    silently excluded, so the donut still reconciles."""
     seed("BTC-USD", 50000.0, 0.1, currency="USD", fx_rate=1.30)
     fake_market.quotes["BTC-USD"] = make_quote("BTC-USD", 50000.0, 49000.0,
                                                 currency="USD")
@@ -537,9 +542,10 @@ def test_missing_sector_appears_in_excluded_with_reason(client, fake_market):
     fake_market.profiles["BTC-USD"] = make_profile(sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
-    assert body["slices"] == []
-    excluded_tickers = {e["ticker"] for e in body["excluded"]}
-    assert "BTC-USD" in excluded_tickers
+    assert [s["key"] for s in body["slices"]] == ["n/a"]
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "BTC-USD", "reason": "sector not applicable"}]
 
 
 def test_profile_fetch_failure_excluded_with_reason(client, fake_market):
@@ -559,10 +565,9 @@ def test_profile_fetch_failure_excluded_with_reason(client, fake_market):
     assert "DEAD.TO" in excluded_tickers
 
 
-def test_all_unclassified_returns_empty_slices_and_full_excluded_list(
-        client, fake_market):
-    """When EVERY ticker has no sector data, slices are empty and
-    excluded lists everything."""
+def test_all_unclassified_share_one_na_wedge(client, fake_market):
+    """When EVERY ticker lacks sector data, they share one n/a wedge and all
+    appear in unclassified — nothing is silently dropped."""
     seed("BTC-USD", 50000.0, 0.1, currency="USD", fx_rate=1.30)
     seed("ETH-USD", 3000.0, 1.0, currency="USD", fx_rate=1.30)
     fake_market.quotes["BTC-USD"] = make_quote("BTC-USD", 50000.0, 49000.0,
@@ -574,8 +579,10 @@ def test_all_unclassified_returns_empty_slices_and_full_excluded_list(
     fake_market.profiles["ETH-USD"] = make_profile(sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
-    assert body["slices"] == []
-    assert len(body["excluded"]) == 2
+    assert [s["key"] for s in body["slices"]] == ["n/a"]
+    assert body["slices"][0]["weight"] == pytest.approx(1.0)
+    assert body["excluded"] == []
+    assert {e["ticker"] for e in body["unclassified"]} == {"BTC-USD", "ETH-USD"}
 
 
 # ── Allocation route: cap buckets ───────────────────────────────────────
@@ -626,9 +633,10 @@ def test_cap_missing_market_cap_excluded(client, fake_market):
     assert "ETF.TO" in excluded_tickers
 
 
-def test_weights_sum_to_one_over_classified_slices_only(client, fake_market):
-    """An excluded ticker's value does NOT enter the denominator — weights
-    divide by the sum of CLASSIFIED slices only."""
+def test_weights_divide_over_all_wedges(client, fake_market):
+    """Since #62 the n/a/Unknown wedges are REAL classified slices, so their
+    value enters the denominator: an unpriced/excluded ticker still would
+    not, but a crypto n/a wedge does. Technology keeps only its share."""
     seed("AAPL", 100.0, 10)
     seed("BTC-USD", 50000.0, 0.1, currency="USD", fx_rate=1.30)
     fake_market.quotes["AAPL"] = make_quote("AAPL", 105.0, 100.0)
@@ -639,8 +647,11 @@ def test_weights_sum_to_one_over_classified_slices_only(client, fake_market):
     fake_market.profiles["BTC-USD"] = make_profile(sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
-    assert len(body["slices"]) == 1
-    assert body["slices"][0]["weight"] == pytest.approx(1.0)
+    assert {s["key"] for s in body["slices"]} == {"Technology", "n/a"}
+    tech = next(s for s in body["slices"] if s["key"] == "Technology")
+    # AAPL: 10×105 = 1050; BTC n/a wedge: 0.1×50000×1.30 = 6500.
+    assert tech["weight"] == pytest.approx(1050.0 / (1050.0 + 6500.0))
+    assert sum(s["weight"] for s in body["slices"]) == pytest.approx(1.0)
 
 
 def test_slice_values_descending(client, fake_market):

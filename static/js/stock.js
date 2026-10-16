@@ -863,6 +863,183 @@ logTxBtn.addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ALLOCATION DATA (#62) — manual classification overrides. The donut shows
+// n/a / Unknown wedges when Yahoo has no fund breakdown; this card lets a
+// signed-in person replace them. Install-wide reference data (see the
+// route). Kept simple: a dimension select, label + percent rows, Save/Clear.
+// ---------------------------------------------------------------------------
+
+const classificationCard = document.getElementById("classification-card");
+const classificationRowsEl = document.getElementById("classification-rows");
+const classificationDimEl = document.getElementById("classification-dimension");
+const classificationAsOfEl = document.getElementById("classification-as-of");
+const classificationErrorEl = document.getElementById("classification-error");
+const classificationStatusEl = document.getElementById("classification-status");
+
+// The last GET reply: {dimension: {weights, as_of, updated_at}}.
+let classificationData = {};
+
+function showClassificationError(text) {
+    classificationErrorEl.textContent = text;
+    classificationErrorEl.hidden = false;
+}
+
+function clearClassificationError() {
+    classificationErrorEl.textContent = "";
+    classificationErrorEl.hidden = true;
+}
+
+function setClassificationStatus(text) {
+    classificationStatusEl.textContent = text;
+}
+
+function addClassificationRow(label = "", percent = "") {
+    const row = document.createElement("div");
+    row.className = "classification-row";
+
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.className = "classification-label";
+    labelInput.placeholder = "Label";
+    labelInput.setAttribute("aria-label", "Allocation label");
+    labelInput.value = label;
+
+    const percentInput = document.createElement("input");
+    percentInput.type = "number";
+    percentInput.className = "classification-percent";
+    percentInput.min = "0";
+    percentInput.max = "100";
+    percentInput.step = "0.01";
+    percentInput.placeholder = "%";
+    percentInput.setAttribute("aria-label", "Weight percent");
+    percentInput.value = percent;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "classification-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Remove row");
+    remove.addEventListener("click", () => row.remove());
+
+    row.append(labelInput, percentInput, remove);
+    classificationRowsEl.append(row);
+}
+
+// Paint the rows for the CURRENTLY selected dimension from classificationData.
+function paintClassificationRows() {
+    if (!classificationRowsEl) return;
+    classificationRowsEl.replaceChildren();
+    const dimension = classificationDimEl.value;
+    const entry = classificationData[dimension];
+    if (entry && entry.weights) {
+        for (const [label, fraction] of Object.entries(entry.weights)) {
+            addClassificationRow(label, String(fraction * 100));
+        }
+        classificationAsOfEl.value = entry.as_of || "";
+    } else {
+        classificationAsOfEl.value = "";
+        addClassificationRow();
+    }
+}
+
+async function loadClassification() {
+    if (!classificationCard) return;
+    try {
+        const response = await fetch(
+            `/api/fund-classification/${encodeURIComponent(symbol)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        classificationData = data.overrides || {};
+        paintClassificationRows();
+    } catch (err) {
+        console.error("classification load failed:", err);
+        classificationData = {};
+        paintClassificationRows();
+    }
+}
+
+async function saveClassification() {
+    clearClassificationError();
+    setClassificationStatus("");
+    const weights = {};
+    let malformed = false;
+    classificationRowsEl.querySelectorAll(".classification-row").forEach((row) => {
+        const label = row.querySelector(".classification-label").value.trim();
+        const percent = row.querySelector(".classification-percent").value;
+        if (!label && !percent) return;          // ignore a fully blank row
+        if (!label || percent === "") { malformed = true; return; }
+        weights[label] = Number(percent);
+    });
+    if (malformed) {
+        showClassificationError("Each row needs a label and a weight.");
+        return;
+    }
+    if (!Object.keys(weights).length) {
+        showClassificationError("Add at least one row.");
+        return;
+    }
+    const payload = { dimension: classificationDimEl.value, weights };
+    if (classificationAsOfEl.value) payload.as_of = classificationAsOfEl.value;
+    try {
+        const response = await fetch(
+            `/api/fund-classification/${encodeURIComponent(symbol)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showClassificationError(data.error || "Could not save.");
+            return;
+        }
+        classificationData[data.dimension] = {
+            weights: data.weights, as_of: data.as_of, updated_at: null,
+        };
+        paintClassificationRows();
+        setClassificationStatus("Saved.");
+    } catch (err) {
+        console.error("classification save failed:", err);
+        showClassificationError("Could not reach the server.");
+    }
+}
+
+async function clearClassification() {
+    clearClassificationError();
+    setClassificationStatus("");
+    const dimension = classificationDimEl.value;
+    try {
+        const response = await fetch(
+            `/api/fund-classification/${encodeURIComponent(symbol)}`
+                + `?dimension=${encodeURIComponent(dimension)}`,
+            { method: "DELETE" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        delete classificationData[dimension];
+        paintClassificationRows();
+        setClassificationStatus("Cleared — the donut shows n/a / Unknown.");
+    } catch (err) {
+        console.error("classification clear failed:", err);
+        showClassificationError("Could not reach the server.");
+    }
+}
+
+if (classificationCard) {
+    document.getElementById("classification-toggle").addEventListener(
+        "click", () => {
+            const body = document.getElementById("classification-body");
+            const toggle = document.getElementById("classification-toggle");
+            body.hidden = !body.hidden;
+            toggle.setAttribute("aria-expanded", String(!body.hidden));
+        });
+    document.getElementById("classification-add-row").addEventListener(
+        "click", () => addClassificationRow());
+    document.getElementById("classification-save").addEventListener(
+        "click", saveClassification);
+    document.getElementById("classification-clear").addEventListener(
+        "click", clearClassification);
+    classificationDimEl.addEventListener("change", paintClassificationRows);
+}
+
+// ---------------------------------------------------------------------------
 // CHART — the security's close price over time. The shared factory builds
 // it; this page's only input is WHERE the data comes from.
 // ---------------------------------------------------------------------------
@@ -930,6 +1107,7 @@ refreshPosition();
 refreshStockStats();
 refreshStockFinancials();
 refreshStockEvents();
+loadClassification();
 if (stockChartHandle) {
     const stockChartReady = stockChartHandle.refresh();
     stockChartReady?.then?.(() => perfMark("stock:chart"));

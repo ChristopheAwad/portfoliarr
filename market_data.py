@@ -100,6 +100,20 @@ _profile_cache = {}
 # Ticker.info call while a miss is in flight. Guarded by _market_lock.
 _inflight_profiles = {}
 
+# ── Fund look-through cache (#62) — the allocation donut's answer to
+#    "what is inside this ETF?".
+#
+# {symbol: {"asset_mix": {label: fraction}, "sector_mix": {label: fraction}}}
+# folded from yfinance FundsData (asset_classes, sector_weightings,
+# fund_overview.categoryName). Kept SEPARATE from _profile_cache and
+# successes-only: a fund fetch that fails must NOT be cached, so the next
+# get_profile retries it instead of poisoning the base profile with a
+# permanent None. Fetched once per symbol per process lifetime on success
+# (fund composition changes slowly; a restart refreshes it). Guarded by
+# _market_lock.
+_fund_cache = {}
+_inflight_funds = {}
+
 # ── Financials cache — the stock page's annual income statement ─────
 #
 # {symbol: {"data": <financials reply dict>, "fetched_at": epoch}} — the
@@ -140,6 +154,13 @@ def clear_profile_cache():
     _profile_cache.clear()
 
 
+def clear_fund_cache():
+    """Empty the fund look-through cache — test isolation's escape hatch."""
+    with _market_lock:
+        _fund_cache.clear()
+        _inflight_funds.clear()
+
+
 def clear_market_caches():
     """Clear every process-memory market cache for deterministic tests."""
     with _market_lock:
@@ -147,6 +168,7 @@ def clear_market_caches():
         _name_cache.clear()
         _history_cache.clear()
         _profile_cache.clear()
+        _fund_cache.clear()
         _financials_cache.clear()
         _events_cache.clear()
         _volume_cache.clear()
@@ -155,6 +177,7 @@ def clear_market_caches():
         # from leaking across tests if a test left one behind.
         _inflight_quotes.clear()
         _inflight_profiles.clear()
+        _inflight_funds.clear()
 
 
 def _finite_number(value):
@@ -865,34 +888,13 @@ def get_events(symbol):
     }
 
 
-def get_profile(symbol):
-    """Return the classification profile for `symbol`.
+def _get_base_profile(symbol):
+    """The base Ticker.info profile for `symbol` (sector/country/type/cap).
 
-    One cached Ticker.info call serves the allocation donut's four
-    non-currency dimensions: sector, country, quote_type, and market_cap.
-    Process-lifetime cache (the _name_cache pattern): a company's profile
-    never changes, so the first success stays valid forever.
-
-    Returns snake_case keys — the route layer's convention of
-    translating Yahoo's camelCase at this boundary (same as get_stats):
-        sector          e.g. "Technology", "Financial Services" (None
-                        for crypto, indices, some ETFs)
-        country         e.g. "United States", "Canada"
-        quote_type      e.g. "EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"
-        market_cap      shares outstanding × price (native currency;
-                        None for indices, some ETFs)
-
-    Missing fields → None, not an error (same convention as get_stats):
-    different security types legitimately lack different fields. An
-    EMPTY profile (Yahoo returned nothing) raises ValueError — it means
-    the symbol is genuinely unknown, not "profile exists but sparse".
-
-    Raises on failure — same boundary rule as get_quote: this layer
-    reports problems, the route layer decides the HTTP response.
-
-    Concurrent missers for the SAME symbol share one Ticker.info call (the
-    same in-flight coordination as get_quote); different symbols fetch
-    concurrently.
+    One cached Ticker.info call, process-lifetime (a company's profile never
+    changes, so the first success stays valid forever). Concurrent missers
+    share one call (the same in-flight coordination as get_quote). Raises on
+    failure; get_profile layers the fund look-through on top.
     """
     # 1. Cache check under the lock, plus in-flight coordination: join an
     #    existing fetch for this symbol or start (own) one.
@@ -953,6 +955,189 @@ def get_profile(symbol):
             # Identity check so cleanup never deletes a newer future.
             if _inflight_profiles.get(symbol) is future:
                 del _inflight_profiles[symbol]
+
+
+# Yahoo's fund asset-class keys → the semantic bucket labels the donut shows.
+_ASSET_CLASS_LABELS = (
+    ("stockPosition", "Stocks"),
+    ("bondPosition", "Bonds"),
+    ("cashPosition", "Cash"),
+    ("preferredPosition", "Preferred"),
+    ("convertiblePosition", "Convertible"),
+)
+
+# Yahoo's sector_weightings snake keys → the same display names info.sector
+# uses, so a fund's sector slices and a stock's sector slice read alike.
+_SECTOR_KEY_LABELS = {
+    "realestate": "Real Estate",
+    "consumer_cyclical": "Consumer Cyclical",
+    "basic_materials": "Basic Materials",
+    "consumer_defensive": "Consumer Defensive",
+    "technology": "Technology",
+    "communication_services": "Communication Services",
+    "financial_services": "Financial Services",
+    "utilities": "Utilities",
+    "industrials": "Industrials",
+    "energy": "Energy",
+    "healthcare": "Healthcare",
+}
+
+
+def _normalized_weight_map(buckets):
+    """Normalize {label: positive weight} to fractions; None when empty."""
+    total = sum(buckets.values())
+    if total <= 0:
+        return None
+    return {label: value / total for label, value in buckets.items()}
+
+
+def _fold_asset_classes(raw, category_name):
+    """Fold Yahoo's asset_classes dict into {label: fraction}, or None."""
+    if not isinstance(raw, dict):
+        return None
+    category = (category_name or "").lower()
+    buckets = {}
+    for key, label in _ASSET_CLASS_LABELS:
+        value = _finite_number(raw.get(key))
+        if value is not None and value > 0:
+            buckets[label] = buckets.get(label, 0.0) + value
+    other = _finite_number(raw.get("otherPosition"))
+    if other is not None and other > 0:
+        if "commodit" in category:
+            label = "Commodities"
+        elif "digital" in category or "crypto" in category:
+            label = "Crypto"
+        elif "real estate" in category:
+            label = "Real Estate"
+        else:
+            label = "Other"
+        buckets[label] = buckets.get(label, 0.0) + other
+    return _normalized_weight_map(buckets)
+
+
+def _fold_sector_weightings(raw):
+    """Fold Yahoo's sector_weightings dict into {label: fraction}, or None."""
+    if not isinstance(raw, dict):
+        return None
+    buckets = {}
+    for key, value in raw.items():
+        label = _SECTOR_KEY_LABELS.get(key)
+        if label is None:
+            continue
+        number = _finite_number(value)
+        if number is not None and number > 0:
+            buckets[label] = buckets.get(label, 0.0) + number
+    return _normalized_weight_map(buckets)
+
+
+def _get_fund_mix(symbol):
+    """Return {"asset_mix", "sector_mix"} for a fund, or raise.
+
+    Fetches yfinance FundsData once per symbol (process-lifetime, successes
+    only) and folds it into two normalized {label: fraction} dicts. Raises on
+    failure: the caller (get_profile) turns that into a degraded profile so a
+    failed fund fetch NEVER loses the base info. A failed fetch is not cached,
+    so the next call retries.
+    """
+    started = time.perf_counter()
+    with _market_lock:
+        if symbol in _fund_cache:
+            perf.record("market.get_fund_mix",
+                        (time.perf_counter() - started) * 1000, cache="hit")
+            return dict(_fund_cache[symbol])
+
+        in_flight = _inflight_funds.get(symbol)
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_funds[symbol] = future
+
+    if waiter is not None:
+        mix = dict(waiter.result())
+        perf.record("market.get_fund_mix",
+                    (time.perf_counter() - started) * 1000, cache="wait")
+        return mix
+
+    try:
+        funds = yf.Ticker(symbol).funds_data
+        try:
+            overview = funds.fund_overview
+            category_name = (
+                overview.get("categoryName")
+                if isinstance(overview, dict) else None
+            )
+        except Exception:
+            category_name = None
+        try:
+            raw_assets = funds.asset_classes
+        except Exception:
+            raw_assets = None
+        try:
+            raw_sectors = funds.sector_weightings
+        except Exception:
+            raw_sectors = None
+
+        mix = {
+            "asset_mix": _fold_asset_classes(raw_assets, category_name),
+            "sector_mix": _fold_sector_weightings(raw_sectors),
+        }
+        with _market_lock:
+            _fund_cache[symbol] = mix
+        future.set_result(mix)
+        perf.record("market.get_fund_mix",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        return dict(mix)
+    except Exception as exc:
+        perf.record("market.get_fund_mix",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        future.set_exception(exc)
+        raise
+    finally:
+        with _market_lock:
+            if _inflight_funds.get(symbol) is future:
+                del _inflight_funds[symbol]
+
+
+def get_profile(symbol):
+    """Return the classification profile for `symbol`.
+
+    A cached Ticker.info call (via _get_base_profile) serves the base keys;
+    for funds it also carries the look-through mixes from _get_fund_mix:
+        sector          e.g. "Technology" (None for crypto, indices, ETFs)
+        country         e.g. "United States" (None for funds/crypto)
+        quote_type      e.g. "EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"
+        market_cap      shares × price (None for indices, some ETFs)
+        asset_mix       {"Stocks": 0.9975, ...} — funds only, else None (#62)
+        sector_mix      {"Technology": 0.40, ...} — equity funds, else None
+        fund_degraded   True when the fund look-through fetch failed this call
+
+    Missing fields → None, not an error (different security types legitimately
+    lack different fields). An EMPTY info payload raises ValueError — the
+    symbol is genuinely unknown, not "sparse profile". A failed fund fetch is
+    swallowed into `fund_degraded=True` (the base info is never lost) and is
+    NOT cached, so the next call retries.
+
+    Raises on a base-info failure — same boundary rule as get_quote.
+    """
+    base = _get_base_profile(symbol)
+    profile = dict(base)
+    if base.get("quote_type") in ("ETF", "MUTUALFUND"):
+        try:
+            mix = _get_fund_mix(symbol)
+            profile["asset_mix"] = mix.get("asset_mix")
+            profile["sector_mix"] = mix.get("sector_mix")
+            profile["fund_degraded"] = False
+        except Exception:
+            profile["asset_mix"] = None
+            profile["sector_mix"] = None
+            profile["fund_degraded"] = True
+    else:
+        profile["asset_mix"] = None
+        profile["sector_mix"] = None
+        profile["fund_degraded"] = False
+    return profile
 
 
 def get_history(symbol, period_key):
