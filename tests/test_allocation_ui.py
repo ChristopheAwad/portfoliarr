@@ -93,6 +93,15 @@ def test_stock_page_has_classification_card(client):
     assert 'id="classification-clear"' in html
 
 
+def test_allocation_notes_use_block_display(client):
+    """The .alloc-excluded class sets display:none as the pre-JS default, so
+    the notes must set display to "block" (setting "" would fall back to
+    none and hide them)."""
+    src = _read_js("static/js/main.js")
+    assert 'allocUnclassifiedEl.style.display = "block"' in src
+    assert 'allocExcludedEl.style.display = "block"' in src
+
+
 def test_main_js_paints_unclassified_note(client):
     """main.js must render the unclassified note and pass the field on every
     dimension paint."""
