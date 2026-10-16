@@ -337,6 +337,55 @@
             </div>
         </div>
 
+        <!-- Allocation data card (#62) — manual classification overrides.
+             Yahoo has no country/region breakdown for funds, and some
+             dimensions do not apply to some instruments (crypto has no
+             sector), so the allocation donut shows n/a / Unknown wedges for
+             those. This card lets a signed-in person enter the real weights.
+             The data is INSTALL-WIDE reference data shared by every account
+             (an explicit exception to the per-account rule). Rendered for
+             every symbol — a stock, fund, crypto, or commodity can all be
+             classified — and collapsed behind a toggle. The body ships
+             empty; stock.js builds the row inputs from JSON so nothing
+             static can masquerade as saved data. -->
+        <div class="card classification-card" id="classification-card">
+            <button class="card-toggle" id="classification-toggle" type="button"
+                    aria-expanded="false" aria-controls="classification-body">
+                <span class="toggle-marker" aria-hidden="true"></span>
+                Allocation data
+            </button>
+            <div id="classification-body" hidden>
+                <p class="classification-note" id="classification-note">
+                    Enter this security's allocation mix by hand so the
+                    dashboard donut is accurate. Shared by every account.
+                </p>
+                <div class="classification-controls">
+                    <label for="classification-dimension">Dimension</label>
+                    <select id="classification-dimension">
+                        <option value="country">Country</option>
+                        <option value="sector">Sector</option>
+                        <option value="asset">Asset class</option>
+                    </select>
+                    <label for="classification-as-of">As of</label>
+                    <input type="date" id="classification-as-of">
+                </div>
+                <div id="classification-rows" class="classification-rows"></div>
+                <div class="classification-actions">
+                    <button type="button" class="btn-action"
+                            id="classification-add-row">Add row</button>
+                    <button type="button" class="btn-action"
+                            id="classification-save">Save</button>
+                    <button type="button" class="btn-action"
+                            id="classification-clear">Clear</button>
+                    <span class="action-error" id="classification-error"
+                          hidden></span>
+                    <span class="classification-status"
+                          id="classification-status" role="status"
+                          aria-live="polite"></span>
+                </div>
+            </div>
+        </div>
+
 {% endblock %}
 
 {% block scripts %}

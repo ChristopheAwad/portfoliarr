@@ -73,26 +73,53 @@ def test_donut_card_has_pagination_and_position_counter(client):
     assert 'id="alloc-dots"' in html
     assert 'id="alloc-position"' in html
     assert 'aria-live="polite"' in html
-    assert ">1 / 6<" in html
+    assert ">1 / 7<" in html
+
+
+def test_unclassified_note_element_exists(client):
+    """The donut card must have a container for the unclassified (#62) note,
+    distinct from the excluded note."""
+    html = _read_html(client)
+    assert 'id="alloc-unclassified"' in html
+
+
+def test_stock_page_has_classification_card(client):
+    """The stock page must ship the manual classification editor (#62)."""
+    html = _read_template("templates/stock.html")
+    assert 'id="classification-card"' in html
+    assert 'id="classification-dimension"' in html
+    assert 'id="classification-rows"' in html
+    assert 'id="classification-save"' in html
+    assert 'id="classification-clear"' in html
+
+
+def test_main_js_paints_unclassified_note(client):
+    """main.js must render the unclassified note and pass the field on every
+    dimension paint."""
+    src = _read_js("static/js/main.js")
+    assert "updateAllocUnclassified" in src
+    assert "function paintAllocation(slices, excluded, by = null" in src
+    assert "paintAllocation(entry.data.slices, entry.data.excluded, by," in src
+    assert "paintAllocation(data.slices, data.excluded, by, data.unclassified)" in src
 
 
 # ---------------------------------------------------------------------------
 # JS: ALLOCATION_VIEWS list (the source of truth for carousel order + labels)
 # ---------------------------------------------------------------------------
 
-def test_main_js_defines_six_allocation_views(client):
-    """main.js must define an ALLOCATION_VIEWS array with 6 entries —
-    the ticker view (null key, label from summary) plus 5 dimension views.
-    By Industry and By Exchange were CUT from the product (cryptic /
-    restates By Ticker at small-portfolio scale) — they must be gone from
-    the source both ways, the test_docker-style absent-assert."""
+def test_main_js_defines_seven_allocation_views(client):
+    """main.js must define an ALLOCATION_VIEWS array with 7 entries —
+    the ticker view (null key, label from summary) plus 6 dimension views
+    (By Asset Class arrived with #62). By Industry and By Exchange were CUT
+    from the product (cryptic / restates By Ticker at small-portfolio scale)
+    — they must be gone from the source both ways, the test_docker-style
+    absent-assert."""
     src = _read_js("static/js/main.js")
     assert "ALLOCATION_VIEWS" in src
-    # Must have 6 entries. We can't run JS, but we can count the objects
-    # in the array literal (each entry is {key: "..."..., label: "..."}).
     # Count label values as a proxy for the number of entries.
     for label in ["By Ticker", "By Sector", "By Country",
-                  "By Type", "By Cap Bucket", "By Currency"]:
+                  "By Type", "By Asset Class", "By Cap Bucket",
+                  "By Currency"]:
         assert label in src, (
             f"ALLOCATION_VIEWS must include a view labeled '{label}'"
         )
@@ -217,7 +244,7 @@ def test_stale_dimension_paints_its_cached_donut_first(client):
     first version only set a 'refreshing' note and left the PREVIOUS slide's
     donut on the canvas under the new label until the reply landed."""
     src = _read_js("static/js/main.js")
-    assert "paintAllocation(entry.data.slices, entry.data.excluded, by)" in src, \
+    assert "paintAllocation(entry.data.slices, entry.data.excluded, by," in src, \
         "fetchAllocDimension must repaint this dimension's cached payload " \
         "immediately, before any network wait"
     fetch = src.split("async function fetchAllocDimension(by)", 1)[1]

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portfoliarr — teaser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Instrument+Sans:wght@400..700&display=swap">
+<style>
+  :root{
+    --porcelain:#f7f7f5;
+    --ink:#171a20;
+    --ink-2:#5c6370;
+    --green:#047857;
+    --green-bright:#10b981;
+    --navy:#1c3a5e;
+    --line:#e5e4df;
+    --dark:#0c0f14;
+    --dark-2:#141a22;
+    --font:"Instrument Sans",Inter,-apple-system,BlinkMacSystemFont,sans-serif;
+    --display:"Fraunces",Georgia,"Times New Roman",serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1920px;height:1080px;overflow:hidden;background:#000}
+  body{font-family:var(--font);-webkit-font-smoothing:antialiased}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+
+  .scene{position:absolute;inset:0}
+
+  /* ---------- backgrounds ---------- */
+  #bgDark{background:
+      radial-gradient(1200px 800px at 20% 15%, rgba(16,185,129,.10), transparent 60%),
+      radial-gradient(1000px 700px at 85% 90%, rgba(28,58,94,.35), transparent 65%),
+      linear-gradient(160deg,#0b0e13,#0d1117 60%,#0a0d12)}
+  #bgLight{background:
+      radial-gradient(1400px 900px at 15% 0%, rgba(4,120,87,.06), transparent 60%),
+      radial-gradient(1200px 800px at 100% 100%, rgba(28,58,94,.06), transparent 60%),
+      var(--porcelain)}
+  #grid{position:absolute;inset:0;opacity:.5;pointer-events:none;
+    background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+    background-size:80px 80px}
+  #flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:60}
+  #vignette{position:absolute;inset:0;pointer-events:none;z-index:55;
+    background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.28) 100%);opacity:.0}
+
+  /* ---------- intro chart line ---------- */
+  #introWrap{position:absolute;inset:0;z-index:2}
+  #introSvg{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:visible}
+  #introGlow{filter:drop-shadow(0 0 22px rgba(16,185,129,.6))}
+  #tipDot{filter:drop-shadow(0 0 12px rgba(16,185,129,.95))}
+
+  /* ---------- kinetic type ---------- */
+  .mask{overflow:hidden;display:block}
+  .kicker{font-family:var(--font);font-weight:600;letter-spacing:.42em;
+    text-transform:uppercase;font-size:22px;color:var(--green-bright)}
+  #hook1,#hook2{position:absolute;left:150px;z-index:5}
+  #hook1{top:300px}
+  #hook2{top:430px}
+  .hook-line{font-family:var(--display);font-weight:600;line-height:.96;
+    font-size:150px;color:#f4f6f5;letter-spacing:-.02em}
+  .hook-line .g{color:var(--green-bright)}
+  #hook1 .hook-line{font-size:118px}
+
+  /* logo */
+  #logoBig{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:6}
+  #logoRow{display:flex;align-items:center;gap:26px}
+  #logoRow svg{filter:drop-shadow(0 0 24px rgba(16,185,129,.35))}
+  #wordmark{font-family:var(--display);font-weight:600;font-size:150px;
+    color:#f4f6f5;letter-spacing:-.03em;line-height:1}
+  #wordmark .a{color:var(--green-bright)}
+  #logoTick{font-family:var(--font);font-weight:500;font-size:30px;letter-spacing:.16em;
+    text-transform:uppercase;color:#9fb0bd;margin-top:34px}
+  #logoUnderline{height:5px;background:linear-gradient(90deg,var(--green),var(--green-bright));
+    border-radius:3px;margin-top:30px;width:0}
+
+  /* ---------- screens ---------- */
+  .screen{position:absolute;border-radius:20px;overflow:hidden;
+    background:#fff;box-shadow:0 40px 90px rgba(10,15,20,.28),0 10px 30px rgba(10,15,20,.16),
+      0 0 0 1px rgba(23,26,32,.06)}
+  .screen img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+
+  #dash{width:1240px;height:900px;left:300px;top:120px;z-index:3}
+  #dash img{object-position:top center}
+
+  #stock{width:1160px;height:790px;left:380px;top:270px;z-index:3}
+  #ledger{width:1160px;height:790px;left:380px;top:270px;z-index:3}
+  #mobile{width:300px;height:649px;left:1590px;top:310px;z-index:4;
+    border-radius:30px;box-shadow:0 30px 70px rgba(10,15,20,.30),0 0 0 1px rgba(23,26,32,.08)}
+  #mobile img{object-position:top center}
+
+  .cap{position:absolute;z-index:7}
+  .cap .cap-kicker{font-family:var(--font);font-weight:600;letter-spacing:.34em;
+    text-transform:uppercase;font-size:20px;color:var(--green)}
+  .cap .cap-title{font-family:var(--display);font-weight:600;font-size:82px;
+    color:var(--ink);letter-spacing:-.02em;line-height:1.02;margin-top:14px}
+  #capStock{left:392px;top:52px}
+  #capLedger{right:392px;top:52px;text-align:right}
+  #capLedger .cap-title,#capLedger .cap-kicker{text-align:right}
+
+  /* ---------- floating chips ---------- */
+  .chip{position:absolute;z-index:8;display:flex;align-items:center;gap:14px;
+    background:rgba(255,255,255,.92);backdrop-filter:blur(10px);
+    border-radius:16px;padding:18px 26px;
+    box-shadow:0 22px 50px rgba(10,15,20,.22),0 0 0 1px rgba(23,26,32,.06)}
+  .chip .dot{width:12px;height:12px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 0 5px rgba(4,120,87,.14)}
+  .chip .lbl{font-size:20px;font-weight:600;color:var(--ink);white-space:nowrap}
+  .chip .num{font-family:var(--display);font-weight:600;font-size:40px;color:var(--green);
+    letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+  .chip .sub{font-size:16px;color:var(--ink-2);letter-spacing:.02em}
+
+  /* ---------- feature cards ---------- */
+  #features{position:absolute;inset:0;z-index:6;display:flex;
+    align-items:center;justify-content:center;gap:34px}
+  .fcard{width:392px;height:430px;border-radius:24px;background:#fff;
+    box-shadow:0 34px 70px rgba(10,15,20,.16),0 0 0 1px rgba(23,26,32,.06);
+    padding:52px 44px;display:flex;flex-direction:column;justify-content:space-between}
+  .fcard .fnum{font-family:var(--font);font-weight:600;font-size:20px;
+    letter-spacing:.3em;color:var(--green)}
+  .fcard .ftitle{font-family:var(--display);font-weight:600;font-size:52px;
+    color:var(--ink);line-height:1.04;letter-spacing:-.02em}
+  .fcard .fdesc{font-size:23px;color:var(--ink-2);line-height:1.4}
+  .fcard .ficon{width:64px;height:64px;border-radius:16px;background:var(--green);
+    display:flex;align-items:center;justify-content:center;color:#fff}
+
+  /* ---------- endcard ---------- */
+  #end{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;z-index:6}
+  #endLogo{display:flex;align-items:center;gap:22px}
+  #endLogo svg{filter:drop-shadow(0 12px 26px rgba(4,120,87,.28))}
+  #endWord{font-family:var(--display);font-weight:600;font-size:132px;color:var(--ink);
+    letter-spacing:-.03em;line-height:1}
+  #endWord .a{color:var(--green)}
+  #endTag{font-family:var(--display);font-weight:500;font-style:italic;font-size:54px;
+    color:var(--ink);margin-top:34px;letter-spacing:-.01em}
+  #endUrl{font-family:var(--font);font-weight:600;letter-spacing:.36em;
+    text-transform:uppercase;font-size:22px;color:var(--ink-2);margin-top:40px}
+  #endBar{height:6px;width:0;border-radius:3px;margin-top:36px;
+    background:linear-gradient(90deg,var(--green),var(--green-bright))}
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="bgLight" class="scene" style="opacity:0"></div>
+  <div id="bgDark" class="scene"></div>
+  <div id="grid" style="opacity:0"></div>
+  <div id="vignette" style="opacity:0"></div>
+
+  <!-- intro chart line -->
+  <div id="introWrap">
+    <svg id="introSvg" viewBox="0 0 1920 1080" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#10b981" stop-opacity=".26"/>
+          <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path id="introArea" d="" fill="url(#fg)"/>
+      <g id="introGlow">
+        <path id="introPath" d="" fill="none" stroke="#10b981" stroke-width="7"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="1"/>
+      </g>
+      <circle id="tipDot" r="13" cx="-40" cy="-40" fill="#d1fae5"/>
+      <circle id="tipCore" r="7" cx="-40" cy="-40" fill="#10b981"/>
+    </svg>
+  </div>
+
+  <!-- hook 1 -->
+  <div id="hook1">
+    <div class="kicker mask" style="height:30px"><span class="anim" data-role="k1" style="display:block">Portfolio tracking</span></div>
+    <div class="mask" style="margin-top:22px"><span class="anim hook-line" data-role="h1" style="display:block">Markets<br>never stop.</span></div>
+  </div>
+
+  <!-- hook 2 -->
+  <div id="hook2">
+    <div class="mask"><span class="anim hook-line" data-role="h2" style="display:block">Neither does<br><span class="g">your edge.</span></span></div>
+  </div>
+
+  <!-- logo slam -->
+  <div id="logoBig">
+    <div id="logoRow" style="opacity:0">
+      <svg viewBox="0 0 24 24" width="132" height="132" aria-hidden="true">
+        <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none"
+              stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="#10b981"/>
+        <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="#059669"/>
+      </svg>
+      <div id="wordmark">Portfoli<span class="a">arr</span></div>
+    </div>
+    <div id="logoTick">Track every position. Every move.</div>
+    <div id="logoUnderline"></div>
+  </div>
+
+  <!-- dashboard -->
+  <div id="dash" class="screen" style="opacity:0">
+    <img src="portfoliarr-dashboard.png" alt="">
+  </div>
+  <div class="chip" id="chip1" style="left:42px;top:210px;opacity:0">
+    <span class="dot"></span><span class="lbl">Live markets</span>
+  </div>
+  <div class="chip" id="chip2" style="left:42px;top:640px;opacity:0">
+    <span class="num" data-count="69.41">+0.00%</span><span class="sub">total return</span>
+  </div>
+  <div class="chip" id="chip3" style="left:1575px;top:180px;opacity:0">
+    <span class="lbl">CAD &harr; USD</span>
+  </div>
+  <div class="chip" id="chip4" style="left:42px;top:425px;opacity:0">
+    <span class="dot"></span><span class="lbl">Watchlist</span>
+  </div>
+  <div id="mobile" class="screen" style="opacity:0">
+    <img src="portfoliarr-mobile.png" alt="">
+  </div>
+
+  <!-- stock + ledger cuts -->
+  <div class="cap" id="capStock" style="opacity:0">
+    <div class="cap-kicker anim" data-role="ck1">Every ticker</div>
+    <div class="cap-title anim" data-role="ct1">Drill into any<br>stock or ETF.</div>
+  </div>
+  <div id="stock" class="screen" style="opacity:0"><img src="portfoliarr-stock-detail.png" alt=""></div>
+  <div class="cap" id="capLedger" style="opacity:0">
+    <div class="cap-kicker anim" data-role="ck2">The ledger</div>
+    <div class="cap-title anim" data-role="ct2">Every trade,<br>logged &amp; realized.</div>
+  </div>
+  <div id="ledger" class="screen" style="opacity:0"><img src="portfoliarr-ledger.png" alt=""></div>
+
+  <!-- features -->
+  <div id="features">
+    <div class="fcard" data-f="0">
+      <div class="ficon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 6-8"/><path d="M15 7h4v4"/></svg></div>
+      <div><div class="fnum">01</div><div class="ftitle">Stocks, ETFs,<br>crypto &amp; FX</div></div>
+      <div class="fdesc">Anything Yahoo quotes, searchable and chartable.</div>
+    </div>
+    <div class="fcard" data-f="1">
+      <div class="ficon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 14h4"/></svg></div>
+      <div><div class="fnum">02</div><div class="ftitle">Web &amp;<br>Android</div></div>
+      <div class="fdesc">One app, your pocket or your desk.</div>
+    </div>
+    <div class="fcard" data-f="2">
+      <div class="ficon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+      <div><div class="fnum">03</div><div class="ftitle">History that<br>never goes stale</div></div>
+      <div class="fdesc">Live value, frozen costs, honest gains.</div>
+    </div>
+    <div class="fcard" data-f="3">
+      <div class="ficon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg></div>
+      <div><div class="fnum">04</div><div class="ftitle">Your books,<br>your people</div></div>
+      <div class="fdesc">Several portfolios. Separate accounts.</div>
+    </div>
+  </div>
+
+  <!-- endcard -->
+  <div id="end" style="opacity:0">
+    <div id="endLogo" style="opacity:0">
+      <svg viewBox="0 0 24 24" width="118" height="118" aria-hidden="true">
+        <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8" fill="none"
+              stroke="#047857" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="#047857"/>
+        <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="#065f46"/>
+      </svg>
+      <div id="endWord">Portfoli<span class="a">arr</span></div>
+    </div>
+    <div id="endTag" style="opacity:0">Your money, in focus.</div>
+    <div id="endBar"></div>
+    <div id="endUrl" style="opacity:0">Portfoliarr</div>
+  </div>
+
+  <div id="flash"></div>
+</div>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
+  const seg = (t,a,b)=>clamp((t-a)/(b-a),0,1);
+  const eOut = x=>1-Math.pow(1-x,3);
+  const eIn  = x=>x*x*x;
+  const eInOut = x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
+  const eBack = x=>{const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)};
+  const eBackSoft = x=>{const c1=.9,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)};
+  const lerp=(a,b,x)=>a+(b-a)*x;
+  const fade = (t,a,b,c,d)=>Math.min(seg(t,a,b),1-seg(t,c,d));
+
+  /* ---- intro chart path ---- */
+  const pts = (()=>{
+    const raw = [0,0, .05,-30, .1,10, .16,-60, .22,-40, .28,-95, .34,-70,
+      .40,-130, .46,-110, .52,-170, .58,-150, .64,-210, .70,-190, .76,-250,
+      .82,-235, .88,-290, .94,-270, 1,-320];
+    const p=[];
+    for(let i=0;i<raw.length;i+=2){
+      p.push([raw[i]*1920, 640 + raw[i+1]]);
+    }
+    return p;
+  })();
+  const dPath = 'M'+pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L ');
+  const introPath=$('#introPath'), introArea=$('#introArea');
+  introPath.setAttribute('d',dPath);
+  introArea.setAttribute('d',dPath+' L 1920 1080 L 0 1080 Z');
+  const totalLen = introPath.getTotalLength();
+  introPath.style.strokeDasharray = '1';
+  introPath.style.strokeDashoffset = '1';
+  introArea.style.opacity='0';
+
+  const tipDot=$('#tipDot'), tipCore=$('#tipCore');
+
+  /* ---- elements ---- */
+  const el = {
+    bgLight:$('#bgLight'), bgDark:$('#bgDark'), grid:$('#grid'), vign:$('#vignette'),
+    flash:$('#flash'), introWrap:$('#introWrap'),
+    hook1:$('#hook1'), hook2:$('#hook2'),
+    k1:$('[data-role=k1]'), h1:$('[data-role=h1]'), h2:$('[data-role=h2]'),
+    logoBig:$('#logoBig'), logoRow:$('#logoRow'), logoTick:$('#logoTick'), logoU:$('#logoUnderline'),
+    dash:$('#dash'), chip1:$('#chip1'), chip2:$('#chip2'), chip3:$('#chip3'), chip4:$('#chip4'),
+    mobile:$('#mobile'),
+    capStock:$('#capStock'), stock:$('#stock'), capLedger:$('#capLedger'), ledger:$('#ledger'),
+    ck1:$('[data-role=ck1]'), ct1:$('[data-role=ct1]'), ck2:$('[data-role=ck2]'), ct2:$('[data-role=ct2]'),
+    features:$('#features'), end:$('#end'), endLogo:$('#endLogo'), endTag:$('#endTag'),
+    endBar:$('#endBar'), endUrl:$('#endUrl')
+  };
+  const fcards=[...document.querySelectorAll('.fcard')];
+  const chipNum=$('#chip2 .num');
+
+  function reveal(t,a,b,dist){
+    const p=seg(t,a,b); const e=eOut(p);
+    return {p, y:(1-e)*dist, o:p};
+  }
+
+  window.seek = function(t){
+    /* ---------- backgrounds ---------- */
+    const lightOn = seg(t,3.42,3.7);
+    el.bgDark.style.opacity = String(1-lightOn);
+    el.bgLight.style.opacity = String(lightOn);
+    el.grid.style.opacity = String(.5*(1-lightOn));
+    el.vign.style.opacity = String(.0);
+
+    /* ---------- intro line ---------- */
+    const draw = clamp(eInOut(seg(t,0.15,1.35)),0,1);
+    introPath.style.strokeDashoffset = String(1-draw);
+    introArea.style.opacity = String(.9*draw);
+    if(draw<=0.001 || t>3.35){ tipDot.setAttribute('opacity','0'); tipCore.setAttribute('opacity','0'); }
+    else {
+      const pt = introPath.getPointAtLength(totalLen*draw);
+      tipDot.setAttribute('cx',pt.x); tipDot.setAttribute('cy',pt.y);
+      tipCore.setAttribute('cx',pt.x); tipCore.setAttribute('cy',pt.y);
+      tipDot.setAttribute('opacity','1'); tipCore.setAttribute('opacity','1');
+    }
+    // line fades out under the logo
+    el.introWrap.style.opacity = String(1-seg(t,2.0,2.5));
+
+    /* ---------- hook 1 ---------- */
+    {
+      const o = fade(t,0.28,0.62,0.95,1.12);
+      const y = lerp(70,0,eOut(seg(t,0.28,0.75)));
+      el.hook1.style.opacity=String(o);
+      el.hook1.style.transform=`translateY(${y}px)`;
+      el.k1.style.transform=`translateY(${lerp(120,0,eOut(seg(t,0.22,0.6)))}%)`;
+      el.h1.style.transform=`translateY(${lerp(115,0,eOut(seg(t,0.3,0.72)))}%)`;
+    }
+    /* ---------- hook 2 ---------- */
+    {
+      const o = fade(t,1.18,1.45,1.95,2.15);
+      el.hook2.style.opacity=String(o);
+      el.h2.style.transform=`translateY(${lerp(112,0,eOut(seg(t,1.18,1.6)))}%)`;
+    }
+
+    /* ---------- logo slam ---------- */
+    {
+      const o = fade(t,2.05,2.3,3.35,3.55);
+      el.logoBig.style.opacity=String(o);
+      const s = lerp(1.22,1,eBackSoft(seg(t,2.05,2.5)));
+      el.logoRow.style.transform=`scale(${s})`;
+      el.logoRow.style.opacity=String(seg(t,2.05,2.2));
+      el.logoTick.style.opacity=String(seg(t,2.45,2.75));
+      el.logoTick.style.transform=`translateY(${lerp(16,0,eOut(seg(t,2.45,2.8)))}px)`;
+      el.logoU.style.width = (lerp(0,460,eOut(seg(t,2.5,2.95))))+'px';
+    }
+
+    /* ---------- white flash on cut ---------- */
+    let fl = 0;
+    fl = Math.max(fl, 0.75*(1-seg(t,3.34,3.58))*(t>3.3?1:0));
+    el.flash.style.opacity=String(clamp(fl,0,0.85));
+
+    /* ---------- dashboard ---------- */
+    {
+      const o = fade(t,3.5,3.85,6.05,6.28);
+      const p = seg(t,3.5,4.6);
+      el.dash.style.opacity=String(o);
+      el.dash.style.transform=`translateY(${lerp(46,0,eOut(seg(t,3.5,4.2)))}px) scale(${lerp(1.06,1,eOut(p))})`;
+      el.dash.style.transformOrigin='50% 40%';
+    }
+    function chipIn(node,a,b,dx,dy){
+      const o = fade(t,a,a+0.28,6.05,6.28);
+      const e = eBackSoft(seg(t,a,a+0.55));
+      node.style.opacity=String(o);
+      node.style.transform=`translate(${lerp(dx,0,e)}px,${lerp(dy,0,e)}px) scale(${lerp(.86,1,e)})`;
+    }
+    chipIn(el.chip1,3.95,4.5,-60,-20);
+    chipIn(el.chip2,4.25,4.8,-60,20);
+    chipIn(el.chip3,4.55,5.1,60,-20);
+    chipIn(el.chip4,4.85,5.4,-60,20);
+    // count up
+    {
+      const cp = eOut(seg(t,4.3,5.2));
+      chipNum.textContent = '+'+(cp*69.41).toFixed(2)+'%';
+    }
+    // mobile device
+    {
+      const o = fade(t,4.5,4.85,6.05,6.28);
+      const e = eBackSoft(seg(t,4.5,5.15));
+      el.mobile.style.opacity=String(o);
+      el.mobile.style.transform=`translateY(${lerp(80,0,e)}px) scale(${lerp(.9,1,e)})`;
+      el.mobile.style.transformOrigin='50% 100%';
+    }
+
+    /* ---------- stock cut ---------- */
+    {
+      const o = fade(t,6.18,6.45,6.98,7.18);
+      const e = eOut(seg(t,6.18,6.9));
+      el.stock.style.opacity=String(o);
+      el.stock.style.clipPath = `inset(${lerp(100,0,e)}% 0 0 0 round 20px)`;
+      el.stock.style.transform=`translateY(${lerp(40,0,e)}px)`;
+      el.capStock.style.opacity=String(o);
+      el.ct1.style.transform=`translateY(${lerp(60,0,eOut(seg(t,6.3,6.95)))}px)`;
+      el.ck1.style.opacity=String(seg(t,6.3,6.6));
+    }
+    /* ---------- ledger cut ---------- */
+    {
+      const o = fade(t,7.0,7.25,7.72,7.92);
+      const e = eOut(seg(t,7.0,7.7));
+      el.ledger.style.opacity=String(o);
+      el.ledger.style.clipPath = `inset(0 0 ${lerp(100,0,e)}% 0 round 20px)`;
+      el.ledger.style.transform=`translateY(${lerp(-40,0,e)}px)`;
+      el.capLedger.style.opacity=String(o);
+      el.ct2.style.transform=`translateY(${lerp(60,0,eOut(seg(t,7.12,7.78)))}px)`;
+      el.ck2.style.opacity=String(seg(t,7.12,7.42));
+    }
+
+    /* ---------- features ---------- */
+    {
+      const sceneO = fade(t,7.78,8.05,8.72,8.95);
+      el.features.style.opacity=String(sceneO);
+      fcards.forEach((c,i)=>{
+        const a=7.72+i*0.09, b=a+0.45;
+        const e=eBackSoft(seg(t,a,b));
+        c.style.opacity=String(seg(t,a,a+0.2));
+        c.style.transform=`translateY(${lerp(90,0,e)}px) scale(${lerp(.94,1,e)})`;
+      });
+    }
+
+    /* ---------- endcard ---------- */
+    {
+      const o = seg(t,8.95,9.25);
+      el.end.style.opacity=String(o);
+      el.end.style.transform=`scale(${lerp(1.04,1,eOut(o))})`;
+      el.endLogo.style.opacity=String(seg(t,8.98,9.25));
+      el.endLogo.style.transform=`translateY(${lerp(30,0,eOut(seg(t,8.98,9.35)))}px)`;
+      el.endTag.style.opacity=String(seg(t,9.18,9.45));
+      el.endTag.style.transform=`translateY(${lerp(22,0,eOut(seg(t,9.18,9.5)))}px)`;
+      el.endBar.style.width=(lerp(0,300,eOut(seg(t,9.3,9.7))))+'px';
+      el.endUrl.style.opacity=String(seg(t,9.45,9.7));
+    }
+  };
+
+  window.seek(0);
+})();
+</script>
+</body>
+</html>

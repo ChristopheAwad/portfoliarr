@@ -16,7 +16,7 @@ import threading
 # by the request-timing hook in the LOGGING section below.
 import time
 import uuid
-from datetime import timedelta, timezone
+from datetime import date, timedelta, timezone
 from logging.config import dictConfig
 
 # ThreadPoolExecutor runs one callable across MANY OS threads and
@@ -271,12 +271,43 @@ DEFAULT_MARKET_CATEGORY = "north-america"
 # Currency/Country). Keys must match the frontend's ALLOCATION_VIEWS array
 # (locked by test_allocation_ui.py::test_js_dimension_keys_match_backend_whitelist).
 ALLOCATION_DIMENSIONS = {
-    "sector":   {"label": "By Sector",   "field": "sector"},
-    "country":  {"label": "By Country",  "field": "country"},
-    "type":     {"label": "By Type",     "field": "quote_type"},
-    "cap":      {"label": "By Cap Bucket", "field": "market_cap"},
-    "currency": {"label": "By Currency", "field": None},  # special: from quote
+    "sector":      {"label": "By Sector",      "field": "sector"},
+    "country":     {"label": "By Country",     "field": "country"},
+    "type":        {"label": "By Type",        "field": "quote_type"},
+    "asset_class": {"label": "By Asset Class", "field": "asset_mix"},
+    "cap":         {"label": "By Cap Bucket",  "field": "market_cap"},
+    "currency":    {"label": "By Currency",    "field": None},  # from quote
 }
+
+# Dimensions a person can classify by hand (#62). The key is the carousel/API
+# key; the value is the DB `classification_overrides.dimension` value. These
+# are the dimensions where a fund's look-through can be missing (country) or
+# not applicable (sector/asset of a non-equity instrument), so an override can
+# replace the n/a/Unknown wedge. `type`, `cap`, and `currency` stay derived.
+_OVERRIDE_DIM = {
+    "country": "country",
+    "sector": "sector",
+    "asset_class": "asset",
+}
+
+# Friendly display labels for Yahoo's quoteType codes (the By Type view).
+_QUOTE_TYPE_LABELS = {
+    "EQUITY": "Stock",
+    "ETF": "ETF",
+    "MUTUALFUND": "Mutual Fund",
+    "CRYPTOCURRENCY": "Crypto",
+    "FUTURE": "Future",
+    "CURRENCY": "Currency",
+    "INDEX": "Index",
+    "BOND": "Bond",
+}
+
+
+def _quote_type_label(quote_type):
+    """A human label for a Yahoo quoteType; Unknown when absent, else raw."""
+    if quote_type is None:
+        return "Unknown"
+    return _QUOTE_TYPE_LABELS.get(quote_type, quote_type)
 
 
 # ---------------------------------------------------------------------------
@@ -2697,6 +2728,122 @@ def _cap_bucket(market_cap_cad):
     return "Small"
 
 
+# The two synthetic wedge labels for dimensions where a holding cannot be
+# cleanly classified. `n/a` = the concept does not apply to the instrument
+# (a commodity fund has no country; crypto has no sector); `Unknown` = the
+# concept applies but Yahoo has no data (an ETF's country). Both are real,
+# visible slices and both are assignable from the manual-override editor,
+# so a wedge never silently drops a holding the way the old "excluded" path
+# did.
+NA_WEDGE = "n/a"
+UNKNOWN_WEDGE = "Unknown"
+
+
+def _override_parts(override):
+    """A stored override ({label: fraction}) as [(label, fraction)], or None.
+
+    Defensive: a non-numeric or non-positive entry is dropped so a corrupted
+    row can never inject a NaN weight into the donut.
+    """
+    if not override:
+        return None
+    parts = [
+        (label, float(fraction))
+        for label, fraction in override.items()
+        if isinstance(fraction, (int, float))
+        and not isinstance(fraction, bool)
+        and math.isfinite(fraction)
+        and fraction > 0
+    ]
+    return parts or None
+
+
+def _classify_holding(by, profile, override):
+    """Classify one holding for a wedge dimension.
+
+    Returns `(parts, reason)` where `parts` is a non-empty list of
+    `(label, fraction)` summing to 1, and `reason` is None when the holding
+    is fully classified or a human string when a wedge (n/a or Unknown) is
+    present. `by` is one of sector/country/asset_class/type; cap and currency
+    are handled directly by the route (no wedge, no override).
+
+    A manual `override` (a {label: fraction} dict, or None) always replaces
+    the whole result for that dimension.
+    """
+    override_parts = _override_parts(override)
+    if override_parts is not None:
+        return override_parts, None
+
+    quote_type = profile.get("quote_type")
+    asset_mix = profile.get("asset_mix")
+    sector_mix = profile.get("sector_mix")
+
+    if by == "type":
+        return [(_quote_type_label(quote_type), 1.0)], None
+
+    if by == "asset_class":
+        if asset_mix:
+            parts = [(label, w) for label, w in asset_mix.items()
+                     if isinstance(w, (int, float)) and not isinstance(w, bool)
+                     and math.isfinite(w) and w > 0]
+            if parts:
+                return parts, None
+        mapped = {
+            "EQUITY": "Stocks", "CRYPTOCURRENCY": "Crypto",
+            "FUTURE": "Commodities", "CURRENCY": "Cash", "BOND": "Bonds",
+        }.get(quote_type)
+        if mapped:
+            return [(mapped, 1.0)], None
+        return [(UNKNOWN_WEDGE, 1.0)], "no asset-class data"
+
+    if by == "country":
+        country = profile.get("country")
+        if country:
+            return [(country, 1.0)], None
+        if quote_type in ("ETF", "MUTUALFUND"):
+            pure_non_security = (
+                asset_mix is not None
+                and (asset_mix or {}).get("Stocks", 0) == 0
+                and (asset_mix or {}).get("Bonds", 0) == 0
+            )
+            if pure_non_security:
+                return [(NA_WEDGE, 1.0)], "country not applicable"
+            return [(UNKNOWN_WEDGE, 1.0)], "no country data"
+        if quote_type in ("CRYPTOCURRENCY", "FUTURE", "CURRENCY"):
+            return [(NA_WEDGE, 1.0)], "country not applicable"
+        return [(UNKNOWN_WEDGE, 1.0)], "no country data"
+
+    # by == "sector"
+    equity = (asset_mix or {}).get("Stocks", 0) > 0 or quote_type == "EQUITY"
+    if sector_mix:
+        # Yahoo's sector weights describe the EQUITY sleeve only. Scale by the
+        # fund's stock weight so a 60/40 fund puts 60% across sectors and the
+        # remaining 40% in an n/a (non-equity) wedge — never 100% on equities.
+        equity_fraction = (
+            (asset_mix or {}).get("Stocks", 0) if asset_mix is not None else 1.0
+        )
+        if equity_fraction <= 0:
+            return [(NA_WEDGE, 1.0)], "sector not applicable"
+        parts = [
+            (s, w * equity_fraction) for s, w in sector_mix.items()
+            if isinstance(w, (int, float)) and not isinstance(w, bool)
+            and math.isfinite(w) and w > 0
+        ]
+        if not parts:
+            return [(NA_WEDGE, 1.0)], "sector not applicable"
+        remainder = 1 - equity_fraction
+        if remainder > 1e-9:
+            parts.append((NA_WEDGE, remainder))
+            return parts, "sector not applicable to non-equity holdings"
+        return parts, None
+    sector = profile.get("sector")
+    if sector:
+        return [(sector, 1.0)], None
+    if equity:
+        return [(UNKNOWN_WEDGE, 1.0)], "no sector data"
+    return [(NA_WEDGE, 1.0)], "sector not applicable"
+
+
 @app.route("/api/portfolio/allocation")
 def portfolio_allocation():
     """Return per-dimension allocation slices for the donut carousel.
@@ -2704,20 +2851,28 @@ def portfolio_allocation():
     Query param `by` is a key in ALLOCATION_DIMENSIONS; defaults to
     "sector". Invalid key → 400 with the valid options. Shape of reply:
 
-        by          the dimension key ("sector", "currency", ...)
-        currency    "CAD" — all values are CAD
-        slices[]    value-desc, one per classified group:
-            key     the dimension value ("Technology", "USD", ...)
-            value   Σ net_qty × live price × rate for long positions
-                    in this group (CAD)
-            weight  value ÷ sum of all slice values
-        excluded[]  tickers that contribute to no slice:
-            ticker  the symbol
-            reason  human-readable: "couldn't be priced", "no sector
-                    data", "couldn't fetch profile", etc.
+        by              the dimension key ("sector", "currency", ...)
+        currency        "CAD" — all values are CAD
+        slices[]        value-desc, one per wedge:
+            key         the dimension value ("Technology", "USD", ...) or a
+                        synthetic "n/a"/"Unknown" wedge (#62)
+            value       Σ net_qty × live price × rate × the wedge's fraction
+                        for long positions in this group (CAD)
+            weight      value ÷ sum of all slice values
+        unclassified[]  tickers whose result includes an n/a/Unknown part
+                        (assignable via the manual-override editor), only
+                        for sector/country/asset_class:
+            ticker      the symbol
+            reason      "no country data", "sector not applicable", ...
+        excluded[]      tickers that contribute to no slice at all:
+            ticker      the symbol
+            reason      "couldn't be priced", "couldn't fetch profile", ...
 
-    Slices may be [] when every holding is excluded — that's honest, not
-    an error. Empty ledger → both slices and excluded are [].
+    A fund's value is split across its real composition (asset class, and
+    sector scaled to its equity sleeve); a missing or non-applicable
+    dimension becomes an n/a/Unknown wedge instead of silently dropping the
+    holding. Slices may be [] when every holding is excluded — that's
+    honest, not an error. Empty ledger → all three lists are [].
     """
     # Validate the dimension key BEFORE doing any work — the same
     # "fail early, fail friendly" pattern as portfolio_history's period
@@ -2743,10 +2898,10 @@ def portfolio_allocation():
         net_qty[symbol] = net_qty.get(symbol, 0) + sign * tx["qty"]
         currency_by_symbol.setdefault(symbol, tx["currency"])
 
-    # Empty ledger → empty slices, empty excluded.
+    # Empty ledger → empty slices, empty unclassified, empty excluded.
     if not net_qty:
         return jsonify({"by": by, "currency": "CAD",
-                        "slices": [], "excluded": []})
+                        "slices": [], "unclassified": [], "excluded": []})
 
     # ── PASS 2: price the priced slice in CAD ───────────────────────────
     # One quote per UNIQUE ticker, fetched in parallel — same pattern as
@@ -2837,12 +2992,24 @@ def portfolio_allocation():
             dimension=by,
         )
 
+    # ── PASS 2.7: manual overrides (assignable dimensions only) ─────────
+    # One query for the whole dimension — the table is tiny and install-wide.
+    # A stored override replaces the n/a/Unknown wedge for that symbol.
+    overrides = {}
+    if by in _OVERRIDE_DIM:
+        for row in db.get_classification_overrides(_OVERRIDE_DIM[by]):
+            overrides[row["symbol"]] = row["weights"]
+
     # ── PASS 3: classify + aggregate ────────────────────────────────────
-    # Walk every held ticker. Priced + classified → slice; otherwise →
-    # excluded with a reason. Profile lookups are already done in parallel
+    # Walk every held ticker. A priced long holding contributes value × each
+    # part's fraction (a fund splits across its composition). A holding that
+    # lands on an n/a/Unknown wedge is listed in `unclassified` so the UI can
+    # offer the manual editor. Profile lookups are already done in parallel
     # (pass 2.5); this loop only reads the resulting dict.
-    slices = {}    # {group_key: value}
-    excluded = []  # [{ticker, reason}]
+    slices = {}        # {label: value}
+    unclassified = []  # [{ticker, reason}] — n/a/Unknown wedges, assignable
+    excluded = []      # [{ticker, reason}] — cannot contribute at all
+    fund_degraded = 0  # profiles whose fund look-through fetch failed
 
     for symbol, held in net_qty.items():
         quote = quotes[symbol]
@@ -2870,58 +3037,66 @@ def portfolio_allocation():
                              "reason": "USDCAD rate unavailable"})
             continue
 
-        value_rate = live_rate if currency == "USD" else 1.0
-        position_value = held * quote["price"] * value_rate
-
-        # Long-only: a short is a bet against, not an allocation.
+        # Long-only: a short is a bet against, not an allocation. It earns
+        # neither a slice nor an unclassified/excluded entry.
         if held <= 0:
             continue
 
-        # Classify by the chosen dimension.
-        if profile_field is None:
-            # Currency dimension: group off the quote's currency directly.
-            group_key = currency
-        else:
-            # Profile dimensions: read the parallel-prefetched profile.
-            # None means its fetch failed (missing keys are illegal here —
-            # prefetch ran before exclusion, so any reached symbol HAS an
-            # entry; a profile legitimately lacking this field is handled
-            # below as "no X data", never as a fabricated value).
-            profile = profiles.get(symbol)
-            if profile is None:
+        value_rate = live_rate if currency == "USD" else 1.0
+        position_value = held * quote["price"] * value_rate
+
+        # Currency dimension classifies off the quote directly — zero extra
+        # network and no profile.
+        if by == "currency":
+            slices[currency] = slices.get(currency, 0.0) + position_value
+            continue
+
+        # Profile dimensions: `None` means the fetch failed (pass 2.5 ran
+        # before exclusion, so a symbol that got here HAS an entry). A failed
+        # fetch is excluded; a profile merely lacking a field is classified
+        # into an n/a/Unknown wedge, never fabricated.
+        profile = profiles.get(symbol)
+        if profile is None:
+            excluded.append({"ticker": symbol,
+                             "reason": "couldn't fetch profile"})
+            continue
+
+        # Fund look-through failures are logged as one aggregate warning,
+        # only for the dimensions that actually read the mixes.
+        if by in _OVERRIDE_DIM and profile.get("fund_degraded"):
+            fund_degraded += 1
+
+        # Cap dimension: bucket the market cap (convert USD → CAD).
+        if by == "cap":
+            mc = profile.get("market_cap")
+            if currency == "USD" and live_rate is not None and mc is not None:
+                mc = mc * live_rate
+            bucket = _cap_bucket(mc)
+            if bucket is None:
                 excluded.append({"ticker": symbol,
-                                 "reason": "couldn't fetch profile"})
+                                 "reason": "no market-cap data"})
                 continue
+            slices[bucket] = slices.get(bucket, 0.0) + position_value
+            continue
 
-            field_value = profile.get(profile_field)
+        parts, reason = _classify_holding(by, profile, overrides.get(symbol))
+        for label, fraction in parts:
+            slices[label] = slices.get(label, 0.0) + position_value * fraction
+        if reason is not None:
+            unclassified.append({"ticker": symbol, "reason": reason})
 
-            # Missing metadata: excluded with a reason, never fabricated.
-            if field_value is None:
-                excluded.append({
-                    "ticker": symbol,
-                    "reason": f"no {dimension['label'].lower().removeprefix('by ')} data",
-                })
-                continue
-
-            # Cap dimension: bucket the market cap (convert USD → CAD).
-            if by == "cap":
-                mc = profile.get("market_cap")
-                if currency == "USD" and live_rate is not None and mc is not None:
-                    mc = mc * live_rate
-                field_value = _cap_bucket(mc)
-                if field_value is None:
-                    excluded.append({"ticker": symbol,
-                                     "reason": "no market-cap data"})
-                    continue
-
-            group_key = field_value
-
-        slices[group_key] = slices.get(group_key, 0.0) + position_value
+    if fund_degraded:
+        app.logger.warning(
+            "event=market_fund_degraded request_id=%s operation=allocation "
+            "dimension=%s degraded=%d total=%d",
+            g.request_id, by, fund_degraded, len(net_qty),
+        )
 
     # ── PASS 4: build the response ──────────────────────────────────────
     # Sorted value-descending (biggest slice first — the donut's legend
-    # reads biggest-first). Weights divide by the sum of classified
-    # slices only: an excluded ticker's value never enters the denominator.
+    # reads biggest-first). Weights divide by the sum of classified slices
+    # (n/a/Unknown wedges included): an excluded ticker's value never enters
+    # the denominator.
     total = sum(slices.values())
     result_slices = [
         {"key": key, "value": value,
@@ -2931,13 +3106,169 @@ def portfolio_allocation():
     ]
 
     excluded.sort(key=lambda e: e["ticker"])
+    unclassified.sort(key=lambda e: e["ticker"])
 
     return jsonify({
         "by": by,
         "currency": "CAD",
         "slices": result_slices,
+        "unclassified": unclassified,
         "excluded": excluded,
     })
+
+
+# ---------------------------------------------------------------------------
+# MANUAL FUND CLASSIFICATION (#62) — install-wide overrides.
+#
+# Yahoo has no country/region breakdown for funds, and some dimensions do not
+# apply to some instruments (crypto has no sector). Rather than fabricate a
+# value, the donut shows an n/a/Unknown wedge; a signed-in person can replace
+# it with real weights from here. These rows are OBJECTIVE REFERENCE DATA (the
+# same global category as the market overview/search/stock detail), so they are
+# OWNERLESS and shared by every account — the documented exception to the
+# "every row belongs to one account" rule.
+#
+# The frontend edits ONE dimension at a time on the stock page. Validation is
+# route policy (the db layer stores what it is handed): dimensions are
+# whitelisted, labels bounded and unique case-insensitively, weights finite
+# 0–100 with at least one positive, and the surviving weights are normalized
+# to fractions before storage so the resolver never re-normalizes.
+# ---------------------------------------------------------------------------
+
+_CLASSIFICATION_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-=^]{1,20}$")
+_CLASSIFICATION_DIMENSIONS = frozenset(("country", "sector", "asset"))
+_MAX_OVERRIDE_LABELS = 50
+
+
+def _canonical_classification_symbol(raw):
+    """Uppercase + validate a ticker from the URL; None when invalid."""
+    symbol = (raw or "").strip().upper()
+    return symbol if _CLASSIFICATION_SYMBOL_RE.match(symbol) else None
+
+
+def _validated_override_weights(weights):
+    """Validate a {label: percent} mapping and normalize it to fractions.
+
+    Raises ValueError with a human message on any invalid input; the route
+    turns that into a 400. Zero-weight labels are dropped; if none survive
+    (or the total is not positive) the mapping is rejected.
+    """
+    if not isinstance(weights, dict) or not weights:
+        raise ValueError("weights must be a non-empty object")
+    normalized = {}
+    seen = set()
+    total = 0.0
+    for raw_label, raw_value in weights.items():
+        if not isinstance(raw_label, str):
+            raise ValueError("labels must be strings")
+        label = raw_label.strip()
+        if not label or len(label) > 40:
+            raise ValueError("labels must be 1–40 characters")
+        if label.casefold() in seen:
+            raise ValueError("labels must be unique")
+        seen.add(label.casefold())
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError("weights must be numbers")
+        value = float(raw_value)
+        if not math.isfinite(value) or value < 0 or value > 100:
+            raise ValueError("weights must be between 0 and 100")
+        if value > 0:
+            normalized[label] = value
+            total += value
+    if not normalized or total <= 0:
+        raise ValueError("at least one weight must be positive")
+    if len(normalized) > _MAX_OVERRIDE_LABELS:
+        raise ValueError(f"too many labels (max {_MAX_OVERRIDE_LABELS})")
+    return {label: value / total for label, value in normalized.items()}
+
+
+@app.route("/api/fund-classification/<symbol>", methods=["GET"])
+def get_fund_classification(symbol):
+    """Every stored override for one symbol: {dimension: {weights, ...}}."""
+    canonical = _canonical_classification_symbol(symbol)
+    if canonical is None:
+        return jsonify({"error": "invalid symbol"}), 400
+    overrides = {}
+    for row in db.get_classification_overrides(symbol=canonical):
+        overrides[row["dimension"]] = {
+            "weights": row["weights"],
+            "as_of": row["as_of"],
+            "updated_at": row["updated_at"],
+        }
+    return jsonify({"symbol": canonical, "overrides": overrides})
+
+
+@app.route("/api/fund-classification/<symbol>", methods=["PUT"])
+def put_fund_classification(symbol):
+    """Insert or replace one dimension's override for one symbol."""
+    canonical = _canonical_classification_symbol(symbol)
+    if canonical is None:
+        return jsonify({"error": "invalid symbol"}), 400
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "JSON body required"}), 400
+
+    dimension = body.get("dimension")
+    if (not isinstance(dimension, str)
+            or dimension.lower() not in _CLASSIFICATION_DIMENSIONS):
+        return jsonify({
+            "error": "dimension must be one of: asset, country, sector",
+        }), 400
+    dimension = dimension.lower()
+
+    try:
+        normalized = _validated_override_weights(body.get("weights"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    as_of = body.get("as_of")
+    if as_of is not None:
+        if not isinstance(as_of, str):
+            return jsonify({"error": "as_of must be an ISO date"}), 400
+        try:
+            date.fromisoformat(as_of)
+        except ValueError:
+            return jsonify({"error": "as_of must be an ISO date"}), 400
+
+    db.set_classification_override(canonical, dimension, normalized, as_of)
+    app.logger.info(
+        "event=classification_override_set request_id=%s symbol=%s "
+        "dimension=%s", g.request_id, canonical, dimension,
+    )
+    return jsonify({
+        "symbol": canonical,
+        "dimension": dimension,
+        "weights": normalized,
+        "as_of": as_of,
+    })
+
+
+@app.route("/api/fund-classification/<symbol>", methods=["DELETE"])
+def delete_fund_classification(symbol):
+    """Delete one dimension's override, or all of them when none is named."""
+    canonical = _canonical_classification_symbol(symbol)
+    if canonical is None:
+        return jsonify({"error": "invalid symbol"}), 400
+
+    dimension = request.args.get("dimension")
+    if dimension is None:
+        deleted = db.delete_classification_overrides(canonical)
+    else:
+        dimension = dimension.lower()
+        if dimension not in _CLASSIFICATION_DIMENSIONS:
+            return jsonify({
+                "error": "dimension must be one of: asset, country, sector",
+            }), 400
+        deleted = 1 if db.delete_classification_override(
+            canonical, dimension) else 0
+
+    app.logger.info(
+        "event=classification_override_deleted request_id=%s symbol=%s "
+        "dimension=%s deleted=%d",
+        g.request_id, canonical, dimension or "all", deleted,
+    )
+    return jsonify({"deleted": deleted})
 
 
 # JSON payload powering the live watchlist. One shape, two consumers:

@@ -673,6 +673,32 @@ query-string or symbol-level logging; restart loss accepted.
 
 ---
 
+### 62. Accurate Allocation for All Fund Types (look-through + manual classification)
+The donut misrepresents funds: Yahoo returns `country`, `sector`, and usually
+`marketCap` as null for ETFs/mutual funds, so they silently drop out of By
+Sector / By Country / By Cap. Read real fund look-through from yfinance
+`funds_data` (`asset_classes`, `sector_weightings`) and add a new By Asset
+Class view, splitting a fund's CAD value across its underlying classes and
+sectors. Where a concept does not apply the wedge is `n/a`; where data is
+missing it is `Unknown` — both are real, assignable slices. Any `n/a`/`Unknown`
+in the country, sector, or asset-class view can be replaced by an install-wide,
+user-entered classification (`classification_overrides` table + GET/PUT/DELETE
+`/api/fund-classification/<symbol>`) entered on the stock detail page. Yahoo has
+no fund country/region data, so a fund's country is `Unknown` (or `n/a` for
+pure commodity/crypto funds) until the user assigns it. Cap keeps its current
+excluded behavior. Detailed plan in `feature.md`.
+
+**Effort:** 4–6 days
+**Files:** `db.py`, `market_data.py`, `app.py`, `templates/index.html`,
+`templates/stock.html`, `static/js/main.js`, `static/js/stock.js`,
+`static/style.css`, `tests/test_fund_allocation.py` (new),
+`tests/test_fund_classification.py` (new), `tests/test_allocation.py`,
+`tests/test_allocation_ui.py`, `project-brief.md`
+**Depends on:** Nothing (extends the shipped #4 multi-dimension donut)
+**Status:** shipped 2026-10-16
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout
@@ -910,7 +936,8 @@ Tier 2 (all independent of each other):
   48. Broker-Specific CSV Import Maps ──┤
   51. Android Home-Screen Widget ───────┤
   59. Android Watchlist Widget (#51) ───┤
-  61. Performance Measurement ──────────┘
+  61. Performance Measurement ──────────┤
+  62. Fund Allocation Look-through ─────┘
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -946,6 +973,7 @@ For maximum compounding value:
 18. **Ledger Quick Sell** → prepares an exact full-position sale for review from the ledger row
 19. **Date-Aware Ledger Price Auto-Fill** → prices a logged transaction at its actual date
 4. **Sector Breakdown** → deeper allocation insight (shipped)
+62. **Fund Allocation Look-through** → ETF/fund pie charts stop dropping out; on-screen assignment for missing data
 5. **Cash Balance** → full portfolio picture
 6. **Dividend Tracking** → most-requested feature in any portfolio app
 46. **Stock-Split Adjustment** → keep quantity and cost honest through a split

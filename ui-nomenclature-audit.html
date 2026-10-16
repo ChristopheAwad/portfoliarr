@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UI Nomenclature Audit — Portfoliarr</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa3;
+    --accent: #6c8cff;
+    --green: #34d399;
+    --red: #f87171;
+    --orange: #fbbf24;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--text-dim); margin-bottom: 2rem; font-size: 0.95rem; }
+  h2 {
+    font-size: 1.3rem;
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.05rem; margin-top: 1.5rem; margin-bottom: 0.75rem; color: var(--accent); }
+  p, li { font-size: 0.95rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+  td { background: var(--bg); }
+  .cur { color: var(--red); font-family: monospace; }
+  .fix { color: var(--green); font-family: monospace; }
+  .note { color: var(--text-dim); font-style: italic; font-size: 0.85rem; }
+  .why { color: var(--orange); font-size: 0.85rem; margin-top: 0.25rem; }
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .badge-critical { background: rgba(248,113,113,0.15); color: var(--red); }
+  .badge-high { background: rgba(251,191,36,0.15); color: var(--orange); }
+  .badge-medium { background: rgba(167,139,250,0.15); color: var(--purple); }
+  .badge-low { background: rgba(107,140,255,0.15); color: var(--accent); }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+  }
+  .summary-card .num { font-size: 1.8rem; font-weight: 700; }
+  .summary-card .label { color: var(--text-dim); font-size: 0.85rem; }
+  .section { margin-bottom: 2rem; }
+  ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  li { margin-bottom: 0.4rem; }
+  code {
+    background: var(--surface);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
+    color: var(--accent);
+  }
+  .matrix-table td:nth-child(1) { font-weight: 600; white-space: nowrap; }
+  .priority-list { counter-reset: item; list-style: none; padding-left: 0; }
+  .priority-list li { counter-increment: item; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+  .priority-list li::before {
+    content: counter(item) ".";
+    font-weight: 700;
+    color: var(--accent);
+    margin-right: 0.5rem;
+  }
+  .file-ref { color: var(--text-dim); font-size: 0.8rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>UI Nomenclature Audit</h1>
+<p class="subtitle">Portfoliarr &mdash; Language &amp; terminology review against industry standards (Schwab, Fidelity, IBKR, Wealthsimple, Yahoo Finance, Bloomberg)</p>
+
+<div class="summary-grid">
+  <div class="summary-card">
+    <div class="num" style="color:var(--red)">7</div>
+    <div class="label">Critical (financial accuracy)</div>
+  </div>
+  <div class="summary-card">
+    <div class="num" style="color:var(--orange)">8</div>
+    <div class="label">High (inconsistencies)</div>
+  </div>
+  <div class="summary-card">
+    <div class="num" style="color:var(--purple)">13</div>
+    <div class="label">Medium (clarity &amp; polish)</div>
+  </div>
+  <div class="summary-card">
+    <div class="num" style="color:var(--accent)">7</div>
+    <div class="label">Low (nice-to-have)</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>1. <span class="badge badge-critical">Critical</span> Incorrect / Non-Standard Financial Terminology</h2>
+<!-- ============================================================ -->
+
+<h3>1.1 &ldquo;Total Gain&rdquo; / &ldquo;Day Gain&rdquo; &rarr; Should be &ldquo;P&amp;L&rdquo; or &ldquo;Return&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Total Gain</td><td class="fix">Total P&amp;L</td><td>ledger.html:220, preferences.html:42</td></tr>
+  <tr><td class="cur">Total Gain %</td><td class="fix">Total Return %</td><td>ledger.html:224, preferences.html:43</td></tr>
+  <tr><td class="cur">Day Gain</td><td class="fix">Day Change</td><td>ledger.html:227, preferences.html:44</td></tr>
+  <tr><td class="cur">Day Gain %</td><td class="fix">Day Change %</td><td>ledger.html:230, preferences.html:45</td></tr>
+</table>
+<p class="why">&ldquo;Gain&rdquo; implies only positive outcomes. The industry universally uses &ldquo;P&amp;L&rdquo; (Profit &amp; Loss), &ldquo;Return&rdquo;, or &ldquo;Gain/Loss&rdquo; to cover both directions. Schwab uses &ldquo;Day Change&rdquo; and &ldquo;Total Return&rdquo;.</p>
+
+<h3>1.2 &ldquo;Realized&rdquo; &rarr; Should be &ldquo;Realized P&amp;L&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Realized</td><td class="fix">Realized P&amp;L</td><td>ledger.html:288</td></tr>
+  <tr><td class="cur">Realized to date:</td><td class="fix">Realized P&amp;L to Date</td><td>ledger.html:268</td></tr>
+</table>
+
+<h3>1.3 &ldquo;Value&rdquo; column &rarr; Ambiguous</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Value</td><td class="fix">Market Value</td><td>ledger.html:217, preferences.html:41</td></tr>
+</table>
+<p class="why">&ldquo;Value&rdquo; alone is ambiguous &mdash; it could mean cost basis, market value, or intrinsic value. Schwab and Fidelity both use &ldquo;Market Value&rdquo;.</p>
+
+<h3>1.4 &ldquo;Qty&rdquo; &rarr; Should be &ldquo;Quantity&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Qty</td><td class="fix">Quantity</td><td>ledger.html:213, ledger.html:120, ledger.html:285, preferences.html:40</td></tr>
+</table>
+<p class="why">&ldquo;Qty&rdquo; is a database column name, not a user-facing label. Schwab uses &ldquo;Quantity&rdquo;, Robinhood uses &ldquo;Shares&rdquo;.</p>
+
+<h3>1.5 &ldquo;Avg cost&rdquo; &rarr; &ldquo;Avg. Cost&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Avg cost</td><td class="fix">Avg. Cost</td><td>ledger.html:286</td></tr>
+</table>
+
+<h3>1.6 &ldquo;Sell price&rdquo; &rarr; &ldquo;Sale Price&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Sell price</td><td class="fix">Sale Price</td><td>ledger.html:286</td></tr>
+</table>
+
+<h3>1.7 &ldquo;52W Range&rdquo; &rarr; Non-standard abbreviation</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">52W Range</td><td class="fix">52-Wk Range</td><td>stock.html:116</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>2. <span class="badge badge-high">High</span> Inconsistent Vocabulary</h2>
+<!-- ============================================================ -->
+
+<h3>2.1 &ldquo;Ledger&rdquo; page heading says &ldquo;Transactions&rdquo;</h3>
+<p>The nav says <code>Ledger</code> but the page &lt;h3&gt; says <code>Transactions</code> (ledger.html:33). The page heading should match the nav item.</p>
+<p class="note">Recommendation: Change &lt;h3&gt;Transactions&lt;/h3&gt; to &lt;h3&gt;Ledger&lt;/h3&gt;.</p>
+
+<h3>2.2 &ldquo;Log&rdquo; vs &ldquo;Record&rdquo; vs &ldquo;Add&rdquo;</h3>
+<table>
+  <tr><th>Context</th><th>Current</th><th>Recommendation</th></tr>
+  <tr><td>Submit button (new tx)</td><td class="cur">Log</td><td class="fix">Record</td></tr>
+  <tr><td>Watchlist add</td><td>+ Add</td><td>OK</td></tr>
+  <tr><td>Stock page button</td><td>Log Transaction</td><td class="fix">Record Transaction</td></tr>
+</table>
+<p class="why">&ldquo;Log&rdquo; is informal. Financial apps use &ldquo;Record&rdquo;, &ldquo;Add&rdquo;, or &ldquo;Submit&rdquo;.</p>
+
+<h3>2.3 Privacy toggle text inconsistency</h3>
+<table>
+  <tr><th>Page</th><th>Current</th><th>Recommendation</th></tr>
+  <tr><td>Dashboard</td><td class="cur">Hide portfolio values</td><td class="fix">Hide values / Show values</td></tr>
+  <tr><td>Ledger</td><td class="cur">Hide holding values</td><td class="fix">Hide values / Show values</td></tr>
+</table>
+
+<h3>2.4 &ldquo;Show USD in USD&rdquo; &rarr; Tautological</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Show USD in USD</td><td class="fix">Display in original currency</td><td>index.html:106, ledger.html:101</td></tr>
+</table>
+<p class="why">The tooltip explains it well but the label itself is redundant. &ldquo;Display in original currency&rdquo; is clearer.</p>
+
+<h3>2.5 Return vocabulary inconsistency</h3>
+<p>The closed sales table uses <code>Return %</code> (acceptable, Yahoo Finance style) but the ledger uses <code>Total Gain %</code>. Pick one vocabulary and use it everywhere.</p>
+<p class="note">Recommendation: Standardize on <code>Return %</code> everywhere (more standard in brokerage statements).</p>
+
+<h3>2.6 &ldquo;None (backend order)&rdquo; &rarr; Exposes implementation</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Used In</th></tr>
+  <tr><td class="cur">None (backend order)</td><td class="fix">Default (by date)</td><td>preferences.html:38</td></tr>
+</table>
+
+<h3>2.7 Stats grid abbreviation inconsistencies</h3>
+<table>
+  <tr><th>Current</th><th>Industry Standard</th><th>Used In</th></tr>
+  <tr><td class="cur">Div Yield</td><td class="fix">Dividend Yield</td><td>stock.html:120</td></tr>
+  <tr><td class="cur">Analyst Target</td><td class="fix">Target Price</td><td>stock.html:125</td></tr>
+  <tr><td class="cur">Rating</td><td class="fix">Analyst Rating</td><td>stock.html:126</td></tr>
+</table>
+
+<h3>2.8 &ldquo;Default sort&rdquo; &rarr; &ldquo;Default Sort Order&rdquo;</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Used In</th></tr>
+  <tr><td class="cur">Default sort</td><td class="fix">Default Sort Order</td><td>preferences.html:31</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>3. <span class="badge badge-medium">Medium</span> Clarity &amp; Polish</h2>
+<!-- ============================================================ -->
+
+<h3>3.1 Stats grid &mdash; more precise labels</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Used In</th></tr>
+  <tr><td class="cur">Prev Close</td><td class="fix">Previous Close</td><td>stock.html:114</td></tr>
+  <tr><td class="cur">50-Day Avg</td><td class="fix">50-Day MA</td><td>stock.html:122</td></tr>
+  <tr><td class="cur">200-Day Avg</td><td class="fix">200-Day MA</td><td>stock.html:123</td></tr>
+  <tr><td class="cur">Avg Volume</td><td class="fix">Avg. Volume</td><td>stock.html:124</td></tr>
+</table>
+<p class="note">&ldquo;MA&rdquo; = Moving Average, which is more precise than &ldquo;Avg&rdquo; in a charting context.</p>
+
+<h3>3.2 Error messages &mdash; remove HTTP status codes</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Used In</th></tr>
+  <tr><td class="cur">Could not add ${symbol} (HTTP ${status})</td><td class="fix">Unable to add ${symbol}. Please try again.</td><td>main.js:267</td></tr>
+  <tr><td class="cur">Could not save transaction (HTTP ${status})</td><td class="fix">Unable to save transaction. Please try again.</td><td>ledger.js:1191</td></tr>
+  <tr><td class="cur">Could not remove ${symbol} (HTTP ${status})</td><td class="fix">Unable to remove ${symbol}. Please try again.</td><td>stock.js:290</td></tr>
+  <tr><td class="cur">Preview failed (HTTP ${status})</td><td class="fix">Preview error. Please try again.</td><td>ledger.js:1343</td></tr>
+  <tr><td class="cur">Import failed (HTTP ${status})</td><td class="fix">Import error. Please try again.</td><td>ledger.js:1374</td></tr>
+</table>
+<p class="why">HTTP status codes are meaningless to users.</p>
+
+<h3>3.3 Error messages &mdash; remove server infrastructure references</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Files</th></tr>
+  <tr><td class="cur">Could not reach the server &mdash; is it running?</td><td class="fix">Unable to connect. Please check your connection and try again.</td><td>main.js, ledger.js, stock.js (8 occurrences)</td></tr>
+  <tr><td class="cur">Watchlist unavailable</td><td class="fix">Unable to load watchlist.</td><td>main.js:233</td></tr>
+  <tr><td class="cur">Ledger unavailable</td><td class="fix">Unable to load ledger.</td><td>ledger.js:1134</td></tr>
+  <tr><td class="cur">Closed sales unavailable</td><td class="fix">Unable to load closed sales.</td><td>ledger.js:1585</td></tr>
+  <tr><td class="cur">Search unavailable</td><td class="fix">Search is currently unavailable.</td><td>common.js:471</td></tr>
+  <tr><td class="cur">Unknown symbol &mdash; check the ticker</td><td class="fix">Symbol not found. Please verify the ticker.</td><td>stock.js:56</td></tr>
+</table>
+
+<h3>3.4 Empty states &mdash; should be instructional</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>File</th></tr>
+  <tr><td class="cur">Nothing here yet &mdash; click + Add</td><td class="fix">Your watchlist is empty. Add a ticker to get started.</td><td>main.js:112</td></tr>
+  <tr><td class="cur">No transactions yet &mdash; log your first above.</td><td class="fix">No transactions recorded yet. Use the form above to add one.</td><td>ledger.js:670</td></tr>
+  <tr><td class="cur">No open positions &mdash; enable &lsquo;Show closed positions&rsquo; in Preferences.</td><td class="fix">All positions are closed. Enable &ldquo;Show closed positions&rdquo; in Settings to see them.</td><td>ledger.js:730</td></tr>
+  <tr><td class="cur">No closed sales yet</td><td class="fix">No realized sales yet. Closed positions will appear here once sold.</td><td>ledger.js:1503</td></tr>
+  <tr><td class="cur">No matches</td><td class="fix">No results found.</td><td>common.js:466</td></tr>
+</table>
+
+<h3>3.5 &ldquo;txn&rdquo; / &ldquo;txns&rdquo; abbreviation</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>File</th></tr>
+  <tr><td class="cur">1 txn / 3 txns</td><td class="fix">1 transaction / 3 transactions</td><td>ledger.js:485</td></tr>
+</table>
+
+<h3>3.6 &ldquo;Main&rdquo; badge &rarr; unclear to new users</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>Used In</th></tr>
+  <tr><td class="cur">Main</td><td class="fix">Primary</td><td>index.html:66</td></tr>
+</table>
+
+<h3>3.7 Aria-labels &mdash; should describe the action</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>File</th></tr>
+  <tr><td class="cur">Hide portfolio values</td><td class="fix">Toggle portfolio visibility</td><td>index.html:73</td></tr>
+  <tr><td class="cur">Hide holding values</td><td class="fix">Toggle holding visibility</td><td>ledger.html:43</td></tr>
+  <tr><td class="cur">Sort direction</td><td class="fix">Toggle sort direction</td><td>preferences.html:34</td></tr>
+</table>
+
+<h3>3.8 Tooltip consistency</h3>
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>File</th></tr>
+  <tr><td class="cur">Couldn&rsquo;t price: ${tickers}</td><td class="fix">Unable to price: ${tickers}</td><td>main.js:542</td></tr>
+  <tr><td class="cur">Excludes ${tickers} &mdash; couldn&rsquo;t be priced</td><td class="fix">Excludes ${tickers} &mdash; pricing unavailable</td><td>main.js:551</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>4. <span class="badge badge-low">Low</span> Nice-to-Have Polish</h2>
+<!-- ============================================================ -->
+
+<table>
+  <tr><th>Current</th><th>Recommendation</th><th>File</th></tr>
+  <tr><td class="cur">Preferences</td><td>Consider &ldquo;Settings&rdquo; (more common in modern web apps)</td><td>base.html:135</td></tr>
+  <tr><td class="cur">Show closed positions</td><td class="fix">Include closed positions</td><td>preferences.html:61</td></tr>
+  <tr><td class="cur">Keep fully-sold positions visible in the ledger</td><td class="fix">Include positions that have been fully sold</td><td>preferences.html:62</td></tr>
+  <tr><td class="cur">Edit this transaction</td><td class="fix">Edit transaction</td><td>ledger.js:383</td></tr>
+  <tr><td class="cur">Delete this transaction</td><td class="fix">Delete transaction</td><td>ledger.js:388</td></tr>
+  <tr><td class="cur">Every row is logged as a BUY.</td><td class="fix">Every row is recorded as a Buy.</td><td>ledger.html:163</td></tr>
+  <tr><td class="cur">Portfolio Value (CAD)</td><td class="fix">Portfolio Value (CAD)</td><td>main.js:613</td></tr>
+</table>
+<p class="note">The last one is actually fine &mdash; included for completeness.</p>
+
+<!-- ============================================================ -->
+<h2>5. Consistency Matrix</h2>
+<!-- ============================================================ -->
+
+<table class="matrix-table">
+  <tr><th>Concept</th><th>Dashboard</th><th>Ledger</th><th>Stock</th><th>Preferences</th><th>Recommendation</th></tr>
+  <tr>
+    <td>Gain/Loss</td>
+    <td>Day Gain, Total Gain</td>
+    <td>Day Gain, Total Gain</td>
+    <td>(period change)</td>
+    <td>Day Gain, Total Gain</td>
+    <td class="fix">Day P&amp;L / Total Return</td>
+  </tr>
+  <tr>
+    <td>Privacy</td>
+    <td>Hide portfolio values</td>
+    <td>Hide holding values</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td class="fix">Hide values / Show values</td>
+  </tr>
+  <tr>
+    <td>Add action</td>
+    <td>+ Add</td>
+    <td>Log</td>
+    <td>Add to Watchlist</td>
+    <td>&mdash;</td>
+    <td class="fix">Add / Record</td>
+  </tr>
+  <tr>
+    <td>Currency</td>
+    <td>Show USD in USD</td>
+    <td>Show USD in USD</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td class="fix">Display in original currency</td>
+  </tr>
+  <tr>
+    <td>Empty state</td>
+    <td>Instructional</td>
+    <td>Instructional</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td>Make all instructional</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>6. Prioritized Change List</h2>
+<!-- ============================================================ -->
+
+<h3><span class="badge badge-critical">Must Fix</span> Financial Accuracy</h3>
+<ol class="priority-list">
+  <li><code>Total Gain</code> / <code>Day Gain</code> &rarr; <code>Total P&amp;L</code> / <code>Day P&amp;L</code> (or <code>Total Return</code> / <code>Day Change</code>)</li>
+  <li><code>Realized</code> &rarr; <code>Realized P&amp;L</code></li>
+  <li><code>Value</code> column &rarr; <code>Market Value</code></li>
+  <li>Unify return vocabulary: pick <code>Return %</code> OR <code>P&amp;L %</code>, use everywhere</li>
+  <li><code>52W Range</code> &rarr; <code>52-Wk Range</code></li>
+  <li><code>Qty</code> &rarr; <code>Quantity</code></li>
+  <li><code>Avg cost</code> &rarr; <code>Avg. Cost</code></li>
+</ol>
+
+<h3><span class="badge badge-high">Should Fix</span> Professional Polish</h3>
+<ol class="priority-list">
+  <li>Fix &ldquo;Ledger&rdquo; page heading <code>Transactions</code> &rarr; <code>Ledger</code></li>
+  <li><code>Log</code> button &rarr; <code>Record</code></li>
+  <li>Remove HTTP status codes from error messages</li>
+  <li><code>None (backend order)</code> &rarr; <code>Default (by date)</code></li>
+  <li><code>Show USD in USD</code> &rarr; <code>Display in original currency</code></li>
+  <li><code>Div Yield</code> &rarr; <code>Dividend Yield</code></li>
+  <li><code>Analyst Target</code> &rarr; <code>Target Price</code></li>
+  <li><code>Default sort</code> &rarr; <code>Default Sort Order</code></li>
+</ol>
+
+<h3><span class="badge badge-medium">Nice to Have</span> Polish</h3>
+<ol class="priority-list">
+  <li>Improve all empty state messages to be instructional</li>
+  <li>Remove &ldquo;is it running?&rdquo; from all network errors</li>
+  <li><code>txn</code>/<code>txns</code> &rarr; <code>transaction</code>/<code>transactions</code></li>
+  <li><code>Rating</code> &rarr; <code>Analyst Rating</code></li>
+  <li><code>Main</code> badge &rarr; <code>Primary</code> or remove</li>
+  <li>Unify privacy toggle: <code>Hide values</code> / <code>Show values</code></li>
+  <li><code>Show closed positions</code> &rarr; <code>Include closed positions</code></li>
+</ol>
+
+</body>
+</html>
