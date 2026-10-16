@@ -1396,7 +1396,9 @@ function updateAllocExcluded(excluded) {
             (e) => `${e.ticker}\u2009\u2014\u2009${e.reason}`
         );
         allocExcludedEl.textContent = `Excludes ${parts.join("; ")}`;
-        allocExcludedEl.style.display = "";
+        // "block", not "": the .alloc-excluded class sets display:none as the
+        // pre-JS default, and clearing the inline style would fall back to it.
+        allocExcludedEl.style.display = "block";
     } else {
         allocExcludedEl.textContent = "";
         allocExcludedEl.style.display = "none";
@@ -1422,7 +1424,7 @@ function updateAllocUnclassified(unclassified) {
             link.title = `${entry.reason} — set it on the stock page`;
             allocUnclassifiedEl.append(link);
         });
-        allocUnclassifiedEl.style.display = "";
+        allocUnclassifiedEl.style.display = "block";
     } else {
         allocUnclassifiedEl.replaceChildren();
         allocUnclassifiedEl.style.display = "none";
