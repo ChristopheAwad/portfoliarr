@@ -100,6 +100,8 @@ def test_allocation_notes_use_block_display(client):
     src = _read_js("static/js/main.js")
     assert 'allocUnclassifiedEl.style.display = "block"' in src
     assert 'allocExcludedEl.style.display = "block"' in src
+    assert 'allocUnclassifiedEl.style.display = "none"' in src
+    assert 'allocExcludedEl.style.display = "none"' in src
 
 
 def test_main_js_paints_unclassified_note(client):
