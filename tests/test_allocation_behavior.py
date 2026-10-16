@@ -69,6 +69,7 @@ def test_excluded_note_updates_and_clears_on_portfolio_change():
     js.eval('updateAllocExcluded([{ticker:"AAA",reason:"no sector data"}])')
     assert "AAA" in js.eval("allocExcludedEl.textContent")
     assert "no sector data" in js.eval("allocExcludedEl.textContent")
+    assert js.eval("allocExcludedEl.style.display") == "block"
     js.eval("updateAllocExcluded([])")
     assert js.eval("allocExcludedEl.textContent") == ""
     assert js.eval("allocExcludedEl.style.display") == "none"
@@ -76,6 +77,28 @@ def test_excluded_note_updates_and_clears_on_portfolio_change():
     switch = src.split('document.addEventListener("portfoliochange", () => {', 1)[1]
     assert "updateAllocExcluded([])" in switch
     assert 'setAllocState("loading")' in switch
+
+
+def test_unclassified_note_updates_and_clears():
+    js = _engine("updateAllocUnclassified", setup="""
+        var allocUnclassifiedEl = {
+            children: [], style: {display: 'none'},
+            replaceChildren: function () { this.children = []; },
+            append: function (n) { this.children.push(n); }
+        };
+        var document = {
+            createTextNode: function (t) { return {kind: 'text', text: t}; },
+            createElement: function () {
+                return {kind: 'link', href: '', textContent: '', title: ''};
+            }
+        };
+    """)
+    js.eval('updateAllocUnclassified([{ticker:"VEQT.TO",reason:"no country data"}])')
+    assert js.eval("allocUnclassifiedEl.style.display") == "block"
+    assert js.eval("allocUnclassifiedEl.children.length") > 0
+    js.eval("updateAllocUnclassified([])")
+    assert js.eval("allocUnclassifiedEl.style.display") == "none"
+    assert js.eval("allocUnclassifiedEl.children.length") == 0
 
 
 def test_ticker_summary_handles_unpriced_and_failed_refresh():
