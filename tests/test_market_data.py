@@ -68,7 +68,8 @@ def fake_yf(monkeypatch):
         def info(self):
             return state["info"]
 
-        def history(self, period=None, interval="1d", start=None, end=None):
+        def history(self, period=None, interval="1d", start=None, end=None,
+                    auto_adjust=None):
             # Record the unpacked PERIOD_MAP values so tests can prove the
             # mapping reaches yfinance intact. The start/end form is the
             # date-window fetch (get_fx_rate_on); record it distinctly.
@@ -420,15 +421,16 @@ def test_history_daily_bars_use_date_labels(fake_yf):
     assert ("AAPL", "1mo", "1d") in fake_yf.calls
 
 
-def test_history_intraday_bars_use_time_labels(fake_yf):
-    """The 1D button maps to 5-minute bars — labels become 'HH:MM' so the
-    x-axis stays readable."""
+def test_history_intraday_bars_use_datetime_labels(fake_yf):
+    """The 1D button maps to 5-minute bars — labels carry the DATE and
+    time, so the route knows which session the bars belong to and two
+    sessions cannot collide under one bare "09:30" key."""
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": [150.0, 151.0]},
         index=pd.to_datetime(["2026-08-31 09:30", "2026-08-31 09:35"]),
     )
     result = market_data.get_history("AAPL", "1D")
-    assert result == {"09:30": 150.0, "09:35": 151.0}
+    assert result == {"2026-08-31 09:30": 150.0, "2026-08-31 09:35": 151.0}
     assert ("AAPL", "1d", "5m") in fake_yf.calls
 
 
@@ -463,7 +465,9 @@ def test_history_skips_nan_intraday_bars(fake_yf):
             ["2026-08-31 09:30", "2026-08-31 09:35", "2026-08-31 09:40"]),
     )
     result = market_data.get_history("AAPL", "1D")
-    assert result == {"09:30": 150.0, "09:40": 151.5}
+    assert result == {
+        "2026-08-31 09:30": 150.0, "2026-08-31 09:40": 151.5,
+    }
 
 
 def test_history_all_nan_bars_yield_empty_dict(fake_yf):

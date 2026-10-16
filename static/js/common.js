@@ -1079,7 +1079,7 @@ const crosshairPlugin = {
 //
 // The backend's history replies label each bar with a plain string in
 // one of three fixed shapes (PERIOD_MAP's "label" format, market_data.py):
-//   1D   -> "09:30"             clock time (one trading day)
+//   1D   -> "2026-09-04 09:30"  date + time (one trading day)
 //   5D   -> "2026-09-04 14:30"  date + time (one day carries many bars)
 //   rest -> "2026-09-04"        date (one bar per day)
 // Painted verbatim, those strings crowd the axis — eight 16-character
@@ -1094,10 +1094,11 @@ const crosshairPlugin = {
 //     is the natural unit at that zoom, and the tooltip still has the
 //     exact day (1Y/5Y/MAX always; 3M/6M/1M flip across New Year);
 //   - a window inside one calendar year shows "Sep 4";
-//   - 5D shows the DATE at each day's FIRST bar only ("Sep 3", "Sep 4")
-//     — the Google Finance 5D look; across New Year it still reads
-//     "Dec 30, Jan 2" with no year needed (unambiguous in five days);
-//   - 1D passes its clock times straight through.
+//   - an intraday series with SEVERAL dates shows the DATE at each day's
+//     FIRST bar only ("Sep 3", "Sep 4") — the Google Finance 5D look (5D,
+//     or a 1D union across markets); across New Year it still reads
+//     "Dec 30, Jan 2" with no year needed;
+//   - an intraday series inside ONE date (1D) shows its clock times.
 // ---------------------------------------------------------------------------
 
 // Month number -> abbreviation. Our ISO labels carry months as "01".."12"
@@ -1120,9 +1121,8 @@ function tickTargetForWidth(width) {
 }
 
 // The two parseable shapes above, as anchored regexes. exec() hands
-// back capture groups to parse with; a label matching NEITHER (1D's
-// clock times, or anything malformed) parses to null and falls through
-// to pass-through. Anchored ($ at the end) so a weird label can't
+// back capture groups to parse with; a label matching NEITHER (anything
+// malformed) parses to null and falls through to pass-through. Anchored ($ at the end) so a weird label can't
 // partially match and get mangled — it passes through raw.
 const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -1166,8 +1166,8 @@ function stridedIndices(count, target) {
 // `target` = max labels to paint (from tickTargetForWidth).
 function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     // Parse every label ONCE. Date-ish shapes keep their parts as
-    // numbers plus a kind ("datetime" = 5D, "date" = daily); "time"
-    // labels and unparseable ones parse to null.
+    // numbers plus a kind ("datetime" covers 1D/5D intraday, "date" is
+    // daily); unparseable labels parse to null.
     const parsed = labels.map((label) => {
         let m = DATETIME_RE.exec(label);
         if (m) return { kind: "datetime", y: +m[1], mo: +m[2], d: +m[3] };
@@ -1184,11 +1184,21 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     const spansYears = firstYear !== undefined && lastYear !== undefined
         && firstYear !== lastYear;
 
-    // 5D: many bars per day, so the DAY is the story. Label a bar only
-    // at a day boundary — its date differs from the previous bar's (or
-    // it's the very first bar). Every other bar paints nothing.
+    // Date-time series (1D's 5-minute bars, 5D's 30-minute bars). Both now
+    // carry a date. A SINGLE date (1D) is a clock-face series: show times.
+    // MULTIPLE dates (5D, or a 1D union across markets) label each day
+    // boundary so the day — not the minute — is the story.
     if (parsed[0]?.kind === "datetime") {
         const axisText = labels.map(() => "");
+        const first = parsed.find(Boolean);
+        const singleDate = first && parsed.every((p) =>
+            p && p.y === first.y && p.mo === first.mo && p.d === first.d);
+        if (singleDate) {
+            for (const i of stridedIndices(parsed.length, target)) {
+                axisText[i] = labels[i].slice(11, 16);  // "YYYY-MM-DD HH:MM"
+            }
+            return axisText;
+        }
         const boundaries = [];
         for (let i = 0; i < parsed.length; i++) {
             const p = parsed[i];
@@ -1220,8 +1230,8 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
         return axisText;
     }
 
-    // 1D time series (or fully unparseable): pass the raw text through
-    // on the strided picks only.
+    // Fully unparseable labels: pass the raw text through on the strided
+    // picks only.
     const axisText = labels.map(() => "");
     for (const i of stridedIndices(parsed.length, target)) {
         axisText[i] = labels[i];
@@ -1320,6 +1330,19 @@ function oppositePositioner(items, eventPosition) {
 function historyRequestUrl(endpointUrl, period, benchmarkParam) {
     const separator = endpointUrl.includes("?") ? "&" : "?";
     return `${endpointUrl}${separator}period=${encodeURIComponent(period)}${benchmarkParam}`;
+}
+
+// Align the chart's comparison overlays with the picker after a FAILED
+// refresh: for each currently selected symbol reuse the painted reply's
+// data when it exists, otherwise mark the line unavailable. Pure — no DOM,
+// no chart — so a failed refresh can never leave a removed chip's line or
+// readout on screen, nor silently omit an added one.
+function reconcileOverlays(replyBenchmarks, pickerSymbols) {
+    const bySymbol = new Map(
+        (replyBenchmarks || []).map((b) => [b.symbol, b]));
+    return (pickerSymbols || []).map((symbol) =>
+        bySymbol.get(symbol)
+        || { symbol, values: null, error: "refresh failed" });
 }
 
 function setupTimeframeChart(
@@ -1943,8 +1966,9 @@ function setupTimeframeChart(
                         // Tooltip title: reformat the raw ISO label
                         // (e.g. "2026-09-13" or "2026-09-13 14:30")
                         // into human-friendly text ("Sep 13, 14:30" for
-                        // 5D; "Sep 13" for daily bars). 1D clock times pass
-                        // through as-is.
+                        // 1D/5D intraday; "Sep 13" for daily bars). The
+                        // date disambiguates a 1D union that spans two
+                        // sessions.
                         title(items) {
                             const raw = lastLabels[items[0].dataIndex] || "";
                             let m = DATETIME_RE.exec(raw);
@@ -2403,13 +2427,17 @@ function setupTimeframeChart(
             console.error("chart refresh failed:", err);
             // Initial-load failure: no chart ever painted, so the readout
             // must say "unavailable" rather than appear to load forever.
-            // A LATER failure keeps the old readout — the old chart and the
-            // old active timeframe button are still on screen, so the number
-            // must keep describing them. Only the latest visible request may
-            // report; a stale failure cannot blank a newer success.
-            if (!silent && visibleGeneration === visibleRequestGeneration
-                && lastReply === null) {
+            // A LATER failure keeps the old chart and its number — the old
+            // active timeframe button is still on screen — but the benchmark
+            // PICKER may have changed, so reconcile the overlays to match it
+            // (a removed chip must not leave its line; an added chip shows
+            // unavailable). Only the latest visible request may report; a
+            // stale failure cannot blank a newer success.
+            if (silent || visibleGeneration !== visibleRequestGeneration) return;
+            if (lastReply === null) {
                 emitPeriodSummary(period, null);
+            } else {
+                reconcileOverlaysOnFailure();
             }
         }
     }
@@ -2463,6 +2491,26 @@ function setupTimeframeChart(
                 ? values.slice(0, plotLabels.length)
                 : [];
         }
+    }
+
+    // After a FAILED visible refresh, the picker may have changed since the
+    // painted reply. Reconcile the overlays so the chart matches the chips:
+    // a removed chip's line and readout row disappear; an added chip shows
+    // an "unavailable" row. The primary line, buttons, current/requested
+    // period and the caches stay untouched (the pinned "keep the old chart
+    // on failure" policy).
+    function reconcileOverlaysOnFailure() {
+        const painted = Array.isArray(lastReply && lastReply.benchmarks)
+            ? lastReply.benchmarks : [];
+        const current = (getBenchmarks && getBenchmarks()) || [];
+        const paintedSymbols = painted.map((b) => b.symbol);
+        if (current.join(",") === paintedSymbols.join(",")) return;
+        const reconciled = reconcileOverlays(painted, current);
+        comparisonMode = reconciled.length > 0
+            && (chartNormalized === true || mode === "performance");
+        syncOverlayDatasets(comparisonMode ? reconciled : [], chart.data.labels);
+        renderComparisonReadout(comparisonReadoutIndex);
+        chart.update();
     }
 
     // Render the bottom comparison readout — the legend AND live
@@ -2735,6 +2783,12 @@ function setupTimeframeChart(
             // palette, then redraw scriptable overlay lines and the gradient.
             chart.data.datasets[0].borderColor =
                 CHART_COLORS[direction].line;
+            // The y-grid color is read from CSS ONCE at build time; a theme
+            // flip must re-read it here or the horizontal grid lines keep
+            // the old theme's color until a full page reload.
+            chart.options.scales.y.grid.color =
+                getComputedStyle(document.documentElement)
+                    .getPropertyValue("--border-subtle").trim();
             renderComparisonReadout(comparisonReadoutIndex);
             chart.update();
         },

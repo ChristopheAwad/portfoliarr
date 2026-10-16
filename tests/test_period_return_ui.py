@@ -228,13 +228,13 @@ def test_later_failure_preserves_previous_summary():
 def test_failed_request_is_generation_guarded():
     catch = _refresh_catch_body()
     emit_at = catch.index("emitPeriodSummary(period, null)")
-    guard_at = catch.index("visibleGeneration === visibleRequestGeneration")
+    guard_at = catch.index("visibleGeneration !== visibleRequestGeneration")
     assert guard_at < emit_at, "a stale failed request must not report unavailable"
 
 
 def test_silent_prefetch_failure_does_not_emit():
     catch = _refresh_catch_body()
-    assert "!silent" in catch
+    assert "if (silent ||" in catch
 
 
 # ---------------------------------------------------------------------------

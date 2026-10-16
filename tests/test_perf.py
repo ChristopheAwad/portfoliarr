@@ -180,7 +180,8 @@ def _fake_yf(state):
         def info(self):
             return state["info"]
 
-        def history(self, period=None, interval="1d", start=None, end=None):
+        def history(self, period=None, interval="1d", start=None, end=None,
+                    auto_adjust=None):
             return state["history"]
 
     return SimpleNamespace(Ticker=FakeTicker)

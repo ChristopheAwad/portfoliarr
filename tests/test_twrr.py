@@ -379,11 +379,15 @@ def test_1d_deferred_flow_flushes_at_symbol_first_bar(client, fake_market):
     today = date.today().isoformat()
     seed_transaction(ticker="AAPL", date=today, qty=10, currency="CAD")
     seed_transaction(ticker="MSFT", date=today, qty=10, currency="CAD")
-    fake_market.histories["AAPL"] = {"09:30": 100.0, "09:35": 110.0}
-    fake_market.histories["MSFT"] = {"10:00": 100.0}
+    fake_market.histories["AAPL"] = {
+        f"{today} 09:30": 100.0, f"{today} 09:35": 110.0,
+    }
+    fake_market.histories["MSFT"] = {f"{today} 10:00": 100.0}
 
     body = client.get("/api/portfolio/history?period=1D").get_json()
-    assert body["labels"] == ["09:30", "09:35", "10:00"]
+    assert body["labels"] == [
+        f"{today} 09:30", f"{today} 09:35", f"{today} 10:00",
+    ]
     assert body["values"] == [1000.0, 1100.0, 2100.0]
     assert body["costs"] == [2000.0, 2000.0, 2000.0]
     assert body["index_values"] == pytest.approx([100.0, 110.0, 110.0])
@@ -463,7 +467,9 @@ def test_1d_degenerates_to_simple_return(client, fake_market):
         10 @ 100 today; intraday closes 100→110 → index [100, 110]"""
     today = date.today().isoformat()
     seed_transaction(ticker="AAPL", date=today, qty=10, currency="CAD")
-    fake_market.histories["AAPL"] = {"09:30": 100.0, "09:35": 110.0}
+    fake_market.histories["AAPL"] = {
+        f"{today} 09:30": 100.0, f"{today} 09:35": 110.0,
+    }
 
     body = client.get("/api/portfolio/history?period=1D").get_json()
     assert body["index_values"] == pytest.approx([100.0, 110.0])
@@ -495,3 +501,80 @@ def test_values_and_costs_unchanged(client, fake_market):
     assert body["costs"] == [2000.0, 2000.0]
     assert body["index_values"] == [100.0, 107.5]
     assert body["twrr_pct"] == pytest.approx(7.5)
+
+
+# ── Leading zero bars: the chain starts at the first positive base ─────
+
+def twr(values, flows):
+    """Direct access to the pure chaining helper."""
+    return app_module._time_weighted_return(values, flows)
+
+
+def test_first_positive_base_skips_leading_zero_bars():
+    """A leading $0 bar (a cross-market holiday: the first held ticker
+    printed no bar, so only the OTHER market's date exists) must not null
+    the whole index. The chain starts at the first bar with a positive
+    value; that bar's flow is the base, exactly like bar 0's."""
+    index, pct = twr([0.0, 100.0, 110.0], [0.0, 100.0, 0.0])
+    assert index == pytest.approx([100.0, 110.0])
+    assert pct == pytest.approx(10.0)
+
+
+def test_first_positive_base_can_start_later():
+    index, pct = twr([0.0, 0.0, 100.0, 110.0], [0.0, 0.0, 100.0, 0.0])
+    assert index == pytest.approx([100.0, 110.0])
+    assert pct == pytest.approx(10.0)
+
+
+def test_all_zero_values_are_still_null():
+    assert twr([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]) == (None, None)
+
+
+def test_flows_before_the_base_bar_are_ignored():
+    """A flow recorded before the first positive base belongs to a base
+    that never entered the series; it must not affect the chain."""
+    index, pct = twr([0.0, 100.0, 110.0], [50.0, 100.0, 0.0])
+    assert index == pytest.approx([100.0, 110.0])
+    assert pct == pytest.approx(10.0)
+
+
+def test_one_positive_bar_leaves_nothing_to_chain():
+    assert twr([0.0, 5.0], [0.0, 5.0]) == (None, None)
+
+
+def test_truncation_still_applies_after_a_shifted_base():
+    """A later withdrawal that empties the base still truncates: only the
+    prices measured while the portfolio had a positive base are reported."""
+    index, pct = twr([0.0, 100.0, 110.0, 120.0], [0.0, 100.0, 0.0, 500.0])
+    assert index == pytest.approx([100.0, 110.0])
+    assert pct == pytest.approx(10.0)
+
+
+def test_bar_zero_base_behavior_is_unchanged():
+    index, pct = twr([100.0, 110.0], [100.0, 0.0])
+    assert index == pytest.approx([100.0, 110.0])
+    assert pct == pytest.approx(10.0)
+
+
+def test_cross_market_holiday_leading_zero_bar_still_computes_twr(
+        client, fake_market):
+    """End to end: the first held ticker has no bar on the first date (its
+    market was closed; the date came from the other market), so values[0]
+    is 0. The index must still be computed from the first positive bar."""
+    seed_transaction(ticker="AAPL", date="2026-11-27", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="RY.TO", date="2026-11-30", qty=10,
+                     currency="CAD", price=50.0)
+    fake_market.histories["AAPL"] = {
+        "2026-11-30": 100.0, "2026-12-01": 110.0,
+    }
+    fake_market.histories["RY.TO"] = {
+        "2026-11-27": 50.0, "2026-11-30": 52.0, "2026-12-01": 53.0,
+    }
+
+    body = client.get("/api/portfolio/history?period=1M").get_json()
+    assert body["labels"] == ["2026-11-27", "2026-11-30", "2026-12-01"]
+    assert body["values"][0] == 0.0
+    assert body["values"] == pytest.approx([0.0, 1520.0, 1630.0])
+    assert body["index_values"] == pytest.approx([100.0, 1630 / 1520 * 100])
+    assert body["twrr_pct"] == pytest.approx(110 / 1520 * 100)

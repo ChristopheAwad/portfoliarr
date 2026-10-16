@@ -855,21 +855,64 @@ def test_history_first_buy_after_window_yields_empty_chart(
 
 
 def test_history_intraday_prices_carry_in_past_holdings(client, fake_market):
-    """The 1D fix: the intraday chart prices the WHOLE current position at
-    today's bars — holdings bought on PAST days walk into today's window.
-    (Previously only transactions dated exactly today were applied, so a
-    portfolio bought last week plotted a flat zero line all day.)
+    """The 1D chart prices the WHOLE current position at today's bars —
+    holdings bought on PAST days walk into today's window. (Previously
+    only transactions dated exactly today were applied, so a portfolio
+    bought last week plotted a flat zero line all day.) With dated labels
+    every transaction applies at its own day's first bar, so yesterday's
+    and today's buys both land on today's first bar.
         10 bought yesterday + 2 today → today's first bar: 12 × 150.
     """
     today = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     seed_transaction(ticker="AAPL", date=yesterday, qty=10, currency="CAD")
     seed_transaction(ticker="AAPL", date=today, qty=2, currency="CAD")
-    fake_market.histories["AAPL"] = {"09:30": 150.0, "09:35": 151.0}
+    fake_market.histories["AAPL"] = {
+        f"{today} 09:30": 150.0, f"{today} 09:35": 151.0,
+    }
 
     body = client.get("/api/portfolio/history?period=1D").get_json()
-    assert body["labels"] == ["09:30", "09:35"]
+    assert body["labels"] == [f"{today} 09:30", f"{today} 09:35"]
     assert body["values"] == [12 * 150.0, 12 * 151.0]
+
+
+def test_history_closed_session_does_not_absorb_later_trades(
+        client, fake_market):
+    """Dated 1D labels: when Yahoo returns the PREVIOUS session (pre-open,
+    weekend, holiday), a later trade must NOT be stamped onto it. The
+    session stays honest; the trade waits for a real bar.
+        08-27 buy 10; 08-29 (Saturday) buy 5; the fetched 1D session is
+        Friday 08-28 → only the 08-27 holding is priced."""
+    seed_transaction(ticker="AAPL", date="2026-08-27", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="AAPL", date="2026-08-29", qty=5,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {
+        "2026-08-28 09:30": 100.0, "2026-08-28 09:35": 110.0,
+    }
+
+    body = client.get("/api/portfolio/history?period=1D").get_json()
+    assert body["labels"] == ["2026-08-28 09:30", "2026-08-28 09:35"]
+    assert body["values"] == [1000.0, 1100.0]   # 10 shares only
+
+
+def test_history_mixed_sessions_absorb_each_trade_on_its_own_day(
+        client, fake_market):
+    """Two markets with different sessions: the union keeps both days
+    distinct, and each trade applies at its OWN session's first bar (a
+    bare "09:30" key would have merged them)."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=1,
+                     currency="CAD")
+    seed_transaction(ticker="RY.TO", date="2026-08-31", qty=10,
+                     currency="CAD")
+    fake_market.histories["AAPL"] = {"2026-08-28 09:30": 100.0}
+    fake_market.histories["RY.TO"] = {"2026-08-31 09:30": 50.0}
+
+    body = client.get("/api/portfolio/history?period=1D").get_json()
+    assert body["labels"] == ["2026-08-28 09:30", "2026-08-31 09:30"]
+    # 08-28: AAPL only (RY bought later). 08-31: AAPL carries forward at
+    # 100 + RY 10×50 = 600.
+    assert body["values"] == [100.0, 600.0]
 
 
 def test_history_mixed_currencies_sum_in_cad(client, fake_market):
@@ -955,7 +998,7 @@ def test_history_nan_close_carries_forward_and_stays_strict_json(
         def __init__(self, symbol):
             self.symbol = symbol
 
-        def history(self, period=None, interval="1d"):
+        def history(self, period=None, interval="1d", auto_adjust=None):
             return {
                 "META": pd.DataFrame(
                     {"Close": [100.0, float("nan")]},
@@ -1018,13 +1061,14 @@ def test_history_missing_bar_carries_last_known_close(client, fake_market):
 # ── Gap-fill tests (test gap coverage feature) ────────────────────────
 
 def test_history_intraday_future_buy_returns_empty(client, fake_market):
-    """The intraday (1D) branch: a first buy dated in the FUTURE (after
-    today) means there is nothing to price today — same "empty chart, 200"
-    shape as the daily branch's future-date test, but exercising the
-    is_intraday=True code path at app.py:377-379."""
+    """A first buy dated in the FUTURE drops every fetched bar (nothing
+    has happened yet) — the same "empty chart, 200" shape as the daily
+    branch's future-date test."""
     seed_transaction(ticker="AAPL", date="2099-01-01", qty=1,
                      currency="CAD")
-    fake_market.histories["AAPL"] = {"09:30": 150.0, "09:35": 151.0}
+    fake_market.histories["AAPL"] = {
+        "2026-08-31 09:30": 150.0, "2026-08-31 09:35": 151.0,
+    }
 
     res = client.get("/api/portfolio/history?period=1D")
     assert res.status_code == 200

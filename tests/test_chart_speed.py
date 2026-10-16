@@ -75,7 +75,8 @@ def fake_yf(monkeypatch):
         def __init__(self, symbol):
             self.symbol = symbol
 
-        def history(self, period=None, interval="1d", start=None, end=None):
+        def history(self, period=None, interval="1d", start=None, end=None,
+                    auto_adjust=None):
             calls.append((self.symbol, period, interval))
             if state["fail"]:
                 raise ValueError("Yahoo is down (fake)")

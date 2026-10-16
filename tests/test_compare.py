@@ -213,9 +213,10 @@ def test_portfolio_empty_reused_held_benchmark_is_unavailable(
 
 def test_portfolio_future_intraday_keeps_benchmark_row(client, fake_market):
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    today = date.today().isoformat()
     seed_transaction(date=tomorrow)
-    fake_market.histories["AAPL"] = {"09:30": 100.0}
-    fake_market.histories["SPY"] = {"09:30": 400.0}
+    fake_market.histories["AAPL"] = {f"{today} 09:30": 100.0}
+    fake_market.histories["SPY"] = {f"{today} 09:30": 400.0}
     body = client.get(
         "/api/portfolio/history?period=1D&benchmark=SPY"
     ).get_json()

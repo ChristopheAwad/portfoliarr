@@ -241,3 +241,16 @@ def test_stock_js_listens_for_themechange():
     js = (PROJECT_ROOT / "static" / "js" / "stock.js").read_text()
     assert "themechange" in js, \
         "stock.js doesn't listen for themechange — chart won't repaint on toggle"
+
+
+def test_themechange_repaint_refreshes_grid_color():
+    """The y-grid color is read from CSS ONCE at chart build. The
+    themechange repaint path must re-read --border-subtle, or the
+    horizontal grid lines stay stuck in the old theme after a toggle."""
+    js = (PROJECT_ROOT / "static" / "js" / "common.js").read_text()
+    start = js.index("repaintComparisonReadout()")
+    body = js[start:js.index("updatePrevClose(val)", start)]
+    assert "--border-subtle" in body, \
+        "theme repaint never re-reads --border-subtle (grid color stays stale)"
+    assert "scales.y.grid.color" in body, \
+        "theme repaint never reassigns scales.y.grid.color"

@@ -223,7 +223,7 @@ def test_stock_history_nan_last_bar_is_dropped_end_to_end(client, monkeypatch):
         def __init__(self, symbol):
             pass
 
-        def history(self, period=None, interval="1d"):
+        def history(self, period=None, interval="1d", auto_adjust=None):
             return pd.DataFrame(
                 {"Close": [578.02, 592.85, float("nan")]},
                 index=pd.to_datetime(

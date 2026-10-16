@@ -214,26 +214,27 @@ def _first_positive_finite(*values):
 #              a chart that pops and one that grinds. Same trade Google
 #              Finance makes: the long-horizon view is about SHAPE, and
 #              a weekly line looks identical at this zoom).
-#   intraday — True ONLY for the single-day 1D view: the chart's
-#              x-labels are clock times ("09:30") and the portfolio
-#              route prices the WHOLE carried-in position at the
-#              session's first bar (a date-only ledger can't know the
-#              minute). 5D's 30m bars span MULTIPLE days, so they keep
-#              the daily-shaped ledger math — their labels carry the
-#              date, which sorts correctly against transaction dates.
+#   intraday — True ONLY for the single-day 1D view. Its labels carry
+#              clock times AND the date. The date is what keeps the
+#              portfolio route honest — a transaction applies at its own
+#              day's first bar, and two sessions (a closed market's
+#              previous day, or a different exchange's open day) can't
+#              collide under one bare "09:30" key. Retained as the
+#              explicit single-day marker (the route no longer reads it:
+#              every label is date-bearing, so one pointer rule serves
+#              every period).
 #   live     — True when the series includes TODAY's still-moving bar
 #              (1D and 5D): those cache entries expire at the short
 #              live TTL. Everything else is settled history (600s).
 #   label    — the strftime format for the x-axis labels get_history
-#              returns: "HH:MM" within 1D's single day, full
-#              "YYYY-MM-DD HH:MM" whenever one day carries SEVERAL bars
-#              (5D's 30-minute bars — bare dates would collide in the
-#              {label: price} dict and silently drop all but the day's
-#              last bar), plain "YYYY-MM-DD" for one-bar-per-day
-#              ranges.
+#              returns: full "YYYY-MM-DD HH:MM" whenever one day carries
+#              SEVERAL bars (1D's 5-minute and 5D's 30-minute bars —
+#              the date keeps same-day bars from colliding in the
+#              {label: price} dict and sorts against transaction dates),
+#              plain "YYYY-MM-DD" for one-bar-per-day ranges.
 PERIOD_MAP = {
     "1D":  {"period": "1d",  "interval": "5m",  "intraday": True,
-            "live": True,  "label": "%H:%M"},
+            "live": True,  "label": "%Y-%m-%d %H:%M"},
     "5D":  {"period": "5d",  "interval": "30m", "intraday": False,
             "live": True,  "label": "%Y-%m-%d %H:%M"},
     "1M":  {"period": "1mo", "interval": "1d",  "intraday": False,
@@ -967,9 +968,16 @@ def get_history(symbol, period_key):
     the same dict.
 
     The returned dict maps a plain-string label to that point's CLOSE
-    price (the standard "price at end of that bar"). The label SHAPE per
+    price (the standard "price at end of that bar"). The closes are RAW
+    (auto_adjust=False): the price the market printed that day, not a
+    dividend/split-adjusted stand-in — the ledger's quantities and costs
+    are raw facts too, so the chart's multiplication stays consistent.
+    The label SHAPE per
     timeframe comes straight from PERIOD_MAP's "label" format:
-      - 1D (single intraday day):  "HH:MM" ("09:30").
+      - 1D (single intraday day):  "YYYY-MM-DD HH:MM"
+        ("2026-10-16 09:30") — the date part keeps the route honest about
+        which session the bars belong to, and stops two sessions from
+        colliding under one bare "09:30" key in this dict.
       - 5D (30-minute bars, multi-day): "YYYY-MM-DD HH:MM"
         ("2026-08-31 09:30") — the date part is what keeps Monday's
         "09:30" from colliding with Tuesday's in this dict.
@@ -1012,9 +1020,16 @@ def get_history(symbol, period_key):
         return dict(entry["data"])  # cache hit: no network involved
 
     try:
+        # auto_adjust=False: the RAW close, not Yahoo's dividend/split-
+        # adjusted one. The ledger stores raw quantities and prices, and
+        # the chart multiplies quantity by close — mixing them with
+        # adjusted closes would show fake losses on dividend payers and a
+        # scale break across splits. Raw closes are also what the planned
+        # SPLIT rows (roadmap #46) need to fold correctly.
         df = yf.Ticker(symbol).history(
             period=timeframe["period"],
             interval=timeframe["interval"],
+            auto_adjust=False,
         )
     except Exception:
         perf.record("market.get_history",
@@ -1096,10 +1111,13 @@ def get_fx_rate_on(base, target, date_iso):
     started = time.perf_counter()
     d = date.fromisoformat(date_iso)
     try:
+        # auto_adjust=False for uniformity with the other reads: an FX
+        # pair has no dividends or splits, so this is a no-op in practice.
         df = yf.Ticker(f"{base}{target}=X").history(
             start=(d - timedelta(days=10)).isoformat(),
             end=(d + timedelta(days=1)).isoformat(),
             interval="1d",
+            auto_adjust=False,
         )
     except Exception:
         perf.record("market.get_fx_rate_on",
@@ -1154,10 +1172,14 @@ def get_price_on(symbol, date_iso):
     started = time.perf_counter()
     d = date.fromisoformat(date_iso)
     try:
+        # auto_adjust=False: the recorded price for a past ledger row is
+        # the RAW close — the price the market actually printed that day,
+        # not a dividend/split-adjusted stand-in.
         df = yf.Ticker(symbol).history(
             start=(d - timedelta(days=10)).isoformat(),
             end=(d + timedelta(days=1)).isoformat(),
             interval="1d",
+            auto_adjust=False,
         )
     except Exception:
         perf.record("market.get_price_on",

@@ -1328,13 +1328,22 @@ def _time_weighted_return(values, flows):
 
     `flows` is the net cash CONTRIBUTION absorbed at each bar (buys minus
     sells) — portfoliarr has no separate cash account, so transactions ARE
-    the cash movements. Bar 0's flow is DELIBERATELY ignored: it was
-    already inside V_0 (the route trims the axis to the first logged
-    investment, so the first buy IS bar 0), and removing it again would
-    double-report the first bar's return.
+    the cash movements. The BASE bar's flow is DELIBERATELY ignored: it
+    was already inside that base value (the route trims the axis to the
+    first logged investment, so the first buy is normally bar 0, and its
+    flow is part of V_0 — removing it again would double-report the first
+    bar's return). The base bar is bar 0, or the first bar with a positive
+    value when leading bars are $0 (see below).
 
     Honest degradation — never a confident-looking fake:
       * Fewer than two bars → (None, None): nothing to compare.
+      * Leading bars priced at $0 are SKIPPED. The first held ticker can
+        print no bar on the chart's first date (a cross-market holiday:
+        the date came from the other market), so V_0 is 0 with no base to
+        measure against. The chain starts at the first bar with a positive
+        value; that bar's own flow is part of its base, exactly like bar 0,
+        and any flow recorded before it is likewise ignored (it belongs to
+        a base that never entered the series).
       * A bar whose BASE (the previous value) is ≤ 0 ends the chain:
         that is the ledger's oversell fold gone net-short, a fully
         withdrawn portfolio, or nothing priced. The index is TRUNCATED to
@@ -1347,8 +1356,12 @@ def _time_weighted_return(values, flows):
     """
     if len(values) < 2:
         return None, None
+    # Skip leading $0 bars: the first positive value is the base.
+    start = next((i for i, value in enumerate(values) if value > 0), None)
+    if start is None or start == len(values) - 1:
+        return None, None
     index = [100.0]
-    for i in range(1, len(values)):
+    for i in range(start + 1, len(values)):
         prev = values[i - 1]
         post_flow_value = values[i] - flows[i]
         if prev <= 0 or post_flow_value <= 0:
@@ -1622,52 +1635,37 @@ Algorithm: walk every trading day in the range forward, keeping a
     if not labels:
         return empty_history_response(benchmark_errors)
 
-    # Intraday (1D) labels are times ("09:30"), not dates ("2026-08-31") —
-    # see get_history. So "which label applies which transaction" differs:
-    #   Daily bars: a transaction dated that DAY applies at that day's bar.
-    #   Intraday bars: the WHOLE current position — holdings carried in
-    #     from past days plus today's trades — applies at today's FIRST
-    #     bar. A date-only ledger can't know the exact minute of any
-    #     trade, so pricing the walked-in position at the open is the
-    #     honest, simple choice. (A portfolio bought last week is still
-    #     held today — pricing only TODAY's transactions painted a flat
-    #     zero line all day, which was a bug, not a statement.)
-    # Detect the case by PERIOD_MAP's explicit "intraday" flag (same dict
-    # that drove the fetch) — NO interval string-sniffing. This used to
-    # test `interval == "5m"`, which worked only while 1D was the sole
-    # intraday row; 5D's 30-minute bars span multiple days, so they keep
-    # the DAILY branch on purpose: their labels are "YYYY-MM-DD HH:MM",
-    # which still sorts correctly against "YYYY-MM-DD" transaction dates
-    # (a buy dated 2026-09-03 applies at 2026-09-03 09:30, that day's
-    # first bar — lexicographic compare is date compare here).
-    # Grab today's date once (same local-day rule the frontend's date
-    # input uses, so a "today" trade prices into today's intraday chart).
-    is_intraday = PERIOD_MAP[period]["intraday"]
-    label_date_today = date.today().isoformat()
+    # Every label now carries a DATE: intraday series (1D's 5-minute, 5D's
+    # 30-minute bars) use "YYYY-MM-DD HH:MM", daily/weekly/monthly use
+    # "YYYY-MM-DD" (see get_history). So "which label applies which
+    # transaction" is ONE rule for every period: a transaction applies at
+    # the FIRST bar whose date is on-or-before... i.e. at its own day's
+    # bar. A date-only ledger can't know the minute of a trade, so a
+    # same-day trade prices into that day's first intraday bar, and a
+    # weekend/holiday trade lands on the next trading bar (the pointer
+    # below). Lexicographic compare IS date compare, because a date string
+    # is a prefix of a datetime string ("2026-09-03" <= "2026-09-03 09:30").
+    # The old code treated 1D specially — it applied every transaction
+    # "on-or-before today" at the fetched session's first bar. That broke
+    # whenever the fetched session was NOT today (pre-open, weekends,
+    # holidays: Yahoo returns the previous session), stamping today's and
+    # the weekend's trades onto a day they did not happen. The dated
+    # labels removed the need for that branch entirely.
 
-    # START THE DAILY AXIS AT THE FIRST LOGGED INVESTMENT — not at the far
-    # edge of the fetch. Yahoo's "max" period reaches back to each
-    # ticker's IPO (an index bar to 1973...), and before the first buy
-    # the portfolio is genuinely worth 0 — plotting that pre-history
-    # stretched the MAX chart into decades of flat nothing before the
-    # real story begins. Daily labels are ISO "YYYY-MM-DD" strings, so
-    # lexicographic comparison IS date comparison, and the transaction
-    # list is sorted ascending — its first element carries the earliest
-    # date. Intraday labels are clock times and the 1D window is a single
-    # day: nothing to trim, but a first buy dated in the FUTURE still
-    # means there is nothing to price today (same "empty chart, 200"
-    # shape as the empty ledger above).
+    # START THE AXIS AT THE FIRST LOGGED INVESTMENT — not at the far edge
+    # of the fetch. Yahoo's "max" period reaches back to each ticker's IPO
+    # (an index bar to 1973...), and before the first buy the portfolio is
+    # genuinely worth 0 — plotting that pre-history stretched the MAX
+    # chart into decades of flat nothing before the real story begins.
+    # Every label is date-bearing and the transaction list is sorted
+    # ascending (its first element carries the earliest date), so the
+    # lexicographic keep is a date keep. A first transaction dated in the
+    # FUTURE drops every bar and yields the empty "200" shape (nothing has
+    # happened yet), the same as the empty ledger above.
     first_tx_date = transactions[0]["transaction_date"]
-    if is_intraday:
-        if first_tx_date > label_date_today:
-            return empty_history_response(benchmark_errors)
-    else:
-        labels = [label for label in labels if label >= first_tx_date]
-        if not labels:
-            # Every fetched bar predates the first logged investment —
-            # the live case being a future-dated transaction vs. the
-            # period's fixed window. Nothing plottable, not an error.
-            return empty_history_response(benchmark_errors)
+    labels = [label for label in labels if label >= first_tx_date]
+    if not labels:
+        return empty_history_response(benchmark_errors)
 
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
@@ -1782,51 +1780,31 @@ Algorithm: walk every trading day in the range forward, keeping a
     costs = []
     flows_by_label = {}  # label → net CAD cash contribution absorbed there
     pending_flows = {}   # symbol → flows absorbed BEFORE it first prices
-    tx_index = 0        # next un-applied daily transaction (advances through
-                        # the sorted list); unused in the intraday branch
-    today_applied = False  # intraday: have today's transactions been applied?
+    tx_index = 0        # next un-applied transaction (advances through
+                        # the date-sorted list)
     for label in labels:
         # Choose which transactions this label should absorb, then apply
-        # them BEFORE pricing (a buy today prices at today's close).
-        if is_intraday:
-            # Intraday facts: see the comment above — every transaction
-            # dated on-or-before today applies at the first bar of
-            # today's session, once: the position carried in from past
-            # days AND today's trades alike.
-            if not today_applied:
-                today_applied = True
-                for tx in transactions:
-                    if tx["transaction_date"] <= label_date_today:
-                        net_qty[tx["ticker"]] = (
-                            net_qty.get(tx["ticker"], 0)
-                            + (tx["qty"]
-                               if tx["transaction_type"] == "BUY" else -tx["qty"])
-                        )
-                        net_cost[tx["ticker"]] = (
-                            net_cost.get(tx["ticker"], 0.0)
-                            + tx_cad_cost(tx)
-                        )
-                        pending_flows[tx["ticker"]] = (
-                            pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
-                        )
-        else:
-            # Daily: transactions are sorted by date, so as long as the
-            # transaction's date is still on-or-before this label, it
-            # belongs to the position from here on. Apply it now (once)
-            # and advance.
-            while tx_index < len(transactions) \
-                    and transactions[tx_index]["transaction_date"] <= label:
-                tx = transactions[tx_index]
-                tx_index += 1
-                net_qty[tx["ticker"]] = net_qty.get(tx["ticker"], 0) + (
-                    tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
-                )
-                net_cost[tx["ticker"]] = (
-                    net_cost.get(tx["ticker"], 0.0) + tx_cad_cost(tx)
-                )
-                pending_flows[tx["ticker"]] = (
-                    pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
-                )
+        # them BEFORE pricing (a trade dated this bar's day prices at this
+        # bar). The list is sorted by date and every label carries a date,
+        # so the pointer applies each transaction at the first bar whose
+        # date is on-or-before it and never looks back: a Saturday buy
+        # lands on the next trading bar, a future-dated trade is never
+        # reached, and same-day trades apply at that day's first intraday
+        # bar. Order within a day does not matter (quantities and costs are
+        # netted before any bar is priced).
+        while tx_index < len(transactions) \
+                and transactions[tx_index]["transaction_date"] <= label:
+            tx = transactions[tx_index]
+            tx_index += 1
+            net_qty[tx["ticker"]] = net_qty.get(tx["ticker"], 0) + (
+                tx["qty"] if tx["transaction_type"] == "BUY" else -tx["qty"]
+            )
+            net_cost[tx["ticker"]] = (
+                net_cost.get(tx["ticker"], 0.0) + tx_cad_cost(tx)
+            )
+            pending_flows[tx["ticker"]] = (
+                pending_flows.get(tx["ticker"], 0.0) + tx_flow(tx)
+            )
 
         # Sum each ticker's held quantity × its close price at this label
         # (× the live rate for USD tickers — one CAD line). Non-USD/CAD

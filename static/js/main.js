@@ -1732,9 +1732,16 @@ document.addEventListener("portfoliochange", () => {
     setPortfolioUnavailable("Loading portfolio...");
     updateAllocExcluded([]);
     setAllocState("loading");
-    if (portfolioChartHandle) portfolioChartHandle.invalidate();
+    if (portfolioChartHandle) {
+        // invalidate() bumps the scope and clears the canvas; reload()
+        // refetches the CURRENTLY selected timeframe under the new scope
+        // (the cache key includes the scope, so no other ledger's data can
+        // be served). Using the boot default here would silently reset the
+        // user's chosen period on every portfolio switch.
+        portfolioChartHandle.invalidate();
+        portfolioChartHandle.reload();
+    }
     refreshPortfolioSummary();
-    refreshPortfolioChart();
     const view = ALLOCATION_VIEWS[allocViewIndex];
     if (view.key !== null) fetchAllocDimension(view.key);
 });

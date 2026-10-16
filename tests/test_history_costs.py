@@ -165,9 +165,9 @@ def test_oversell_negative_cost_is_honest(client, fake_market):
 # ── Intraday: walked-in cost applies at first bar ─────────────────────
 
 def test_intraday_1d_walked_in_cost_applies_at_first_bar(client, fake_market):
-    """The intraday (1D) branch: both a PAST buy and today's buy fold
-    into the cost at today's FIRST bar (the same first-bar application
-    as net_qty).  Cost then stays flat across the remaining bars.
+    """A PAST buy and today's buy fold into the cost at today's first bar
+    (each applies at its own day's first bar via the shared pointer). Cost
+    then stays flat across the remaining bars.
         past buy  10 @ 100    (CAD)
         today buy  2 @ 120    (CAD)
         cost = 1000 + 240 = 1240 at every bar"""
@@ -177,7 +177,9 @@ def test_intraday_1d_walked_in_cost_applies_at_first_bar(client, fake_market):
                      currency="CAD")
     seed_transaction(ticker="AAPL", date=today, qty=2,
                      currency="CAD", price=120.0)
-    fake_market.histories["AAPL"] = {"09:30": 150.0, "09:35": 151.0}
+    fake_market.histories["AAPL"] = {
+        f"{today} 09:30": 150.0, f"{today} 09:35": 151.0,
+    }
 
     body = client.get("/api/portfolio/history?period=1D").get_json()
     # Cost = 10 × 100 (past) + 2 × 120 (today) = 1240, flat

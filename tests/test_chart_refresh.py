@@ -104,3 +104,15 @@ def test_silent_prefetch_does_not_reset_a_visible_ruler():
     visible = body.index("if (!silent) {")
     fetch_start = body.index("try {")
     assert visible < reset < fetch_start
+
+
+def test_portfolio_switch_keeps_the_selected_period():
+    """A portfolio change must refetch the CURRENTLY selected timeframe
+    (reload), not reset to the boot default. The cache key includes the
+    scope, so reload() cannot serve the old ledger's data."""
+    main = (ROOT / "static" / "js" / "main.js").read_text()
+    start = main.index('document.addEventListener("portfoliochange"')
+    handler = main[start:main.index("});", start)]
+    assert "portfolioChartHandle.invalidate()" in handler
+    assert "portfolioChartHandle.reload()" in handler
+    assert "refreshPortfolioChart()" not in handler

@@ -281,7 +281,8 @@ def fake_yf(monkeypatch):
         def info(self):
             return dict(state["info"])
 
-        def history(self, period=None, interval="1d", start=None, end=None):
+        def history(self, period=None, interval="1d", start=None, end=None,
+                    auto_adjust=None):
             if period is not None:
                 calls.append((self.symbol, period, interval))
             else:
