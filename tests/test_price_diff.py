@@ -10,7 +10,9 @@ end-to-end:
   3. the factory exposes a clearMeasurement method;
   4. refresh() clears the measurement state;
   5. the crosshair is suppressed while measuring;
-  6. native touch listeners are attached for mobile two-finger gestures.
+  6. native touch listeners are attached for mobile two-finger gestures;
+  7. the result box names both compared dates, chronological even when
+     the drag/finger order is reversed.
 
 The visual output (dashed line, label, circles) is out of scope — that's
 a browser concern.
@@ -298,6 +300,40 @@ def _hook_bodies(js: str, signature: str) -> list[str]:
         bodies.append(js[brace + 1:i - 1])
         start = i
     return bodies
+
+
+def price_diff_body() -> str:
+    """The priceDiff drawing hook: the afterDatasetsDraw body that owns the
+    measured endpoints and the diff text."""
+    bodies = _hook_bodies(common_js(), "afterDatasetsDraw(chart)")
+    matches = [b for b in bodies
+               if "measureStart" in b and "diffText" in b]
+    assert len(matches) == 1, (
+        "expected one priceDiff afterDatasetsDraw hook"
+    )
+    return matches[0]
+
+
+def test_measurement_box_shows_both_compared_dates():
+    """The box must name the two dates, formatted like the tooltip, with
+    the earlier date first no matter which way the gesture ran."""
+    body = price_diff_body()
+    assert "orderMeasurementPoints(measureStart, measureEnd)" in body
+    assert "const val1 = first.dataY;" in body
+    assert "const val2 = second.dataY;" in body
+    assert "labelsSpanYears(chart.data.labels)" in body
+    assert "formatBarDate(first.label, spansYears)" in body
+    assert "formatBarDate(second.label, spansYears)" in body
+    assert "const samePoint = first.dataIndex === second.dataIndex;" in body
+    assert "const dateText = samePoint" in body
+    assert "? formatBarDate(first.label, spansYears)" in body
+    assert "→" in body
+    assert "ctx.fillText(dateText" in body
+    assert "const boxH = 52;" in body
+    assert "#e5e7eb" in body
+    assert "Math.min(" in body
+    assert "right - left" in body
+    assert "9px sans-serif" in body
 
 
 def test_touch_ghost_guard_plugin_exists():

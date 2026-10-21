@@ -36,6 +36,14 @@ def tooltip_title_callback_body() -> str:
     return text[title_at:label_at]
 
 
+def format_bar_date_body() -> str:
+    """Return the shared date formatter that feeds the tooltip title."""
+    text = common_js()
+    start = text.index("function formatBarDate(")
+    end = text.index("function labelsSpanYears(", start)
+    return text[start:end]
+
+
 def tooltip_callback_bodies() -> tuple:
     """Return (title, label, footer, footerColor) callback sources in order.
 
@@ -116,10 +124,18 @@ def test_year_spanning_tooltip_keeps_exact_trading_date():
     The x-axis may use compact labels such as "Sep 2025", but the tooltip
     identifies one actual price point and must retain its day as well.
     """
-    body = tooltip_title_callback_body()
+    title = tooltip_title_callback_body()
+    assert 'lastLabels[items[0].dataIndex] || ""' in title
+    assert "return formatBarDate(raw, labelsSpanYears(lastLabels));" in title
+    for inline in ("find(", "findLast(", "slice(0, 4)",
+                   "`${monthDay", "validDateParts"):
+        assert inline not in title, (
+            f"date parsing must stay in formatBarDate, not the title: {inline}"
+        )
+    body = format_bar_date_body()
     assert "monthYear(p)" not in body
     assert "`${monthDay(p)}, ${p.y}`" in body
-    assert "validDateParts(mo, d)" in body
+    assert body.count("validDateParts") == 2
 
 
 def test_five_day_tooltip_keeps_the_exact_bar_time():
@@ -130,8 +146,9 @@ def test_five_day_tooltip_keeps_the_exact_bar_time():
         "/^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})$/;"
         in js
     )
-    body = tooltip_title_callback_body()
-    assert "`${monthDay(p)}, ${m[4]}:${m[5]}`" in body
+    title = tooltip_title_callback_body()
+    assert "formatBarDate(raw, labelsSpanYears(lastLabels))" in title
+    assert "`${monthDay(p)}, ${m[4]}:${m[5]}`" in format_bar_date_body()
 
 
 def test_comparison_tooltip_body_and_footer_are_date_only():
@@ -142,7 +159,8 @@ def test_comparison_tooltip_body_and_footer_are_date_only():
     callback keeps formatting the date.
     """
     title, label, footer, _ = tooltip_callback_bodies()
-    assert "monthDay" in title
+    assert "formatBarDate" in title
+    assert "monthDay" in format_bar_date_body()
     assert "if (comparisonMode) return [];" in label
     assert "if (comparisonMode) return [];" in footer
 

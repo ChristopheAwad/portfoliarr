@@ -49,6 +49,26 @@ def _ticks(labels, target):
     ))
 
 
+def _value(expression):
+    """Evaluate one pure helper expression and bring its value back as JSON.
+
+    String arguments must be passed with json.dumps so quotes/newlines cannot
+    break the JavaScript source.
+    """
+    js = _engine()
+    return json.loads(js.eval(f"JSON.stringify({expression})"))
+
+
+def _format_date(raw, spans_years):
+    return _value(
+        f"formatBarDate({json.dumps(raw)}, {str(spans_years).lower()})"
+    )
+
+
+def _spans_years(labels):
+    return _value(f"labelsSpanYears({json.dumps(labels)})")
+
+
 def test_single_date_intraday_shows_clock_times():
     """1D: one date, many 5-minute bars → time ticks, no date clutter."""
     labels = [
@@ -181,3 +201,52 @@ def test_invalid_calendar_parts_fall_back_to_raw_text():
     "undefined 40". Invalid parts parse as null, so the label passes
     through raw instead."""
     assert _ticks(["2026-13-40"], 6) == ["2026-13-40"]
+
+
+# The measurement ruler and the tooltip must format a bar date the same
+# way. These pin the shape on the shared helper so the two cannot drift.
+def test_format_bar_date_matches_tooltip_shapes():
+    assert _format_date("2026-09-04", False) == "Sep 4"
+    assert _format_date("2025-09-04", True) == "Sep 4, 2025"
+    assert _format_date("2026-09-04 09:30", False) == "Sep 4, 09:30"
+    assert _format_date("2026-09-04 09:30", True) == "Sep 4, 09:30"
+
+
+def test_format_bar_date_passes_bad_shapes_through():
+    assert _format_date("junk", True) == "junk"
+    assert _format_date("", True) == ""
+    assert _format_date("2026-13-40", True) == "2026-13-40"
+    assert _format_date("2026-13-40 09:30", True) == "2026-13-40 09:30"
+
+
+def test_labels_span_years_only_counts_dates():
+    """Only daily date labels can add a year. Intraday labels never show
+    one, so a 5D series across New Year must not trigger year formatting."""
+    assert _spans_years(["2025-09-04", "2026-09-04"]) is True
+    assert _spans_years(["2026-01-02", "2026-09-04"]) is False
+    assert _spans_years([]) is False
+    assert _spans_years(["junk", "2026-09-04"]) is False
+    assert _spans_years([None, "2026-09-04", "2027-01-02"]) is True
+    assert _spans_years(
+        ["2025-12-30 14:30", "2026-01-02 09:30"]
+    ) is False
+    assert _spans_years(
+        ["2026-09-04 09:30", "2026-09-04 15:30"]
+    ) is False
+
+
+def test_order_measurement_points_is_chronological():
+    """Dragging right-to-left must compare the earlier point first, so the
+    date range and the difference agree."""
+    assert _value(
+        'orderMeasurementPoints({dataIndex:5,label:"b"},'
+        '{dataIndex:2,label:"a"})[0].label'
+    ) == "a"
+    assert _value(
+        'orderMeasurementPoints({dataIndex:2,label:"a"},'
+        '{dataIndex:5,label:"b"})[0].label'
+    ) == "a"
+    assert _value(
+        'orderMeasurementPoints({dataIndex:2,label:"a"},'
+        '{dataIndex:2,label:"b"})[0].label'
+    ) == "a"

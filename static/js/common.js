@@ -1150,6 +1150,46 @@ function monthYear(p) {
     return `${MONTHS[p.mo - 1]} ${p.y}`;
 }
 
+// One raw backend bar label -> the app's human date text. This is the
+// SINGLE formatter for hover tooltips and the measurement ruler, so the two
+// cannot drift: daily bars omit the year inside one calendar year and add
+// it when the series spans years; intraday bars always show the time.
+// Anything malformed passes through raw, matching the axis fallback.
+function formatBarDate(raw, spansYears) {
+    let m = DATETIME_RE.exec(raw);
+    if (m) {
+        const p = { y: +m[1], mo: +m[2], d: +m[3] };
+        if (!validDateParts(p.mo, p.d)) return raw;
+        return `${monthDay(p)}, ${m[4]}:${m[5]}`;
+    }
+    m = DATE_RE.exec(raw);
+    if (m) {
+        const p = { y: +m[1], mo: +m[2], d: +m[3] };
+        if (!validDateParts(p.mo, p.d)) return raw;
+        return spansYears ? `${monthDay(p)}, ${p.y}` : monthDay(p);
+    }
+    return raw;
+}
+
+// Does a daily series cross a calendar year? Only DATE_RE labels count:
+// intraday labels never gain a year, so a 5D window across New Year must
+// stay year-free. Null/junk labels are skipped instead of breaking the scan.
+function labelsSpanYears(labels) {
+    const isDate = (label) =>
+        typeof label === "string" && DATE_RE.test(label)
+        && validDateParts(+label.slice(5, 7), +label.slice(8, 10));
+    const first = labels.find(isDate);
+    const last = labels.findLast(isDate);
+    return Boolean(first && last && first.slice(0, 4) !== last.slice(0, 4));
+}
+
+// A measurement is a comparison, not a direction: the earlier point comes
+// first no matter which way the user dragged or which finger landed first.
+// Equal indices keep their original order.
+function orderMeasurementPoints(a, b) {
+    return a.dataIndex <= b.dataIndex ? [a, b] : [b, a];
+}
+
 // Which bar indices get text when spreading `count` bars over the tick
 // target? Even stride from index 0, then the LAST index forced in — but
 // only when it sits at least half a stride away from the previous pick,
@@ -1646,7 +1686,8 @@ function setupTimeframeChart(
         }, {
             // ── Price-difference ruler ────────────────────────────────────
             // Draws a dashed line between two user-picked points with a
-            // floating label showing the price difference and % change.
+            // floating label naming both compared dates and showing the
+            // price difference and % change.
             // Desktop: mousedown → mousemove → mouseup.
             // Mobile: two-finger touch (touches[0] + touches[1]).
             id: "priceDiff",
@@ -1656,6 +1697,8 @@ function setupTimeframeChart(
                 const { left, right, top, bottom } = chart.chartArea;
                 const x1 = measureStart.x, y1 = measureStart.y;
                 const x2 = measureEnd.x, y2 = measureEnd.y;
+                const spansYears = labelsSpanYears(chart.data.labels);
+                const [first, second] = orderMeasurementPoints(measureStart, measureEnd);
 
                 // Vertical dashed lines at each point's X position,
                 // running from the chart bottom up to the data point.
@@ -1684,22 +1727,44 @@ function setupTimeframeChart(
                 ctx.fill();
 
                 // Price-difference label at the midpoint of the line.
-                const val1 = measureStart.dataY;
-                const val2 = measureEnd.dataY;
+                // first/second are chronological, so the date range and
+                // the sign agree even when the gesture ran right-to-left.
+                const val1 = first.dataY;
+                const val2 = second.dataY;
                 const diff = val2 - val1;
                 const pct = val1 !== 0 ? (diff / val1) * 100 : 0;
                 const sign = diff >= 0 ? "+" : "";
                 const diffText = `${sign}${formatPrice(diff)}`;
                 const pctText = `${sign}${pct.toFixed(2)}%`;
+                const samePoint = first.dataIndex === second.dataIndex;
+                const dateText = samePoint
+                    ? formatBarDate(first.label, spansYears)
+                    : `${formatBarDate(first.label, spansYears)} → ` +
+                      `${formatBarDate(second.label, spansYears)}`;
 
                 const midX = (x1 + x2) / 2;
                 const midY = (y1 + y2) / 2;
 
+                // Measure each line with the font it will be drawn in, so
+                // the widest line decides the box. The date falls back one
+                // pixel size on very narrow phones; the final box width is
+                // capped at the plot width so it cannot overflow the canvas.
                 ctx.font = "bold 12px sans-serif";
                 const diffW = ctx.measureText(diffText).width;
+                ctx.font = "11px sans-serif";
                 const pctW = ctx.measureText(pctText).width;
-                const boxW = Math.max(diffW, pctW) + 16;
-                const boxH = 38;
+                let dateFont = "10px sans-serif";
+                ctx.font = dateFont;
+                let dateW = ctx.measureText(dateText).width;
+                if (dateW + 16 > right - left) {
+                    dateFont = "9px sans-serif";
+                    ctx.font = dateFont;
+                    dateW = ctx.measureText(dateText).width;
+                }
+                const boxW = Math.min(
+                    Math.max(diffW, pctW, dateW) + 16, right - left
+                );
+                const boxH = 52;
                 const boxX = midX - boxW / 2;
                 const boxY = midY - boxH / 2;
 
@@ -1724,18 +1789,22 @@ function setupTimeframeChart(
                 ctx.fillStyle = "#1a1f36";
                 ctx.fill();
 
-                // Label text — green for gains, red for losses.
+                // Date range first, then the numbers. The date stays
+                // neutral; only the result wears the direction color.
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillStyle = "#e5e7eb";
+                ctx.font = dateFont;
+                ctx.fillText(dateText, clampedX + boxW / 2, clampedY + 13);
                 const positive = diff >= 0;
                 const color = getComputedStyle(document.documentElement)
                     .getPropertyValue(positive ? "--green-pos" : "--red-neg")
                     .trim();
                 ctx.fillStyle = color;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
                 ctx.font = "bold 12px sans-serif";
-                ctx.fillText(diffText, clampedX + boxW / 2, clampedY + 12);
+                ctx.fillText(diffText, clampedX + boxW / 2, clampedY + 28);
                 ctx.font = "11px sans-serif";
-                ctx.fillText(pctText, clampedX + boxW / 2, clampedY + 27);
+                ctx.fillText(pctText, clampedX + boxW / 2, clampedY + 43);
                 ctx.restore();
             },
             // Suppress the Chart.js tooltip while a ruler is moving or
@@ -2048,42 +2117,11 @@ function setupTimeframeChart(
                         // into human-friendly text ("Sep 13, 14:30" for
                         // 1D/5D intraday; "Sep 13" for daily bars). The
                         // date disambiguates a 1D union that spans two
-                        // sessions.
+                        // sessions. formatBarDate is the same formatter the
+                        // measurement ruler uses.
                         title(items) {
                             const raw = lastLabels[items[0].dataIndex] || "";
-                            let m = DATETIME_RE.exec(raw);
-                            if (m) {
-                                const mo = +m[2];
-                                const d = +m[3];
-                                if (!validDateParts(mo, d)) return raw;
-                                const p = { y: +m[1], mo, d };
-                                // 5D has several 30-minute bars per day.
-                                // Keep the exact bar time so those points do
-                                // not all appear to be the same observation.
-                                return `${monthDay(p)}, ${m[4]}:${m[5]}`;
-                            }
-                            m = DATE_RE.exec(raw);
-                            if (m) {
-                                const mo = +m[2];
-                                const d = +m[3];
-                                if (!validDateParts(mo, d)) return raw;
-                                const p = { y: +m[1], mo, d };
-                                // If the series spans two calendar years,
-                                // add the year without dropping the exact day.
-                                // The sparse x-axis may show only "Sep 2025"
-                                // or a bare year ("2025") on 5Y/MAX, but a
-                                // tooltip identifies one actual bar.
-                                const first = lastLabels.find(
-                                    (l) => DATE_RE.test(l));
-                                const last = lastLabels.findLast(
-                                    (l) => DATE_RE.test(l));
-                                const spansYears = first && last
-                                    && first.slice(0, 4) !== last.slice(0, 4);
-                                return spansYears
-                                    ? `${monthDay(p)}, ${p.y}`
-                                    : monthDay(p);
-                            }
-                            return raw;
+                            return formatBarDate(raw, labelsSpanYears(lastLabels));
                         },
                         // Same formatting rule as everywhere else in the
                         // app: the backend sends raw floats, the browser
