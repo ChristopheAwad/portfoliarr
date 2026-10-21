@@ -119,6 +119,7 @@ def test_year_spanning_tooltip_keeps_exact_trading_date():
     body = tooltip_title_callback_body()
     assert "monthYear(p)" not in body
     assert "`${monthDay(p)}, ${p.y}`" in body
+    assert "validDateParts(mo, d)" in body
 
 
 def test_five_day_tooltip_keeps_the_exact_bar_time():

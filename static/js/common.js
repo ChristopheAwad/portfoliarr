@@ -1090,9 +1090,14 @@ const crosshairPlugin = {
 // "backend sends data, the browser formats" rule applied to ticks.
 //
 // The format is keyed on the DATA, not on which button was clicked:
-//   - a window spanning >= 2 calendar years shows "Sep 2025" — the month
-//     is the natural unit at that zoom, and the tooltip still has the
-//     exact day (1Y/5Y/MAX always; 3M/6M/1M flip across New Year);
+//   - a window spanning 3+ calendar years shows only the YEAR ("2022") at
+//     the first bar of each year. 5Y's weekly and MAX's monthly bars cannot
+//     land on Jan 1, so a boundary is the first trading bar of the new year
+//     — a few days late by design. The partial first year is unlabeled, and
+//     the tooltip still has the exact day (5Y/MAX always);
+//   - a window spanning exactly 2 calendar years shows "Sep 2025" — the
+//     month is the natural unit at that zoom (1Y always; 3M/6M/1M flip
+//     across New Year);
 //   - a window inside one calendar year shows "Sep 4";
 //   - an intraday series with SEVERAL dates shows the DATE at each day's
 //     FIRST bar only ("Sep 3", "Sep 4") — the Google Finance 5D look (5D,
@@ -1127,6 +1132,14 @@ function tickTargetForWidth(width) {
 const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+// The regexes only check the SHAPE. Month 13 and day 40 have the right
+// digits but are not real calendar parts, and MONTHS[12] would print
+// "undefined". Such labels parse to null and take the raw-passthrough
+// path, the same forgiving treatment as any other malformed text.
+function validDateParts(mo, d) {
+    return mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+}
+
 // One parsed date-ish label -> short text. The numeric month/day also
 // strip the ISO leading zero ("Sep 04" would read wrong).
 function monthDay(p) {
@@ -1156,6 +1169,39 @@ function stridedIndices(count, target) {
     return picks;
 }
 
+// Multi-year windows (5Y/MAX) label YEARS, not months. A boundary is the
+// first bar after the year changes; index 0 is never one, because a 5Y
+// window starts mid-year and its partial first year is not worth a tick.
+// Null/malformed entries are skipped and compared against the nearest
+// prior parseable one, so a data gap cannot throw or invent a boundary.
+function yearBoundaryIndices(parsed) {
+    const boundaries = [];
+    let prev = null;
+    for (let i = 0; i < parsed.length; i++) {
+        const p = parsed[i];
+        if (!p) continue;
+        if (prev && p.y !== prev.y) boundaries.push(i);
+        prev = p;
+    }
+    return boundaries;
+}
+
+// Spread the year boundaries over the tick target. Unlike stridedIndices
+// (oldest-anchored), this walks BACKWARD from the newest boundary: on a
+// phone the current year must stay visible, and dropping it to keep 2019
+// would be the wrong trade. Deliberately not unified with stridedIndices.
+// A 5Y window has only five or six boundaries; the caller raises the
+// target so those are never thinned (a missing year reads as a data gap).
+function yearTickIndices(boundaries, target) {
+    if (!boundaries.length) return [];
+    const step = Math.max(1, Math.ceil(boundaries.length / target));
+    const picks = [];
+    for (let k = boundaries.length - 1; k >= 0; k -= step) {
+        picks.unshift(boundaries[k]);
+    }
+    return picks;
+}
+
 // Build the axis-text plan: one entry per label, "" meaning "paint
 // nothing on this bar". PURE — it reads only the labels array, which is
 // what lets the chart factory rebuild the plan before every redraw and
@@ -1170,19 +1216,33 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     // daily); unparseable labels parse to null.
     const parsed = labels.map((label) => {
         let m = DATETIME_RE.exec(label);
-        if (m) return { kind: "datetime", y: +m[1], mo: +m[2], d: +m[3] };
+        if (m) {
+            const mo = +m[2];
+            const d = +m[3];
+            return validDateParts(mo, d)
+                ? { kind: "datetime", y: +m[1], mo, d } : null;
+        }
         m = DATE_RE.exec(label);
-        if (m) return { kind: "date", y: +m[1], mo: +m[2], d: +m[3] };
+        if (m) {
+            const mo = +m[2];
+            const d = +m[3];
+            return validDateParts(mo, d)
+                ? { kind: "date", y: +m[1], mo, d } : null;
+        }
         return null;
     });
 
-    // The year-span flag: do the first and last PARSEABLE labels sit in
-    // different calendar years? This is what makes the "Sep 4" vs
-    // "Sep 2025" choice data-driven — no per-button special cases.
+    // The year-span flags: first/last PARSEABLE labels decide the format —
+    // no per-button special cases.
+    //   spansYears -> month + year ("Sep 2025") for 1Y and cross-year shorts.
+    //   yearSpan >= 2 -> bare years ("2022") for 5Y/MAX. Exactly two
+    //   calendar years (diff 1) stays on month + year.
     const firstYear = parsed.find(Boolean)?.y;
     const lastYear = parsed.findLast(Boolean)?.y;
     const spansYears = firstYear !== undefined && lastYear !== undefined
         && firstYear !== lastYear;
+    const yearSpan = firstYear !== undefined && lastYear !== undefined
+        ? lastYear - firstYear : 0;
 
     // Date-time series (1D's 5-minute bars, 5D's 30-minute bars). Both now
     // carry a date. A SINGLE date (1D) is a clock-face series: show times.
@@ -1195,18 +1255,21 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
             p && p.y === first.y && p.mo === first.mo && p.d === first.d);
         if (singleDate) {
             for (const i of stridedIndices(parsed.length, target)) {
+                if (!parsed[i]) continue;
                 axisText[i] = labels[i].slice(11, 16);  // "YYYY-MM-DD HH:MM"
             }
             return axisText;
         }
         const boundaries = [];
+        let prev = null;
         for (let i = 0; i < parsed.length; i++) {
             const p = parsed[i];
-            const prev = i > 0 ? parsed[i - 1] : null;
+            if (!p) continue;
             if (!prev || prev.y !== p.y || prev.mo !== p.mo
                 || prev.d !== p.d) {
                 boundaries.push(i);
             }
+            prev = p;
         }
         // Five trading days give ~5 boundaries — under the target, so
         // this thinning is purely defensive: if the shape ever yields
@@ -1219,10 +1282,22 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
         return axisText;
     }
 
-    // Daily bars (one per day): sparse stride, "Sep 4" or "Sep 2025".
+    // Daily bars (one per day): multi-year -> bare years at year
+    // boundaries; otherwise sparse stride, "Sep 4" or "Sep 2025".
     if (parsed[0]?.kind === "date") {
         const axisText = labels.map(() => "");
+        if (yearSpan >= 2) {
+            // Bare years are short, and 5Y must not skip one: keep at
+            // least six year slots even when the width target is 3.
+            const yearTarget = Math.max(target, 6);
+            for (const i of yearTickIndices(
+                yearBoundaryIndices(parsed), yearTarget)) {
+                axisText[i] = `${parsed[i].y}`;
+            }
+            return axisText;
+        }
         for (const i of stridedIndices(parsed.length, target)) {
+            if (!parsed[i]) continue;
             axisText[i] = spansYears
                 ? monthYear(parsed[i])
                 : monthDay(parsed[i]);
@@ -1902,6 +1977,11 @@ function setupTimeframeChart(
             // otherwise Chart.js locks in its own width:height ratio.
             responsive: true,
             maintainAspectRatio: false,
+            // A tick label is centered on its tick. The newest year sits
+            // almost at the plot's right edge on MAX, so half a 4-digit
+            // label would paint past the canvas on a phone. This padding
+            // gives that label room at the cost of 16px of plot width.
+            layout: { padding: { right: 16 } },
             // The hover contract: mode "index" snaps to the nearest x slot
             // and intersect: false means the cursor does NOT have to touch
             // a point — the readout follows you anywhere on the chart.
@@ -1973,7 +2053,10 @@ function setupTimeframeChart(
                             const raw = lastLabels[items[0].dataIndex] || "";
                             let m = DATETIME_RE.exec(raw);
                             if (m) {
-                                const p = { y: +m[1], mo: +m[2], d: +m[3] };
+                                const mo = +m[2];
+                                const d = +m[3];
+                                if (!validDateParts(mo, d)) return raw;
+                                const p = { y: +m[1], mo, d };
                                 // 5D has several 30-minute bars per day.
                                 // Keep the exact bar time so those points do
                                 // not all appear to be the same observation.
@@ -1981,11 +2064,15 @@ function setupTimeframeChart(
                             }
                             m = DATE_RE.exec(raw);
                             if (m) {
-                                const p = { y: +m[1], mo: +m[2], d: +m[3] };
+                                const mo = +m[2];
+                                const d = +m[3];
+                                if (!validDateParts(mo, d)) return raw;
+                                const p = { y: +m[1], mo, d };
                                 // If the series spans two calendar years,
                                 // add the year without dropping the exact day.
-                                // The sparse x-axis may show only "Sep 2025",
-                                // but a tooltip identifies one actual bar.
+                                // The sparse x-axis may show only "Sep 2025"
+                                // or a bare year ("2025") on 5Y/MAX, but a
+                                // tooltip identifies one actual bar.
                                 const first = lastLabels.find(
                                     (l) => DATE_RE.test(l));
                                 const last = lastLabels.findLast(

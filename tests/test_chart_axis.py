@@ -15,7 +15,9 @@ value chart and the stock detail page's price chart):
      autoSkip off, and its presence would mean the old 8-label crowding
      crept back;
   4. the month table and the data-driven year-span flag exist, so the
-     "Sep 4" vs "Sep 2025" rule can't silently vanish.
+     "Sep 4" vs "Sep 2025" rule can't silently vanish;
+  5. multi-year windows (5Y/MAX) paint bare years at calendar-year
+     boundaries, and the helpers that choose them stay present.
 
 The y-scale is deliberately OUT of scope: it keeps its own
 maxTicksLimit: 6 by design (short price labels never crowded).
@@ -25,6 +27,7 @@ The full label spec lives in the comment block above buildXTickLabels in
 common.js.
 """
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +106,37 @@ def test_label_formatter_contract():
     assert "function buildXTickLabels" in text, "formatter helper missing"
     assert "const MONTHS" in text, "month table missing"
     assert "spansYears" in text, "year-span flag missing"
+
+
+def test_multi_year_labels_use_calendar_year_boundaries():
+    """5Y/MAX show bare years, not arbitrary months. The year-span
+    threshold, both boundary helpers, and the bare-year output must all
+    stay, or the axis silently falls back to month + year."""
+    text = common_js()
+    assert re.search(r"function yearBoundaryIndices\(parsed\)", text), (
+        "calendar-year boundary helper missing"
+    )
+    assert re.search(r"function yearTickIndices\(boundaries,\s*target\)", text), (
+        "newest-anchored year thinning helper missing"
+    )
+    assert re.search(r"yearSpan\s*>=\s*2", text), (
+        "multi-year threshold (>= 2 years) missing"
+    )
+    assert re.search(r"Math\.max\(target,\s*6\)", text), (
+        "year labels must keep all 5Y years even on a phone"
+    )
+    assert "`${parsed[i].y}`" in text, (
+        "axis must paint the bare year at a boundary"
+    )
+
+
+def test_right_edge_year_label_has_room():
+    """The newest year sits almost at the plot's right edge on MAX. A
+    small right padding keeps the centered 4-digit label inside the
+    canvas instead of painting a clipped "202" on phones."""
+    assert "layout: { padding: { right: 16 } }" in common_js(), (
+        "chart layout lost its right padding — edge year labels will clip"
+    )
 
 
 def test_responsive_tick_target():
