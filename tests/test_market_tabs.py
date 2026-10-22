@@ -202,8 +202,8 @@ def test_price_and_change_spans_ship_empty(client):
 
 def test_currencies_caption_only_in_currencies_panel(client):
     section = market_section(client.get("/").get_data(as_text=True))
-    assert section.count("1 CAD buys") == 1, "exactly one currency caption"
-    assert "1 CAD buys" in section[section.index('data-category="currencies"'):]
+    assert section.count("1 unit buys CAD") == 1, "exactly one currency caption"
+    assert "1 unit buys CAD" in section[section.index('data-category="currencies"'):]
 
 
 def test_no_market_breadth_language(client):

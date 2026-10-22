@@ -715,7 +715,7 @@ a.logo { text-decoration: none; color: var(--text-primary); }
 }
 
 /* Only the currencies panel explains its quote direction: every pair there
-   is CAD-based, so "0.7340" means 1 CAD buys 0.7340 of that currency. */
+   quotes a foreign currency in CAD, so "1.4006" means 1 USD buys 1.4006 CAD. */
 .market-caption {
     margin: 4px 6px 6px;
     font-size: 12px;

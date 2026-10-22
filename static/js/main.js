@@ -62,7 +62,7 @@ function setMarketPanelValues(panel, text) {
 }
 
 // Adaptive precision for MARKET levels (index points, FX rates). A value
-// below 1 in absolute terms (CAD/USD ≈ 0.73) needs four decimals to be
+// below 1 in absolute terms (JPY/CAD ≈ 0.009) needs four decimals to be
 // readable; everything else keeps two. Deliberately NOT formatPrice — that
 // shared helper stays two-decimal for portfolio/ledger/stock money.
 function formatMarketLevel(value) {

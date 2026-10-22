@@ -241,10 +241,10 @@ MARKET_CATEGORIES = {
     "currencies": {
         "label": "Currencies",
         "instruments": [
-            {"symbol": "CADUSD=X", "label": "CAD/USD"},
-            {"symbol": "CADEUR=X", "label": "CAD/EUR"},
-            {"symbol": "CADGBP=X", "label": "CAD/GBP"},
-            {"symbol": "CADJPY=X", "label": "CAD/JPY"},
+            {"symbol": "USDCAD=X", "label": "USD/CAD"},
+            {"symbol": "EURCAD=X", "label": "EUR/CAD"},
+            {"symbol": "GBPCAD=X", "label": "GBP/CAD"},
+            {"symbol": "JPYCAD=X", "label": "JPY/CAD"},
         ],
     },
 }

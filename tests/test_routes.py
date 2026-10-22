@@ -197,8 +197,8 @@ APPROVED_CATEGORIES = [
         ("HG=F", "Copper"), ("NG=F", "Natural Gas"),
     ]),
     ("currencies", "Currencies", [
-        ("CADUSD=X", "CAD/USD"), ("CADEUR=X", "CAD/EUR"),
-        ("CADGBP=X", "CAD/GBP"), ("CADJPY=X", "CAD/JPY"),
+        ("USDCAD=X", "USD/CAD"), ("EURCAD=X", "EUR/CAD"),
+        ("GBPCAD=X", "GBP/CAD"), ("JPYCAD=X", "JPY/CAD"),
     ]),
 ]
 
@@ -393,7 +393,7 @@ def test_dashboard_market_items_are_links_to_detail_pages(client):
             assert f'href="{expected}"' in items[symbol]
 
 
-@pytest.mark.parametrize("symbol", ["^GSPC", "GC=F", "CADUSD=X", "000001.SS"])
+@pytest.mark.parametrize("symbol", ["^GSPC", "GC=F", "USDCAD=X", "000001.SS"])
 def test_encoded_market_symbol_url_round_trips(client, symbol):
     """Market hrefs ship symbols percent-encoded where the URL requires
     it (raw ^ is illegal in a path; = and . are legal). Flask must decode

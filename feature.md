@@ -1,104 +1,94 @@
-# Fix: show compared dates in the chart measurement box
+# Tweak: reverse the Currencies tab pairs
 
 Status: in progress
-Branch: fix/measurement-dates
-Scope: bug/tweak (not a roadmap item)
+Branch: fix/reverse-market-currency-pairs
+Scope: tweak (not a roadmap item)
 
-## Problem
+## Goal
 
-The price-difference ruler (desktop drag, mobile two-finger) draws two
-vertical guides, two endpoint dots, and a box with only the price difference
-and percent. A user who measures two points cannot tell which dates they
-picked. `pixelToData` already returns each point's raw label, but the
-priceDiff plugin never reads it (`static/js/common.js`).
+The dashboard "Markets today" Currencies tab must quote each foreign
+currency in CAD:
 
-## Behavior contract
+- USD/CAD
+- EUR/CAD
+- GBP/CAD
+- JPY/CAD
 
-- The measurement box gains a top line with both compared dates:
-  `Sep 4, 2025 → Sep 18, 2025`.
-- Date text matches the hover tooltip exactly:
-  - single-year window: `Sep 4`;
-  - window spanning calendar years: `Sep 4, 2025`;
-  - intraday label: `Sep 4, 09:30`.
-- Endpoints are ordered by `dataIndex` before formatting and before the
-  arithmetic. A right-to-left drag or reversed two-finger order therefore
-  shows the earlier date first and computes `later - earlier`.
-- Comparing the same point twice paints one date, not `Sep 4 → Sep 4`.
-- The box keeps its rounded dark pill, green/red numbers, and clamp. Height
-  grows from 38px to 52px.
-- Realistic date text fits at 360px: measure the diff at bold 12px, the
-  percent at 11px, then the dates at 10px; if the date line is still too
-  wide, re-measure at 9px. Final box width is capped at the plot width.
-- Value mode only, as today: Performance mode and normalized comparison
-  overlays still show no ruler (`canMeasurePrice`).
+This replaces CAD/USD, CAD/EUR, CAD/GBP, CAD/JPY. Positive movement now
+means the foreign currency strengthened against CAD.
+
+The user chose the caption `1 unit buys CAD`.
+
+## Verified symbols
+
+Live Yahoo chart check returned a quote and `currency=CAD` for all four:
+
+- `USDCAD=X` 1.4006
+- `EURCAD=X` 1.5709
+- `GBPCAD=X` 1.8747
+- `JPYCAD=X` 0.0089
 
 ## Files
 
-1. `static/js/common.js`
-   - Add pure helpers immediately after `monthYear` and before
-     `stridedIndices`, so the MiniRacer test slice includes them:
-     * `formatBarDate(raw, spansYears)`: DATETIME + valid parts ->
-       `Sep 4, 09:30` (ignores `spansYears`); DATE + valid parts ->
-       `Sep 4, 2025` or `Sep 4`; otherwise raw.
-     * `labelsSpanYears(labels)`: counts only string labels matching
-       `DATE_RE` with valid month/day; `find`/`findLast`; compares the
-       first four characters. DATETIME, junk, null, and empty input are
-       ignored, so an intraday series returns false.
-     * `orderMeasurementPoints(a, b)`: `a.dataIndex <= b.dataIndex` keeps
-       `[a, b]`, otherwise `[b, a]`.
-   - Tooltip title becomes `return formatBarDate(raw, labelsSpanYears(lastLabels));`
-     with the existing `lastLabels[items[0].dataIndex] || ""` fallback.
-   - priceDiff plugin: order endpoints, build `dateText`, draw the date in
-     neutral `#e5e7eb`, use the ordered values for diff/pct, and keep the
-     guides/dots at their original pixels.
-2. `tests/test_chart_ticks_behavior.py`
-   - Add `_value(expression)` using `json.dumps` for string arguments.
-   - `formatBarDate` cases: single-year, cross-year, intraday with
-     `spansYears` false and true, junk, empty, invalid date, invalid
-     datetime.
-   - `labelsSpanYears` cases: cross-year true, same-year false, empty
-     false, junk false, null+junk+two-date true, cross-year DATETIME false,
-     single-date intraday false.
-   - `orderMeasurementPoints`: reversed, already ordered, equal index.
-   - Existing tick tests stay green.
-3. `tests/test_chart_tooltip.py`
-   - Add a `formatBarDate` body slicer.
-   - Point exact template/`validDateParts` assertions at the helper.
-   - Title body asserts the raw fallback and shared-formatter call, and
-     does not contain inline parsers/templates or `validDateParts`.
-   - Comparison title test asserts `formatBarDate`, not `monthDay`.
-4. `tests/test_price_diff.py`
-   - Select the priceDiff `afterDatasetsDraw` body via `_hook_bodies`
-     (the body containing `measureStart` and `diffText`).
-   - Lock the date line, literal `→`, `samePoint` ternary, ordered values,
-     `const boxH = 52`, `#e5e7eb`, `Math.min`, `right - left`, and
-     `9px sans-serif`.
-   - Update the module docstring: compared dates are now in scope.
-5. `feature.md` — this plan.
+1. `app.py` (`MARKET_CATEGORIES["currencies"]`, around lines 241-249)
+   - Replace instruments with:
+     * `{"symbol": "USDCAD=X", "label": "USD/CAD"}`
+     * `{"symbol": "EURCAD=X", "label": "EUR/CAD"}`
+     * `{"symbol": "GBPCAD=X", "label": "GBP/CAD"}`
+     * `{"symbol": "JPYCAD=X", "label": "JPY/CAD"}`
+   - `INDEX_SYMBOLS` stays derived; do not edit it.
+2. `templates/index.html` line 75
+   - Change the currencies caption from `1 CAD buys` to
+     `1 unit buys CAD`.
+3. `tests/test_routes.py`
+   - Update the `APPROVED_CATEGORIES` currencies block (around lines
+     199-202) to the new symbol/label pairs.
+   - Change the URL round-trip parametrization (line 396) from
+     `CADUSD=X` to `USDCAD=X`.
+4. `tests/test_market_tabs.py`
+   - Update `test_currencies_caption_only_in_currencies_panel`
+     (lines 203-206): assert `1 unit buys CAD` appears exactly once and
+     only inside the currencies panel.
+5. `project-brief.md`
+   - Lines 349-351: state that every currency pair quotes a foreign
+     currency in CAD (USD/CAD, EUR/CAD, GBP/CAD, JPY/CAD) under a
+     `1 unit buys CAD` caption, so positive movement = the foreign
+     currency strengthened against CAD.
+   - Lines 363-364: replace "for CAD-based FX pairs" with wording that
+     the adaptive precision keeps sub-unit FX quotes such as JPY/CAD
+     readable.
+6. `static/js/main.js` lines 64-65
+   - Update the example from `CAD/USD ≈ 0.73` to `JPY/CAD ≈ 0.009`.
+7. `static/style.css` lines 717-718
+   - Update the caption comment: `"1.4006" means 1 USD buys 1.4006 CAD`.
+8. `feature.md` - this plan.
 
-## Verification
+## Non-goals
 
-1. Write tests first; run
-   `python -m pytest tests/test_chart_ticks_behavior.py tests/test_chart_tooltip.py tests/test_price_diff.py`
-   and confirm the new cases fail.
-2. Implement, then rerun the targeted tests.
-3. Run the full suite: `python -m pytest`.
-4. Browser at desktop and 360px:
-   - stock 5Y and 1D, drag both directions;
-   - dashboard portfolio chart;
-   - same-point measurement;
-   - measurement near both edges;
-   - light and dark;
-   - Performance mode and comparison overlays show no ruler.
-5. Diff review with the `reviewer` subagent, then wait for the user's GUI
-   approval before merging.
+- Do not change `market_data.py` FX helpers.
+- Do not change portfolio FX (`USDCAD` live/historical).
+- Do not change `/api/indices` logic, validation, or failure paths.
+- Do not change `comparison.html`.
+
+## Tests
+
+1. Write/update tests first.
+2. Run:
+   `.venv/bin/python -m pytest tests/test_routes.py tests/test_market_tabs.py -v`
+   Confirm the updated assertions fail before the config change.
+3. Implement, then rerun the targeted tests.
+4. Run the full suite: `.venv/bin/python -m pytest`.
 
 ## Edge cases
 
-- Same point twice.
-- Reversed drag / reversed finger order.
-- 5D across New Year (DATETIME labels never add a year).
-- Invalid DATETIME parts.
-- Empty, null, and junk labels.
-- Box near edges; long cross-year date text at 360px.
-- Value-mode only; comparison and TWR paths unchanged.
+- JPY/CAD is below 1, so adaptive precision must still give 4 decimals;
+  USD/EUR/GBP pairs above 1 keep 2 decimals.
+- A missing quote still degrades to an em dash per cell.
+- The caption must appear only in the currencies panel.
+- The exact-config test must catch a silent symbol/label drift.
+
+## Review
+
+After the full suite passes, run the `reviewer` subagent in diff mode on
+`git diff main...HEAD` plus uncommitted changes. Fix blocking issues, then
+wait for the user's approval before merging.
