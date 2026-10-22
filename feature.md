@@ -1,7 +1,7 @@
 # Tweak: reverse the Currencies tab pairs
 
-Status: in progress
-Branch: fix/reverse-market-currency-pairs
+Status: shipped 2026-10-22
+Branch: fix/reverse-market-currency-pairs (merged)
 Scope: tweak (not a roadmap item)
 
 ## Goal
