@@ -1,12 +1,13 @@
-"""Capture auth/People UI screenshots from the throwaway capture server
+"""Capture navbar/auth/People UI screenshots from the throwaway capture server
 (port 5001, started by scripts/capture_server.py).
 
 Playwright lives in the SYSTEM python, NOT the project venv:
     /usr/bin/python3 scripts/capture_shots.py [--out DIR] [--dark-only]
 
 The flow wires itself through the REAL forms (no cookie forging): setup
-first (the throwaway DB boots with zero users), then Preferences with
-the real open-sign-up switch, then the pages it unlocks. Themes swap via
+first (the throwaway DB boots with zero users), then the signed-in navbar,
+then Preferences with the real open-sign-up switch, then the pages it
+unlocks. Themes swap via
 the localStorage 'theme' key the app's head bootstrap reads; every shot
 is taken in light AND dark. Output never touches main by itself — commit
 the shots you want to a `pr-<N>-screenshots` branch under
@@ -90,6 +91,14 @@ with sync_playwright() as p:
     page.click(".auth-form button[type=submit]")
     page.wait_for_url(f"{BASE}/")
     settle(page)
+
+    # ── 2b. Navbar brand mark (light + dark) ────────────────────────
+    # /preferences is signed-in and carries the shared navbar, so it is a
+    # cheap way to capture the logo. The full page also shows the mark in
+    # context; no dashboard market-data call is needed.
+    page.goto(f"{BASE}/preferences")
+    settle(page)
+    for_themes(page, lambda t: shot(page, f"navbar-{t}"))
 
     # ── 3. Preferences: People card, open-sign-up switch ON ─────────
     page.goto(f"{BASE}/preferences")

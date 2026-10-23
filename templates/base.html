@@ -94,23 +94,46 @@
     <header class="navbar">
         <div class="nav-left">
             <!-- The Portfoliarr wordmark. A small inline SVG coin stack
-                 with a growth arrow + the brand name,
-                 with the tail accented so it reads as a mark rather than
-                 plain text. The SVG uses stroke="currentColor" and
-                 fill="currentColor" and takes its color from CSS
-                 (.logo-mark) — the markup stays theme-agnostic and the
-                 stylesheet stays the single source of color truth. The
-                 logo doubles as "home": it used to be a plain <span> on
-                 the one-page app; now that a second page exists at
-                 /stock/<symbol>, the link is how you get back. -->
+                 with beveled edges, engraved inner rims, a dollar cutout
+                 on the top coin, and a growth arrow + the brand name,
+                 with the tail accented so it
+                 reads as a mark rather than plain text. The SVG uses
+                 stroke="currentColor" and fill="currentColor" and takes
+                 its color from CSS (.logo-mark) — the markup stays
+                 theme-agnostic and the stylesheet stays the single source
+                 of color truth. The logo doubles as "home": it used to be
+                 a plain <span> on the one-page app; now that a second page
+                 exists at /stock/<symbol>, the link is how you get back. -->
             <a href="/" class="logo">
                 <svg class="logo-mark" viewBox="0 0 24 24" width="24" height="24"
                      aria-hidden="true">
-                    <path d="M12 5.6 V1.6 M9.7 3.8 L12 1.5 L14.3 3.8"
-                          fill="none" stroke="currentColor" stroke-width="2.2"
+                    <defs>
+                        <mask id="logoDollarNav" maskUnits="userSpaceOnUse"
+                              x="0" y="0" width="24" height="24">
+                            <rect width="24" height="24" fill="white"></rect>
+                            <path d="M12 10.2 V13.8 M13.2 10.9 C13.2 10.35 12.65 10.1 12 10.1 C11.35 10.1 10.85 10.45 10.85 11 C10.85 12.25 13.15 11.75 13.15 13 C13.15 13.55 12.65 13.9 12 13.9 C11.35 13.9 10.8 13.65 10.8 13.1"
+                                  fill="none" stroke="black" stroke-width="1.2"
+                                  stroke-linecap="round" stroke-linejoin="round"></path>
+                        </mask>
+                    </defs>
+                    <path d="M12 9 V2.4 M8.7 5.4 L12 2.1 L15.3 5.4"
+                          fill="none" stroke="currentColor" stroke-width="2.6"
                           stroke-linecap="round" stroke-linejoin="round"></path>
-                    <ellipse cx="12" cy="10.4" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
-                    <ellipse cx="12" cy="17.2" rx="8.6" ry="3.1" fill="currentColor"></ellipse>
+                    <g mask="url(#logoDollarNav)">
+                        <path d="M4.2 12 v1.5 a7.8 3 0 0 0 15.6 0 v-1.5 Z"
+                              fill="currentColor" opacity=".78"></path>
+                        <ellipse cx="12" cy="12" rx="7.8" ry="3" fill="currentColor"></ellipse>
+                    </g>
+                    <ellipse cx="12" cy="12" rx="6.1" ry="1.9" fill="none"
+                             stroke="currentColor" stroke-opacity=".55" stroke-width=".66"></ellipse>
+                    <path d="M12 10.2 V13.8 M13.2 10.9 C13.2 10.35 12.65 10.1 12 10.1 C11.35 10.1 10.85 10.45 10.85 11 C10.85 12.25 13.15 11.75 13.15 13 C13.15 13.55 12.65 13.9 12 13.9 C11.35 13.9 10.8 13.65 10.8 13.1"
+                          fill="none" stroke="currentColor" stroke-width=".55"
+                          stroke-linecap="round" stroke-linejoin="round"></path>
+                    <path d="M4.2 19.4 v1.5 a7.8 3 0 0 0 15.6 0 v-1.5 Z"
+                          fill="currentColor" opacity=".78"></path>
+                    <ellipse cx="12" cy="19.4" rx="7.8" ry="3" fill="currentColor"></ellipse>
+                    <ellipse cx="12" cy="19.4" rx="6.1" ry="1.9" fill="none"
+                             stroke="currentColor" stroke-opacity=".55" stroke-width=".66"></ellipse>
                 </svg>
                 <span>Portfoli<span class="logo-accent">arr</span></span>
             </a>
