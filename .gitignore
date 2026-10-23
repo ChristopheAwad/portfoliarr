@@ -29,6 +29,13 @@ project-brief.md
 roadmap.md
 feature.md
 
+# Local research/planning artifacts and the promo video workspace (not part
+# of the app; they were accidentally committed once and are removed here)
+comparison.html
+improvement-plan.html
+ui-nomenclature-audit.html
+video/
+
 # Screenshots (local captures, not part of the app)
 *.png
 !portfoliarr-dashboard.png
