@@ -9,12 +9,23 @@ No browser or network is needed.
 """
 
 import json
+import re
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+from market_data import PERIOD_MAP
 
 
 COMMON = (Path(__file__).resolve().parents[1] / "static/js/common.js")
+
+
+def test_browser_live_periods_match_server():
+    periods = re.search(r'const LIVE_PERIODS = new Set\(\[(.*?)\]\)', COMMON.read_text())
+    assert periods is not None
+    assert set(re.findall(r'"(.*?)"', periods[1])) == {
+        key for key, settings in PERIOD_MAP.items() if settings["live"]
+    }
 
 
 def _engine():
@@ -88,6 +99,17 @@ def test_multi_date_intraday_labels_each_day_boundary():
     ]
     ticks = _ticks(labels, 6)
     assert ticks == ["Sep 1", "", "Sep 2", ""]
+
+
+def test_hourly_month_ticks_and_hover_across_new_year():
+    days = [date(2026, 12, 15) + timedelta(days=i) for i in range(31)]
+    labels = [f"{day} {hour:02d}:30" for day in days if day.weekday() < 5
+              for hour in range(9, 16)]
+    ticks = _ticks(labels, 6)
+    assert len(ticks) == len(labels)
+    assert 2 <= len([tick for tick in ticks if tick]) <= 7
+    assert all(not tick or i % 7 == 0 for i, tick in enumerate(ticks))
+    assert _format_date("2027-01-04 10:30", True) == "Jan 4, 10:30"
 
 
 # Weekly-bar shape of a real 5Y window: the partial first year (2021) is

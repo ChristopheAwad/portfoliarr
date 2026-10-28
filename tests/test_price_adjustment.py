@@ -56,6 +56,6 @@ def test_get_history_uses_close_not_adjusted_close(monkeypatch):
     )
     _install(monkeypatch, frame)
 
-    assert market_data.get_history("AAPL", "1M") == {
+    assert market_data.get_history("AAPL", "3M") == {
         "2026-08-28": 100.0, "2026-08-31": 101.0,
     }

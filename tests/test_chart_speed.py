@@ -120,7 +120,7 @@ def test_history_refetches_after_ttl_expires(fake_yf, monkeypatch):
     """The cache is YOUNG-enough-to-trust, not forever: after the 600s
     TTL a call re-fetches. 599s after the fetch the entry is still fresh
     (no second call); 601s after, it is stale (second call). time.time is
-    faked so the test runs in microseconds, not minutes. (Uses 1M, a
+    faked so the test runs in microseconds, not minutes. (Uses 3M, a
     SETTLED series — the 5D button moved to the short live TTL when it
     went to 30-minute bars; see test_5d_history_uses_the_short_live_ttl.)"""
     fake_yf.state["history"] = pd.DataFrame(
@@ -132,13 +132,13 @@ def test_history_refetches_after_ttl_expires(fake_yf, monkeypatch):
                         SimpleNamespace(time=lambda: clock["now"],
                                     perf_counter=lambda: clock["now"]))
 
-    market_data.get_history("AAPL", "1M")      # fetch #1, stamped at t=1000
+    market_data.get_history("AAPL", "3M")      # fetch #1, stamped at t=1000
     clock["now"] += 599                        # still inside the 600s TTL
-    market_data.get_history("AAPL", "1M")
+    market_data.get_history("AAPL", "3M")
     assert len(fake_yf.calls) == 1
 
     clock["now"] += 2                          # 601s after the fetch: stale
-    market_data.get_history("AAPL", "1M")
+    market_data.get_history("AAPL", "3M")
     assert len(fake_yf.calls) == 2
 
 
@@ -166,11 +166,9 @@ def test_intraday_history_uses_the_short_ttl(fake_yf, monkeypatch):
     assert len(fake_yf.calls) == 2
 
 
-def test_5d_history_uses_the_short_live_ttl(fake_yf, monkeypatch):
-    """5D joins 1D on the short 'live' TTL: its 30-minute bars include
-    TODAY's still-moving bar, so caching it for 600s would freeze the
-    last day of the line mid-session. Fresh at +60s, refetched at +121s —
-    the mirror image of the 1D test above."""
+@pytest.mark.parametrize("period", ["5D", "1M"])
+def test_multiday_history_uses_the_short_live_ttl(fake_yf, monkeypatch, period):
+    """5D and 1M include moving bars: fresh at 119s, expired at 120s."""
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": [100.0, 101.0]},
         index=pd.to_datetime(["2026-09-01 09:30", "2026-09-01 10:00"]),
@@ -180,13 +178,13 @@ def test_5d_history_uses_the_short_live_ttl(fake_yf, monkeypatch):
                         SimpleNamespace(time=lambda: clock["now"],
                                     perf_counter=lambda: clock["now"]))
 
-    market_data.get_history("AAPL", "5D")      # fetch #1
-    clock["now"] += 60                         # inside even the short TTL
-    market_data.get_history("AAPL", "5D")
+    market_data.get_history("AAPL", period)      # fetch #1
+    clock["now"] += 119                         # just inside the short TTL
+    market_data.get_history("AAPL", period)
     assert len(fake_yf.calls) == 1
 
-    clock["now"] += 61                         # 121s: stale under 120s TTL
-    market_data.get_history("AAPL", "5D")
+    clock["now"] += 1                          # exactly 120s: stale
+    market_data.get_history("AAPL", period)
     assert len(fake_yf.calls) == 2
 
 
@@ -207,7 +205,7 @@ def test_failed_history_fetch_is_never_cached(fake_yf, monkeypatch):
 
     fake_yf.state["fail"] = False
     result = market_data.get_history("AAPL", "1M")
-    assert result == {"2026-08-28": 100.0}     # the retry really fetched
+    assert result == {"2026-08-28 00:00": 100.0}  # the retry really fetched
     assert len(fake_yf.calls) == 2
 
     market_data.get_history("AAPL", "1M")      # and the success IS cached
@@ -295,11 +293,12 @@ def test_5d_uses_30m_bars_with_datetime_labels(fake_yf):
     assert ("AAPL", "5d", "30m") in fake_yf.calls
 
 
-def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
-    """End-to-end: the 5D chart keeps every daily-shape behaviour the
+@pytest.mark.parametrize("period", ["5D", "1M"])
+def test_multiday_portfolio_chart_trade_timing(client, fake_yf, period):
+    """End-to-end: multi-day charts keep every daily-shape behaviour the
     suite relies on — the axis trims at the first logged investment (the
     pre-buy 08-31 bar is dropped), and a transaction applies at its
-    day's FIRST 30-minute bar (a date-only ledger can't know the minute;
+    day's FIRST bar (a date-only ledger can't know the minute;
     lexicographic '2026-09-03' <= '2026-09-03 09:30' does the dating).
     The 09-03 buy must NOT leak into the 09-02 15:30 bar."""
     seed_transaction(ticker="AAPL", date="2026-09-01", qty=1,
@@ -317,7 +316,7 @@ def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
         ]),
     )
 
-    body = client.get("/api/portfolio/history?period=5D").get_json()
+    body = client.get(f"/api/portfolio/history?period={period}").get_json()
     # 1 share from the 09-01 buy; 3 shares once the 09-03 buy lands at
     # that day's first bar (3 × 120 = 360).
     assert body == {
@@ -344,10 +343,8 @@ def test_5d_portfolio_chart_is_daily_shaped_on_30m_bars(client, fake_yf):
 # ── 3M: daily bars, date labels ───────────────────────────────────────
 
 def test_3m_uses_daily_bars_with_date_labels(fake_yf):
-    """The 3M button serves DAILY bars (~63 closes) — the interval that
-    keeps the whole ladder monotonically dense (1M 22 → 3M 63 → 6M 126 →
-    1Y 252) instead of the old hourly 3M (~440) out-densifying every
-    later timeframe. Unpacking assertion locks '3M' → period='3mo',
+    """The 3M button keeps DAILY bars (~63 closes), even though 1M now
+    uses hourly bars. Unpacking assertion locks '3M' → period='3mo',
     interval='1d'."""
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": [100.0, 105.0, 110.0, 112.0]},
@@ -407,21 +404,13 @@ def test_3m_portfolio_chart_is_daily_shaped(client, fake_yf):
 
 
 def test_intraday_and_live_flags_stay_exclusive():
-    """REGRESSION LOCK (passes before AND after the 3M revert): across
-    the WHOLE PERIOD_MAP, `intraday` is True ONLY for the single-day 1D
-    view (clock-time labels + the route's first-bar ledger branch) and
-    `live` is True ONLY for 1D and 5D (the 120s TTL — today's bar still
-    moves). Every multi-day series — 5D's 30-minute bars and 3M's daily
-    bars alike — must keep the daily-shaped ledger math and the settled
-    600s TTL. A flip that accidentally set either flag on 3M would move
-    it into the wrong ledger branch and cache tier; this test names that
-    exact failure."""
+    """Only 1D is single-day; 1D/5D/1M use the live cache tier."""
     intraday_periods = [key for key, tf in market_data.PERIOD_MAP.items()
                         if tf["intraday"]]
     live_periods = [key for key, tf in market_data.PERIOD_MAP.items()
                     if tf["live"]]
     assert intraday_periods == ["1D"]
-    assert live_periods == ["1D", "5D"]
+    assert live_periods == ["1D", "5D", "1M"]
 
 
 # ── The portfolio route with the new intervals ────────────────────────

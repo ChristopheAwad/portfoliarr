@@ -57,7 +57,7 @@ _name_cache = {}
 # {(symbol, period_key): {"data": {label: close}, "fetched_at": epoch}}
 # Same shape as the quote cache, different TTLs — because the two data
 # kinds age differently:
-#   settled bars (the date-spaced 1M–MAX series) are SETTLED history — a
+#   settled bars (the date-spaced 3M–MAX series) are SETTLED history — a
 #   past close never changes — but a fresh fetch must still pick up NEW
 #   bars at the right edge (today's close lands after this session's
 #   close), so 600s (ten minutes) keeps repeat clicks instant without
@@ -65,8 +65,7 @@ _name_cache = {}
 #   "live" series include TODAY's bar, which keeps moving all session —
 #   600s would freeze the line mid-day — so they live only 120s, the
 #   same cadence as the quote cache. That's 1D (today's 5-minute bars)
-#   AND 5D (whose 30-minute bars span up to five sessions, today's
-#   among them).
+#   plus 5D (30-minute bars) and 1M (hourly bars), including today.
 # Dies on restart like every module-level dict here — acceptable (the
 # quote cache made the same call; restarting re-warms it once).
 _HISTORY_TTL_SETTLED = 600    # seconds: settled date-spaced bars
@@ -226,10 +225,8 @@ def _first_positive_finite(*values):
 #              "5m"  for 1D (intraday every 5 minutes),
 #              "30m" for 5D (intraday across ~5 sessions — Google
 #              Finance's choice; daily bars left 5D a 5-point zigzag),
-#              "1d"  for the short ranges 1M/3M/6M/YTD/1Y (one close per
-#              trading day — keeps the whole ladder monotonically dense:
-#              ~22 → ~63 → ~126 → ~252 points, so no timeframe
-#              out-densifies a longer one),
+#              "1h" for 1M, showing movement within each trading day,
+#              "1d" for 3M/6M/YTD/1Y (one close per trading day),
 #              "1wk"/"1mo" for 5Y/MAX (speed: weekly/monthly bars cut a
 #              long-range payload ~5–25×, so MAX stops fetching ^GSPC's
 #              ~25,000 daily bars since 1927 and 5Y drops from ~1,260
@@ -247,11 +244,11 @@ def _first_positive_finite(*values):
 #              every label is date-bearing, so one pointer rule serves
 #              every period).
 #   live     — True when the series includes TODAY's still-moving bar
-#              (1D and 5D): those cache entries expire at the short
+#              (1D, 5D and 1M): those cache entries expire at the short
 #              live TTL. Everything else is settled history (600s).
 #   label    — the strftime format for the x-axis labels get_history
 #              returns: full "YYYY-MM-DD HH:MM" whenever one day carries
-#              SEVERAL bars (1D's 5-minute and 5D's 30-minute bars —
+#              SEVERAL bars (1D's 5-minute, 5D's 30-minute, 1M's hourly bars —
 #              the date keeps same-day bars from colliding in the
 #              {label: price} dict and sorts against transaction dates),
 #              plain "YYYY-MM-DD" for one-bar-per-day ranges.
@@ -260,8 +257,8 @@ PERIOD_MAP = {
             "live": True,  "label": "%Y-%m-%d %H:%M"},
     "5D":  {"period": "5d",  "interval": "30m", "intraday": False,
             "live": True,  "label": "%Y-%m-%d %H:%M"},
-    "1M":  {"period": "1mo", "interval": "1d",  "intraday": False,
-            "live": False, "label": "%Y-%m-%d"},
+    "1M":  {"period": "1mo", "interval": "1h",  "intraday": False,
+            "live": True,  "label": "%Y-%m-%d %H:%M"},
     "3M":  {"period": "3mo", "interval": "1d",  "intraday": False,
             "live": False, "label": "%Y-%m-%d"},
     "6M":  {"period": "6mo", "interval": "1d",  "intraday": False,
@@ -1163,10 +1160,10 @@ def get_history(symbol, period_key):
         ("2026-10-16 09:30") — the date part keeps the route honest about
         which session the bars belong to, and stops two sessions from
         colliding under one bare "09:30" key in this dict.
-      - 5D (30-minute bars, multi-day): "YYYY-MM-DD HH:MM"
+      - 5D (30-minute bars) and 1M (hourly bars): "YYYY-MM-DD HH:MM"
         ("2026-08-31 09:30") — the date part is what keeps Monday's
         "09:30" from colliding with Tuesday's in this dict.
-      - Date-spaced ranges (1M, 3M, 6M, YTD, 1Y, 5Y, MAX — daily, weekly
+      - Date-spaced ranges (3M, 6M, YTD, 1Y, 5Y, MAX — daily, weekly
         or monthly bars): "YYYY-MM-DD" ("2026-08-31").
 
     These plain strings are exactly what the frontend wants for
@@ -1192,8 +1189,8 @@ def get_history(symbol, period_key):
     label_format = timeframe["label"]
 
     # Cache check — is our copy young enough to trust? The TTL depends on
-    # the data's age profile: a "live" series (1D, 5D) includes today's
-    # still-moving bar, so 120s; settled history (1M–MAX) keeps 600s.
+    # the data's age profile: a "live" series (1D, 5D, 1M) includes today's
+    # still-moving bar, so 120s; settled history (3M–MAX) keeps 600s.
     started = time.perf_counter()
     now = time.time()
     ttl = _HISTORY_TTL_LIVE if timeframe["live"] else _HISTORY_TTL_SETTLED

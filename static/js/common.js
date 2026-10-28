@@ -1252,7 +1252,7 @@ function yearTickIndices(boundaries, target) {
 // `target` = max labels to paint (from tickTargetForWidth).
 function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     // Parse every label ONCE. Date-ish shapes keep their parts as
-    // numbers plus a kind ("datetime" covers 1D/5D intraday, "date" is
+    // numbers plus a kind ("datetime" covers 1D/5D/1M, "date" is
     // daily); unparseable labels parse to null.
     const parsed = labels.map((label) => {
         let m = DATETIME_RE.exec(label);
@@ -1284,7 +1284,7 @@ function buildXTickLabels(labels, target = X_TICK_TARGET_DEFAULT) {
     const yearSpan = firstYear !== undefined && lastYear !== undefined
         ? lastYear - firstYear : 0;
 
-    // Date-time series (1D's 5-minute bars, 5D's 30-minute bars). Both now
+    // Date-time series (1D 5-minute, 5D 30-minute, 1M hourly bars). All
     // carry a date. A SINGLE date (1D) is a clock-face series: show times.
     // MULTIPLE dates (5D, or a 1D union across markets) label each day
     // boundary so the day — not the minute — is the story.
@@ -1594,9 +1594,9 @@ function setupTimeframeChart(
     // _HISTORY_TTL_LIVE / _HISTORY_TTL_SETTLED so the client never
     // serves data older than the server would.
     const chartCache = {};
-    const TTL_LIVE_MS = 120_000;     // 1D, 5D — live bars still moving
-    const TTL_SETTLED_MS = 600_000;  // 1M–MAX — settled daily/weekly/monthly bars
-    const LIVE_PERIODS = new Set(["1D", "5D"]);
+    const TTL_LIVE_MS = 120_000;     // 1D, 5D, 1M: live bars still moving
+    const TTL_SETTLED_MS = 600_000;  // 3M–MAX: settled daily/weekly/monthly bars
+    const LIVE_PERIODS = new Set(["1D", "5D", "1M"]);
 
     // ── Price-difference measurement state ────────────────────────────────
     // measureStart / measureEnd hold the two endpoints the user picked
@@ -2115,7 +2115,7 @@ function setupTimeframeChart(
                         // Tooltip title: reformat the raw ISO label
                         // (e.g. "2026-09-13" or "2026-09-13 14:30")
                         // into human-friendly text ("Sep 13, 14:30" for
-                        // 1D/5D intraday; "Sep 13" for daily bars). The
+                        // 1D/5D/1M intraday; "Sep 13" for daily bars). The
                         // date disambiguates a 1D union that spans two
                         // sessions. formatBarDate is the same formatter the
                         // measurement ruler uses.
