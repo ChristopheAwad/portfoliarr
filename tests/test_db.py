@@ -308,3 +308,107 @@ def test_init_creates_missing_instance_directory(tmp_path, monkeypatch):
     tx_id = db.add_transaction("AAPL", "2026-08-31", 229.5, 10, "USD",
                                "BUY", 1.39, portfolio_id=1)
     assert db.get_transaction(tx_id, 1) is not None
+
+
+# ── Connection lifecycle ──────────────────────────────────────────────
+# `with sqlite3.Connection` commits or rolls back but does NOT close the
+# file. These tests track real connections so the descriptor is released
+# even when setup, the operation, or the commit fails.
+
+class _TrackedConnection(sqlite3.Connection):
+    closed = False
+
+    def close(self):
+        self.closed = True
+        return super().close()
+
+
+def _track_connections(monkeypatch, factory=_TrackedConnection):
+    real_connect = db.sqlite3.connect
+    opened = []
+
+    def connect(*args, **kwargs):
+        kwargs.setdefault("factory", factory)
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(db.sqlite3, "connect", connect)
+    return opened
+
+
+def test_read_and_write_close_their_connections(fresh_db, monkeypatch):
+    opened = _track_connections(monkeypatch)
+
+    assert db.get_user(1)["username"] == "owner"
+    assert opened and all(conn.closed for conn in opened)
+
+    opened.clear()
+    db.add_symbol("AAPL", 1)
+    assert opened and all(conn.closed for conn in opened)
+    assert db.get_symbols(1) == ["AAPL"]
+
+
+def test_failed_write_rolls_back_and_still_closes(fresh_db, monkeypatch):
+    db.add_symbol("AAPL", 1)
+    opened = _track_connections(monkeypatch)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        db.add_symbol("AAPL", 1)  # duplicate primary key
+
+    assert opened and all(conn.closed for conn in opened)
+    assert db.get_symbols(1) == ["AAPL"]
+
+
+def test_multi_step_create_commits_and_closes(fresh_db, monkeypatch):
+    opened = _track_connections(monkeypatch)
+    user_id = db.create_user("second", "hash")
+
+    assert opened and all(conn.closed for conn in opened)
+    assert db.get_portfolios(user_id) == [
+        {"id": 2, "name": "Main", "sort_order": 0}]
+
+
+class _PragmaFailConnection(sqlite3.Connection):
+    closed = False
+
+    def execute(self, sql, *args, **kwargs):
+        if "PRAGMA foreign_keys" in sql:
+            raise sqlite3.OperationalError("pragma failure")
+        return super().execute(sql, *args, **kwargs)
+
+    def close(self):
+        self.closed = True
+        return super().close()
+
+
+def test_pragma_failure_closes_the_connection(fresh_db, monkeypatch):
+    opened = _track_connections(monkeypatch, _PragmaFailConnection)
+    with pytest.raises(sqlite3.OperationalError):
+        db.count_users()
+    assert opened and all(conn.closed for conn in opened)
+
+
+def test_commit_failure_closes_and_leaves_no_row(fresh_db, monkeypatch):
+    # A deferred foreign-key violation fires at COMMIT, not at INSERT.
+    # Python 3.14's Connection.__exit__ commits internally, so overriding
+    # Connection.commit would not inject anything; this is a real failure.
+    opened = _track_connections(monkeypatch)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with db._connection() as conn:
+            conn.execute("PRAGMA defer_foreign_keys = ON")
+            conn.execute(
+                "INSERT INTO portfolios (name, sort_order, user_id)"
+                " VALUES ('Bad', 0, 99999)")
+
+    assert opened and all(conn.closed for conn in opened)
+    with sqlite3.connect(fresh_db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM portfolios WHERE name = 'Bad'"
+        ).fetchone()[0] == 0
+
+
+def test_connection_helper_keeps_foreign_keys(fresh_db):
+    with db._connection() as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1

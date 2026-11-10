@@ -13,6 +13,16 @@ Live mode (default) measures real Yahoo. --stub-ms N replaces Yahoo with
 a fixed N ms latency per call, so app-level changes (extra calls,
 parallelism, caching) are comparable without network noise.
 
+HONESTY RULES FOR READING THE REPORT:
+
+- The stub patches app.py's imported market functions, so it bypasses the
+  real process caches. Stub runs measure request and render plumbing, not
+  cache performance; the `/api/perf` market hit/miss rows stay empty.
+- Run 1 follows setup, which already warmed some symbols. It is the first
+  measured visit, NOT a cold-start measurement. Only a fresh server
+  process with a fresh database is cold.
+- Compare like for like: same mode, same runs, same viewport.
+
 The report's run 1 is the first measured visit; the setup redirect has
 already warmed some symbols. Compare like for like: same mode, same runs.
 """
@@ -50,8 +60,13 @@ def wait_for_server(base, timeout=40.0):
     return False
 
 
-def seed(page, base):
-    """Complete setup and create a small representative dataset."""
+def seed(page, base, ledger_rows=0):
+    """Complete setup and create a small representative dataset.
+
+    `ledger_rows` seeds a synthetic ledger through the REAL import API so a
+    large-ledger measurement never touches the live portfolio: the perf
+    server runs on a throwaway database.
+    """
     page.goto(f"{base}/auth/setup")
     page.fill("#setup-username", "perfadmin")
     page.fill("#setup-password", "perf-pass-1234")
@@ -60,7 +75,7 @@ def seed(page, base):
     page.wait_for_url(f"{base}/")
     page.wait_for_load_state("networkidle")
     today = date.today().isoformat()
-    page.evaluate(
+    statuses = page.evaluate(
         """async (today) => {
             const post = (url, body) => fetch(url, {
                 method: 'POST',
@@ -70,13 +85,32 @@ def seed(page, base):
             const portfolios = await fetch('/api/portfolios')
                 .then((r) => r.json());
             const pid = portfolios[0].id;
-            await post('/api/transactions', {ticker: 'AAPL', date: today,
-                price: 150, qty: 2, type: 'BUY', portfolio_id: pid});
-            await post('/api/transactions', {ticker: 'RY.TO', date: today,
-                price: 120, qty: 3, type: 'BUY', portfolio_id: pid});
-            await post('/api/watchlist', {symbol: 'MSFT'});
-            await post('/api/watchlist', {symbol: 'SHOP.TO'});
+            return [
+                await post('/api/transactions', {ticker: 'AAPL', date: today,
+                    price: 150, qty: 2, type: 'BUY', portfolio_id: pid}),
+                await post('/api/transactions', {ticker: 'RY.TO', date: today,
+                    price: 120, qty: 3, type: 'BUY', portfolio_id: pid}),
+                await post('/api/watchlist', {symbol: 'MSFT'}),
+                await post('/api/watchlist', {symbol: 'SHOP.TO'}),
+            ];
         }""", today)
+    if statuses != [201, 201, 201, 201]:
+        raise RuntimeError(f"seed requests failed: {statuses}")
+    if ledger_rows > 0:
+        lines = []
+        for index in range(ledger_rows):
+            day = date.fromordinal(date.today().toordinal() - index % 300)
+            lines.append(
+                f"SYN{index % 8}\t{day:%d %b %Y}\t{100 + index % 50}\t1")
+        status = page.evaluate(
+            """async (text) => fetch('/api/transactions/import/commit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text}),
+            }).then((r) => r.status)""",
+            "\n".join(lines))
+        if status != 200:
+            raise RuntimeError(f"synthetic ledger import failed: HTTP {status}")
 
 
 def measure(page, base, page_name, path, run, settle_s):
@@ -84,6 +118,14 @@ def measure(page, base, page_name, path, run, settle_s):
     page.goto(f"{base}{path}", wait_until="load")
     page.wait_for_load_state("networkidle")
     time.sleep(settle_s)
+    ledger_expand_ms = None
+    ledger_second_expand_ms = None
+    if page_name == "ledger":
+        groups = page.locator("#ledger-body .ledger-group")
+        if groups.count() > 0:
+            ledger_expand_ms = _expand_group(page, 0)
+        if groups.count() > 1:
+            ledger_second_expand_ms = _expand_group(page, 1)
     summary = page.evaluate(
         "window.PortfoliarrPerf ? window.PortfoliarrPerf.summary() : null")
     server = page.evaluate("fetch('/api/perf').then((r) => r.json())")
@@ -92,9 +134,30 @@ def measure(page, base, page_name, path, run, settle_s):
         "path": path,
         "run": run,
         "observed_s": round(time.time() - started, 2),
+        "ledger_expand_ms": ledger_expand_ms,
+        "ledger_second_expand_ms": ledger_second_expand_ms,
         "summary": summary,
         "server": server,
     }
+
+
+def _expand_group(page, group_index):
+    """Click one group row and time the detail rows becoming visible."""
+    before = page.evaluate(
+        "document.querySelectorAll('#ledger-body tr.tx-detail:not([hidden])')"
+        ".length")
+    started = time.perf_counter()
+    page.evaluate(
+        """(index) => {
+            const row = document.querySelectorAll(
+                '#ledger-body .ledger-group')[index];
+            row.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        }""", group_index)
+    page.wait_for_function(
+        """(expected) => document.querySelectorAll(
+            '#ledger-body tr.tx-detail:not([hidden])').length > expected""",
+        arg=before, timeout=10000)
+    return round((time.perf_counter() - started) * 1000, 1)
 
 
 def fmt_ms(value):
@@ -111,8 +174,18 @@ def to_markdown(report):
         f"- Mode: **{report['mode']}**",
         f"- Runs per page: {report['runs']}",
         f"- Settle after load: {report['settle_s']} s",
-        f"- Run 1 is the first measured visit; later runs reuse the 120–600 s "
-        f"TTL caches. Compare like for like.",
+        f"- Viewport: {report.get('viewport', '1280x800')}",
+        f"- Synthetic ledger rows: {report.get('ledger_rows', 0)}",
+        f"- Empty stock degrade mode: {report.get('empty_stock', False)}",
+        "- Run 1 is the first measured visit after setup, NOT a cold start. "
+        "Later runs reuse the 120–600 s TTL caches. Compare like for like.",
+    ]
+    if report.get("stub_ms"):
+        lines.append(
+            "- Stub mode replaces app.py's imported market functions, so it "
+            "bypasses the real market caches. The market cache table below is "
+            "not a cache measurement; use live mode or unit tests for that.")
+    lines += [
         "",
         "## Page loads (browser navigation timing)",
         "",
@@ -146,11 +219,39 @@ def to_markdown(report):
             f"{name}={value:.0f} ms" for name, value in sorted(
                 marks.items(), key=lambda item: item[1]))
         lines.append(f"- marks: {mark_text or '-'}")
+        if row.get("ledger_expand_ms") is not None:
+            lines.append(
+                f"- ledger first group expansion: "
+                f"{fmt_ms(row['ledger_expand_ms'])} ms")
+        if row.get("ledger_second_expand_ms") is not None:
+            lines.append(
+                f"- ledger second group expansion: "
+                f"{fmt_ms(row['ledger_second_expand_ms'])} ms")
         for item in fetches[:5]:
             lines.append(
                 f"- fetch {item.get('endpoint')}: {fmt_ms(item.get('ms'))} ms "
                 f"(server {fmt_ms(item.get('server_ms'))})")
         lines.append("")
+
+    page_errors = report.get("page_errors") or []
+    console_errors = report.get("console_errors") or []
+    lines += [
+        "## Browser page and console errors",
+        "",
+    ]
+    if page_errors:
+        lines.append("Uncaught page errors:")
+        for message in page_errors:
+            lines.append(f"- {message}")
+    else:
+        lines.append("- No uncaught page errors on the measured pages.")
+    if console_errors:
+        lines.append("Console errors:")
+        for message in console_errors:
+            lines.append(f"- {message}")
+    else:
+        lines.append("- No console errors recorded.")
+    lines.append("")
 
     lines += [
         "## Server endpoints (p95, process lifetime)",
@@ -199,6 +300,18 @@ def to_markdown(report):
     return "\n".join(lines)
 
 
+def viewport_size(value):
+    """argparse type: WIDTHxHEIGHT, with a message a user can act on."""
+    parts = value.lower().split("x")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        raise argparse.ArgumentTypeError("viewport must look like 1280x800")
+    width, height = (int(part) for part in parts)
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError(
+            "viewport width and height must be greater than zero")
+    return width, height
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=int, default=2,
@@ -210,21 +323,52 @@ def main():
                         help="seconds to wait after load for late fetches")
     parser.add_argument("--out", default=None,
                         help="output base path (default docs/perf/baseline-<date>)")
+    parser.add_argument("--viewport", type=viewport_size, default=(1280, 800),
+                        metavar="WIDTHxHEIGHT",
+                        help="browser viewport (default 1280x800)")
+    parser.add_argument("--ledger-rows", type=int, default=0,
+                        help="extra synthetic ledger rows seeded through the "
+                             "real import API (0 keeps the small dataset)")
+    parser.add_argument("--allow-console-errors", action="store_true",
+                        help="exit 0 even when the browser logged an error")
+    parser.add_argument("--block-external", action="store_true",
+                        help="return empty bodies for https:// requests so a "
+                             "smoke run never depends on a CDN or fonts host")
+    parser.add_argument("--python", default=None,
+                        help="interpreter that runs perf_server.py (default: "
+                             "PERF_PYTHON, then .venv/bin/python, then this "
+                             "interpreter)")
+    parser.add_argument("--empty-stock", action="store_true",
+                        help="make financials/events return the normal 404s "
+                             "so the stock page's degrade path is measured")
     options = parser.parse_args()
+    if options.empty_stock and options.stub_ms <= 0:
+        parser.error("--empty-stock requires --stub-ms N (live mode has no stub)")
 
+    width, height = options.viewport
+    viewport_label = f"{width}x{height}"
     base = f"http://localhost:{options.port}"
     out_base = Path(options.out) if options.out else (
         ROOT / "docs" / "perf" / f"baseline-{date.today().isoformat()}")
     out_base.parent.mkdir(parents=True, exist_ok=True)
 
-    venv_python = ROOT / ".venv" / "bin" / "python"
+    # Reuse the main checkout's venv in a worktree. The driver itself runs
+    # under the SYSTEM python (Playwright lives there), so sys.executable is
+    # only a last resort: callers can name the Flask interpreter explicitly.
+    venv_python = Path(
+        options.python
+        or os.environ.get("PERF_PYTHON", str(ROOT / ".venv" / "bin" / "python")))
     if not venv_python.exists():
-        sys.exit(f"venv python not found at {venv_python}")
+        venv_python = Path(sys.executable)
+        print(f"warning: no venv python at the default path; using "
+              f"{venv_python} for perf_server.py", file=sys.stderr)
 
     env = dict(os.environ)
     env["PERF_PORT"] = str(options.port)
     if options.stub_ms > 0:
         env["PERF_STUB_YAHOO_MS"] = str(options.stub_ms)
+    if options.empty_stock:
+        env["PERF_STUB_EMPTY_STOCK"] = "1"
 
     server = subprocess.Popen(
         [str(venv_python), str(ROOT / "scripts" / "perf_server.py")],
@@ -235,10 +379,15 @@ def main():
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": (f"stub {options.stub_ms} ms per Yahoo call"
                  if options.stub_ms > 0 else "live Yahoo"),
+        "stub_ms": options.stub_ms,
         "runs": options.runs,
         "settle_s": options.settle,
+        "viewport": viewport_label,
+        "ledger_rows": options.ledger_rows,
+        "empty_stock": options.empty_stock,
         "measurements": [],
         "console_errors": [],
+        "page_errors": [],
         "server_final": None,
     }
 
@@ -248,15 +397,19 @@ def main():
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(viewport={"width": 1280,
-                                                    "height": 800})
+            context = browser.new_context(viewport={"width": width,
+                                                    "height": height})
+            if options.block_external:
+                context.route(
+                    "https://**",
+                    lambda route: route.fulfill(status=200, body=""))
             page = context.new_page()
-            page.on("pageerror", lambda exc: report["console_errors"].append(
+            page.on("pageerror", lambda exc: report["page_errors"].append(
                 str(exc)))
             page.on("console", lambda msg: report["console_errors"].append(
                 msg.text) if msg.type == "error" else None)
 
-            seed(page, base)
+            seed(page, base, options.ledger_rows)
 
             for page_name, path in PAGES:
                 for run in range(1, options.runs + 1):
@@ -269,6 +422,12 @@ def main():
                           f"load={fmt_ms(nav.get('load_ms'))} "
                           f"lcp={fmt_ms(summary.get('lcp_ms'))} "
                           f"({row['observed_s']} s observed)")
+                    if row.get("ledger_expand_ms") is not None:
+                        print(f"  ledger first expansion: "
+                              f"{fmt_ms(row['ledger_expand_ms'])} ms")
+                    if row.get("ledger_second_expand_ms") is not None:
+                        print(f"  ledger second expansion: "
+                              f"{fmt_ms(row['ledger_second_expand_ms'])} ms")
 
             report["server_final"] = page.evaluate(
                 "fetch('/api/perf').then((r) => r.json())")
@@ -286,6 +445,19 @@ def main():
     (out_base.with_suffix(".md")).write_text(markdown + "\n")
     print(f"\nwrote {out_base.with_suffix('.md')}")
     print(f"wrote {out_base.with_suffix('.json')}")
+    if report["page_errors"]:
+        print(f"\n{len(report['page_errors'])} uncaught page error(s):",
+              file=sys.stderr)
+        for message in report["page_errors"]:
+            print(f"  {message}", file=sys.stderr)
+        sys.exit(1)
+    if report["console_errors"]:
+        print(f"\n{len(report['console_errors'])} console error(s) recorded:",
+              file=sys.stderr)
+        for message in report["console_errors"]:
+            print(f"  {message}", file=sys.stderr)
+        if not options.allow_console_errors:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

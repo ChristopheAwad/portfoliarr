@@ -29,6 +29,7 @@ is deliberately disposable.
 
 # pathlib's Path is the modern way to build filesystem paths (no manual
 # string joining with "/", no platform-specific separators to worry about).
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,9 +73,31 @@ def _connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    perf.record("db.connect", (time.perf_counter() - started) * 1000)
-    return conn
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        perf.record("db.connect", (time.perf_counter() - started) * 1000)
+        return conn
+    except Exception:
+        # A connection opened but not handed to a caller must still close.
+        conn.close()
+        raise
+
+
+@contextmanager
+def _connection():
+    """One operation's connection: commit or roll back, then ALWAYS close.
+
+    `with sqlite3.Connection` only commits or rolls back; it does not close
+    the file. Leaving close to the garbage collector kept dozens of open
+    descriptors alive during request bursts. This wrapper keeps the same
+    transaction rules and releases the descriptor deterministically.
+    """
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init():
@@ -94,7 +117,7 @@ def init():
     a failure anywhere rolls the complete schema back: either the whole
     migration happened, or none of it did.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # `with conn:` commits the change if the block succeeds and rolls
         # back on error — same idea as a transaction in any database.
@@ -407,7 +430,7 @@ def init():
 
 def get_setting(key):
     """Return one setting's value, or None when it was never stored."""
-    with _connect() as conn:
+    with _connection() as conn:
         row = conn.execute(
             "SELECT value FROM app_settings WHERE key = ?", (key,)
         ).fetchone()
@@ -417,7 +440,7 @@ def get_setting(key):
 def set_setting(key, value):
     """Insert or replace one setting. REPLACE also updates the rowid,
     which is fine — settings have no meaningful order."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES (?, ?)"
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -434,7 +457,7 @@ def set_setting(key, value):
 
 def get_classification_override(symbol, dimension):
     """One override's {weights, as_of, updated_at}, or None."""
-    with _connect() as conn:
+    with _connection() as conn:
         row = conn.execute(
             "SELECT weights, as_of, updated_at FROM classification_overrides"
             " WHERE symbol = ? AND dimension = ?",
@@ -459,7 +482,7 @@ def get_classification_overrides(dimension=None, symbol=None):
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY symbol, dimension"
-    with _connect() as conn:
+    with _connection() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
     return [
         {"symbol": r[0], "dimension": r[1], "weights": json.loads(r[2]),
@@ -471,7 +494,7 @@ def get_classification_overrides(dimension=None, symbol=None):
 def set_classification_override(symbol, dimension, weights, as_of=None):
     """Insert or replace one override, stamping updated_at with now (UTC)."""
     updated_at = _utc_now_iso()
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute(
             "INSERT INTO classification_overrides"
             " (symbol, dimension, weights, as_of, updated_at)"
@@ -485,7 +508,7 @@ def set_classification_override(symbol, dimension, weights, as_of=None):
 
 def delete_classification_override(symbol, dimension):
     """Delete one override. True when a row was removed."""
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM classification_overrides"
             " WHERE symbol = ? AND dimension = ?",
@@ -495,7 +518,7 @@ def delete_classification_override(symbol, dimension):
 
 def delete_classification_overrides(symbol):
     """Delete every override for one symbol. Returns the count removed."""
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM classification_overrides WHERE symbol = ?",
             (symbol,))
@@ -514,14 +537,14 @@ def _utc_now_iso():
 # People-list reply — omits it: hashes must never leave the server.
 # ---------------------------------------------------------------------------
 def get_users():
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(
             "SELECT id, username FROM users ORDER BY id")]
 
 
 def get_user(user_id):
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT id, username, password_hash, password_version"
@@ -532,7 +555,7 @@ def get_user(user_id):
 
 def bump_password_version(user_id):
     """Increase the session version so old cookies stop working."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute(
             "UPDATE users SET password_version = password_version + 1"
             " WHERE id = ?",
@@ -544,7 +567,7 @@ def get_user_by_username(username):
     """Exact-string username lookup — NOCASE comes from the column's
     declared COLLATE, so the caller may pass any casing; what it may NOT
     pass is an untrimmed name (that's route policy, and the CHECK agrees)."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT id, username, password_hash, password_version FROM users"
@@ -553,7 +576,7 @@ def get_user_by_username(username):
 
 
 def count_users():
-    with _connect() as conn:
+    with _connection() as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
 
@@ -572,7 +595,7 @@ def create_user(username, password_hash, seed_main=True):
     doubled), and claim_unowned_data is what seeds Main when there is
     nothing legitimately to adopt.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         cursor = conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (?, ?)",
@@ -590,7 +613,7 @@ def create_user(username, password_hash, seed_main=True):
 def set_password(user_id, password_hash):
     """Store a NEW hash (verification of the old password already happened
     in the route). False means no such user."""
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "UPDATE users SET password_hash = ? WHERE id = ?",
             (password_hash, user_id),
@@ -612,7 +635,7 @@ def delete_user(user_id, confirmation):
     Deleting the account you're signed in as is the ROUTE layer's rule
     (it knows the session); this layer only refuses the LAST user.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT username FROM users WHERE id = ?", (user_id,)
@@ -641,7 +664,7 @@ def claim_unowned_data(user_id):
     If the claim finds no portfolio at all (a fresh install), it seeds
     the account's Main — create_user's usual guarantee.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "UPDATE portfolios SET user_id = ? WHERE user_id IS NULL",
@@ -659,7 +682,7 @@ def claim_unowned_data(user_id):
 
 
 def get_portfolios(user_id):
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(
             "SELECT id, name, sort_order FROM portfolios"
@@ -671,7 +694,7 @@ def get_portfolio(portfolio_id, user_id):
     somebody else is indistinguishable from a made-up id (None). The
     reply keeps the pre-#26 reply shape (id, name, sort_order) — the
     owner check rides in the WHERE clause, not in the payload."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT id, name, sort_order FROM portfolios"
@@ -684,7 +707,7 @@ def default_portfolio_id(user_id):
     """The user's first ordered portfolio — the fallback for API requests
     that omit portfolio_id. Returns None when the user owns nothing (the
     route answers 409 rather than guessing another person's ledger)."""
-    with _connect() as conn:
+    with _connection() as conn:
         row = conn.execute(
             "SELECT id FROM portfolios WHERE user_id = ?"
             " ORDER BY sort_order, id LIMIT 1", (user_id,)
@@ -693,7 +716,7 @@ def default_portfolio_id(user_id):
 
 
 def create_portfolio(name, user_id):
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if any(row[0].casefold() == name.casefold() for row in
                conn.execute("SELECT name FROM portfolios WHERE user_id = ?",
@@ -708,7 +731,7 @@ def create_portfolio(name, user_id):
 
 
 def rename_portfolio(portfolio_id, user_id, name):
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         if any(row[0] != portfolio_id and row[1].casefold() == name.casefold()
                for row in conn.execute(
@@ -723,7 +746,7 @@ def rename_portfolio(portfolio_id, user_id, name):
 
 def move_portfolio(portfolio_id, user_id, direction):
     """Swap adjacent display positions in one write transaction."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         ids = [row[0] for row in conn.execute(
             "SELECT id FROM portfolios WHERE user_id = ?"
@@ -743,7 +766,7 @@ def move_portfolio(portfolio_id, user_id, direction):
 
 def delete_portfolio(portfolio_id, user_id, confirmation):
     """Return deleted, missing, last, or mismatch; never leave orphan trades."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT name FROM portfolios WHERE id = ? AND user_id = ?",
                            (portfolio_id, user_id)).fetchone()
@@ -776,7 +799,7 @@ def get_symbols(user_id):
     inserted, so ORDER BY rowid = "oldest watchlist entry first" — a stable,
     meaningful order without storing an extra timestamp column.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         rows = conn.execute(
             "SELECT symbol FROM watchlist WHERE user_id = ? ORDER BY rowid",
             (user_id,),
@@ -791,7 +814,7 @@ def add_symbol(symbol, user_id):
     sqlite3.IntegrityError if it already exists (PRIMARY KEY violation;
     the (user_id, symbol) pair is the identity, so two users may watch
     the same ticker) — the route layer turns that into a 409."""
-    with _connect() as conn:
+    with _connection() as conn:
         # The ? placeholder passes the value SEPARATELY from the SQL text,
         # so the database engine treats it as data only. Building SQL by
         # string formatting would let a crafted symbol execute extra SQL —
@@ -813,7 +836,7 @@ def is_watched(symbol, user_id):
     route calls this at render time to stamp the watch button's initial
     state, so the page knows it's watched before any JavaScript runs.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         row = conn.execute(
             "SELECT 1 FROM watchlist WHERE symbol = ? AND user_id = ?"
             " LIMIT 1", (symbol, user_id),
@@ -829,7 +852,7 @@ def remove_symbol(symbol, user_id):
 
     cursor.rowcount reports how many rows the last statement touched.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM watchlist WHERE symbol = ? AND user_id = ?",
             (symbol, user_id),
@@ -867,7 +890,7 @@ def add_transaction(ticker, transaction_date, price, qty, currency,
     Same ? placeholder rule as add_symbol: values travel separately from
     SQL text, so even hostile input is inert data, never executable SQL.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO transactions
@@ -902,7 +925,7 @@ def get_transactions(portfolio_id):
     ownership always supplies it, and a silent default here could only
     ever leak the wrong person's ledger.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -925,7 +948,7 @@ def get_unrated_usd_transactions(portfolio_id):
     Ordered oldest-first because the backfill re-derives each row's rate
     from its own date; order changes nothing but keeps the read natural.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -948,7 +971,7 @@ def get_transaction(tx_id, portfolio_id):
     far better than validating fields for a row that was never there.
     Same SELECT shape as get_transactions, narrowed to one id.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
@@ -981,7 +1004,7 @@ def update_transaction(tx_id, transaction_date, price, qty, transaction_type,
     row was actually updated, False if the id doesn't exist in this
     portfolio (rowcount 0), which the route turns into a 404.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             """
             UPDATE transactions
@@ -1011,7 +1034,7 @@ def set_fx_rate(tx_id, fx_rate):
     True if a row changed, False for an unknown id or an already-rated
     row.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "UPDATE transactions SET fx_rate = ?"
             " WHERE id = ? AND fx_rate IS NULL",
@@ -1030,7 +1053,7 @@ def delete_transaction(tx_id, portfolio_id):
     table's one destructive verb, which is exactly why the UI gates it
     behind a confirm() dialog.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM transactions WHERE id = ? AND portfolio_id = ?",
             (tx_id, portfolio_id),
@@ -1050,7 +1073,7 @@ def delete_transactions_for_ticker(ticker, portfolio_id):
     securities that must never wipe each other. Parameterized like every
     query here — the ticker travels as data, never as SQL text.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM transactions WHERE ticker = ? AND portfolio_id = ?",
             (ticker, portfolio_id),
@@ -1077,7 +1100,7 @@ def create_widget_token(user_id, portfolio_id, token_hash, created_at,
     writer, like add_transaction. `token_hash` is the SHA-256 hex of the
     plaintext token, which is never stored.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "INSERT INTO widget_tokens"
             " (user_id, portfolio_id, scope, token_hash, created_at)"
@@ -1098,7 +1121,7 @@ def get_widget_token(token_hash):
     transaction. Returns id, user_id, portfolio_id, scope, created_at,
     last_used_at, portfolio_name.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
@@ -1117,7 +1140,7 @@ def touch_widget_token(token_id, used_at):
     """Record that a token just served a request. Display-only (the
     Preferences list shows "last used"); a failure here is not the
     fetcher's business, so nothing is returned."""
-    with _connect() as conn:
+    with _connection() as conn:
         conn.execute(
             "UPDATE widget_tokens SET last_used_at = ? WHERE id = ?",
             (used_at, token_id),
@@ -1133,7 +1156,7 @@ def list_widget_tokens(user_id):
     portfolios stay honest and a watchlist token (portfolio_id NULL) shows
     a null name.
     """
-    with _connect() as conn:
+    with _connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -1155,7 +1178,7 @@ def delete_widget_token(token_id, user_id):
     the route turns both into the same 404, exactly like portfolio
     ownership (another person's row is indistinguishable from a made-up
     one)."""
-    with _connect() as conn:
+    with _connection() as conn:
         cursor = conn.execute(
             "DELETE FROM widget_tokens WHERE id = ? AND user_id = ?",
             (token_id, user_id),
