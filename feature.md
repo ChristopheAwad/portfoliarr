@@ -1,175 +1,134 @@
-# Performance audit remediation, phase 1
+# Performance release 2: slower loading and duplicate work
 
-Status: implemented, reviewed, and delivered 2026-11-10.
-Branch: `fix/perf-harness-db-connections` from main `957875e`.
-Base checkout `fix/audit-owner-security` stays untouched with its uncommitted
-security work. The user chose NOT to ship the deferred-ledger prototype;
-measure-first was the earlier decision and it remains just a measurement.
+Status: in progress. Approved by the user 2026-11-10 after an independent
+plan review (two rounds; no remaining blockers).
 
-Audit source: the 2026-11-10 performance audit. The user rejected changes to
-dashboard period preloading and Volume Leaders: the eight parallel chart
-periods and all volume behavior stay exactly as they are.
+Branch: `plan-portfoliarr-speed-performance` (existing linked worktree,
+based on `origin/main` `10e272b`). The branch name does not match the
+`feat/<id>-<slug>` pattern. The worktree is adopted as-is; the main
+checkout holds unrelated security work and must stay untouched.
 
-Scope:
+Roadmap: added as item 63 (Tier 2) after approval.
 
-1. Repair the performance measurement fixtures and reporting.
-2. Close SQLite connections deterministically.
-3. Measure the ledger initial load and group expansion with a temporary
-   prototype. No product ledger change without separate approval.
-4. Later item-5 work (import batching, slow-provider budgets, stock metadata,
-   asset loading) needs its own plan.
+## Scope approved
+
+Honor the previous owner decision: keep the eight parallel dashboard
+period preloads and all Volume Leaders behavior. Do not ship the deferred
+ledger prototype. Do not pre-plan Tier 3 items.
+
+1. Make the performance harness trustworthy: race-free child server with
+   an inherited listening socket and ready token, disposable verified
+   seeds, real pinned Chart.js fixtures offline, chart-paint readiness,
+   explicit cold/warm modes, honest error reporting, and no private
+   symbols or amounts in timing data.
+2. Share in-flight history requests for the same (symbol, period).
+3. Load Closed Sales company names with at most four workers, one row pass.
+4. Read one ticker's transactions through the existing index for the stock
+   page position card.
+5. Load Chart.js and the annotation plugin only on Dashboard and Stock.
+6. Measure Gunicorn 8/12/16 threads under 2-client, slow/failed-provider,
+   concurrent-write load. Change the setting only if the approved safety
+   gate passes; otherwise keep eight and report.
 
 ## Tests first
 
-`tests/test_perf_harness.py` (new):
+- `tests/test_market_data.py` / `tests/test_chart_speed.py`: eight
+  simultaneous cold same-key history calls make one provider call; warm
+  hit adds none; different keys run concurrently; failure wakes all
+  waiters and stays retryable; invalid period raises before any slot;
+  callers get independent copies; successful `{}` keeps the normal TTL.
+- `tests/test_realized.py`: name lookups use 2-4 workers, tolerate one
+  failure, make zero calls with no sales, and preserve rows/order/totals.
+- `tests/test_db.py` / `tests/test_stock_position.py`: one-ticker query
+  ordering, exact ticker match, portfolio isolation, query plan uses
+  `tx_portfolio_ticker`, and stock-position JSON parity.
+- `tests/test_prev_close.py`, `tests/test_ledger_page.py`,
+  `tests/test_stock.py`, `tests/test_allocation_ui.py`: chart libraries
+  on Dashboard/Stock in the right order; absent on Ledger/Preferences.
+- `tests/test_perf_js.py`, `tests/test_perf.py`: fund-classification path
+  normalization on both client and server; no symbol in payloads.
+- `tests/test_perf_harness.py`: DB redirect before import, seeded counts,
+  no repo baseline writes, no real instance DB writes, offline smoke with
+  real charts and zero unexpected console/page errors, missing-CDN case
+  separate, and occupied-port/wrong-child protection.
 
-- The simulated history labels follow `PERIOD_MAP`: 1D, 5D, and 1M use
-  `YYYY-MM-DD HH:MM`; 3M, 6M, YTD, and 1Y use dates; 5Y uses weekly dates;
-  MAX uses monthly dates. No two same-day bars collide.
-- The simulated stats, financials, events, and profile payloads contain the
-  keys the real getters and page scripts read, and the stock page paints them.
-- Empty financials/events and a missing profile degrade without a page error.
-- A stubbed run of all four pages records zero unexpected console errors.
-- `DB_PATH` is redirected before `app` is imported.
-- `--out` writes only to the chosen path. The repository baseline files are
-  unchanged by a test run.
+## Implementation notes
 
-`tests/test_db.py`:
-
-- A read and a write each open and close exactly one real connection.
-- A failing operation, a PRAGMA failure, and a failing commit each still
-  close the connection.
-- A successful write commits; an error rolls the whole transaction back,
-  including multi-step setup and migration.
-- Foreign keys stay enabled and the existing row_factory reads keep working.
-
-## Implementation
-
-1. `scripts/perf_server.py`: keep the throwaway database redirect, the Flask
-   development server, and the app-level fixed-latency stub boundary. Align
-   the fake payloads and labels with the current getters and `PERIOD_MAP`.
-   Do not change `market_data.py`, `app.py` routes, `PERIOD_MAP`, or
-   `MARKET_CATEGORIES`.
-2. `scripts/measure_perf.py`: report the stub boundary honestly, surface
-   console errors in the Markdown report, fail the run on an unexpected page
-   error, and add the phone-width ledger measurement needed for item 3.
-   Existing default `--out` behavior stays; tests write to `/tmp/opencode/`.
-3. `db.py`: keep `_connect()` returning a raw connection. Close it when setup
-   fails after the connection opens. Add a `contextlib.contextmanager`
-   helper that enters the SQLite transaction context and closes in `finally`.
-   Replace every `with _connect() as conn:` use with it. No schema,
-   transaction-rule, or financial-math change.
-4. Ledger measurement: throwaway scripts and synthetic data only. Compare the
-   current render with an on-demand prototype at 1280x800 and 390x844, on
-   0, 1, 1,000-same-group, and 1,000-across-10-row ledgers. Measure the
-   setup-warmed initial visit and the first and second expansion, three runs
-   per case. Keep server `group_*` totals, the `1e-9` tolerance, and short
-   symmetry. Preserve the group and detail row behavior.
+- `market_data.py`: `_inflight_history` keyed by `(symbol, period_key)`,
+  owner-only cache write, identity-checked cleanup, waiters get copies.
+- `app.py`: parallel realized names; `_CLIENT_DYNAMIC_ENDPOINTS` gains
+  `/api/fund-classification/:symbol`; stock position uses the new query.
+- `db.py`: `get_transactions_for_ticker(portfolio_id, ticker)` with
+  `ORDER BY transaction_date DESC, id DESC`.
+- `templates/base.html`: `head_extra` block; `index.html` and
+  `stock.html` load Chart.js + annotation plugin; ledger/preferences do
+  not.
+- `static/js/perf.js`: path template for fund classification.
+- `scripts/perf_server.py` / `scripts/measure_perf.py`: FD handoff,
+  ready token, verified seed, fixture assets, cold mode, chart checks.
+- `tests/fixtures/perf/`: pinned Chart.js 4.6.1 and annotation 3.1.0
+  assets with licenses and a source/version record.
 
 ## Verification
 
-```bash
-.venv/bin/python -m pytest tests/test_perf_harness.py tests/test_db.py tests/test_perf.py
-.venv/bin/python -m pytest
-/usr/bin/python3 scripts/measure_perf.py --runs 1 --stub-ms 80 --settle 1 --port 53145 --out /tmp/opencode/portfoliarr-perf-check-1
-```
-
-Run the full suite against a disposable database. The Playwright checks use
-throwaway data and stubbed market data. Save screenshots for the database
-change and the ledger measurement.
-
-Compatibility check: copy the dirty security working tree to a disposable
-checkout without `instance/`, apply this diff there, and run the affected
-owner, security, database, and harness tests. Stop and ask if a conflict is
-not mechanical.
-
-## Review log
-
-Plan reviewer found no blockers after two revision rounds. Fixes: kept the
-real cache boundary honest, removed the unneeded Gunicorn mode, defined the
-warmed measurement language, preserved the dirty branch, and excluded
-`instance/` from the compatibility copy.
-
-Diff reviewer: two blockers, both fixed and re-reviewed with no remaining
-blockers. They were the three-argument historical-FX stub and the missing
-empty-financials/events/missing-profile degrade coverage. Final safe nits:
-`--empty-stock` now requires `--stub-ms`, and viewport dimensions must be
-positive.
+Focused files during development; full suite once before code review.
+Disposable DBs only. Docker is unavailable locally, so the image build
+must be validated by GitHub Actions. GUI checks at 1280x800 and 390x844
+with screenshots in the PR.
 
 ## Results
 
-### Harness repair
+- History single-flight: eight simultaneous identical cold requests now make
+  one provider call; a ninth warm request makes none; different keys still
+  overlap; failures wake every waiter and stay retryable.
+- Closed Sales names: with 10 distinct sold tickers and a 50 ms fake
+  provider, the measured median dropped from ~503 ms to ~153 ms. 20
+  tickers measured ~254 ms. Results, totals, and row order are unchanged.
+- Stock position reads only its ticker through the existing
+  `tx_portfolio_ticker` index; the query is pinned with `INDEXED BY` because
+  SQLite otherwise prefers the date index and scans every portfolio row.
+- Chart.js and the annotation plugin now load only on Dashboard and Stock.
+  The offline harness confirms real charts render on those pages and
+  `Chart` is absent on Ledger and Preferences.
+- Harness: the old offline route pattern (`https://**`) never matched in
+  this Playwright build, which is why the smoke test failed with
+  `ERR_INTERNET_DISCONNECTED`. It now matches the scheme with a regex and
+  serves pinned Chart.js 4.6.1 / annotation 3.1.0. The driver passes an
+  inherited listening socket and verifies a random ready token before
+  seeding, verifies stored transaction counts, and supports `--cold`
+  (fresh server per page). A missing-chart run is a separate expected
+  degradation test.
+- Gunicorn threads: **kept at 8**. Two-client, 16-chart, concurrent-write
+  test: peak simultaneous provider calls rose from 48-56 to 64 (one
+  baseline rep +33%, beyond the 25% gate), so the safety gate failed.
+  Light-request latency during that burst was ~918-950 ms at 8 threads and
+  ~475-615 ms at 16. The reduced light latency is real but not worth the
+  added provider pressure without a bounded provider budget, which is
+  deferred to a separate plan. `Dockerfile`, `README.md`, and
+  `tests/test_docker.py` are unchanged.
+- Deferred ledger prototype remains unshipped: 1,000 synthetic rows still
+  build hidden detail rows (`ledger:rows` 414-508 ms in the new harness).
 
-- `scripts/perf_stub.py` is the single source for the fake payloads. Labels
-  come from `PERIOD_MAP`; stats carry `recommendation` (the missing string
-  that used to crash `stock.js`), plus every getter key; financials and events
-  match the routes; the profile carries the look-through keys.
-- `scripts/measure_perf.py` records the viewport, synthetic ledger size, and
-  first/second group expansion. It prints console errors, fails on them
-  unless `--allow-console-errors`, reports the stub boundary honestly, rejects
-  a bare "cold" reading, and never writes outside `--out`. `--python` names
-  the Flask interpreter so the driver can stay on the system python.
-- `tests/test_perf_harness.py` pins label shapes against `PERIOD_MAP`, stats
-  key parity with the real getter, financials shape, events/profile shapes,
-  the install boundary (including the three-argument `get_fx_rate_on`), the
-  DB redirect order, a stubbed four-page smoke run with no page/console
-  errors and no repo baseline or real-DB writes, and a degrade run where
-  financials/events 404 and the stats grid is all nulls. The degrade run
-  allows the page's handled console errors but forbids uncaught page errors.
+## Checks
 
-### SQLite connection lifetime
+- Focused performance/feature files: **323 passed**.
+- Full suite in an isolated network namespace with a redirected disposable
+  database: **1544 passed** (80.9 s).
+- Offline browser run, desktop 1280x800 and phone-width 390x844, 1,002
+  verified synthetic transactions: 0 unexpected console/page errors,
+  real charts on Dashboard and Stock, no Chart.js on Ledger/Preferences.
+- Docker is not installed on this host; the image build and publish must be
+  validated by GitHub Actions after the PR merges.
 
-- `db.py` keeps `_connect()` raw for monkeypatch compatibility and adds
-  `_connection()`: `with conn` keeps the commit/rollback rules, `finally`
-  closes. All 41 call sites in this tree use it. `_connect()` also closes if
-  PRAGMA/metric setup fails after the connection opens.
-- `tests/test_db.py` tracks real opens and closes on read, write, failed
-  write, PRAGMA failure and commit failure. The commit failure is a real
-  deferred foreign-key violation (Python 3.14 commits internally, so
-  overriding `Connection.commit` cannot inject one). It also proves rollback
-  leaves no row and foreign keys stay on.
-- Measurements from the audit reproduce the leak: 1,000 synthetic user reads
-  sampled a peak of 172 open descriptors before the fix.
+## Evidence
 
-### Ledger measurement (no product change)
+- `/tmp/opencode/portfoliarr-speed-study-20261110/after-desktop.md` and
+  `.json` (new harness, 1,000 rows).
+- `/tmp/opencode/portfoliarr-speed-study-20261110/probe.py`,
+  `probe2.py`, `measure_realized.py` (controlled synthetic measurements).
+- `/tmp/opencode/portfoliarr-speed-study-20261110/plan.md` (approved plan).
 
-Throwaway copies of the current tree and a deferred-detail prototype, served
-from separate temp databases with stubbed quotes. Medians of three runs per
-case. "Initial" is the setup-warmed first visit, not a cold start. The phone
-width is a browser viewport, not an Android device.
+## Progress log
 
-| case | width | current initial | prototype initial | current 1st expand | prototype 1st expand | current DOM | prototype DOM |
-|---|---|---:|---:|---:|---:|---:|---:|
-| 0 rows | 1280 | 349 ms | 148 ms | - | - | 2 | 2 |
-| 1 row | 1280 | 295 ms | 113 ms | 11 ms | 17 ms | 48 | 25 |
-| 1,000 same group | 1280 | 259 ms | 148 ms | 155 ms | 219 ms | 23,025 | 25 |
-| 1,000 same group | 390 | 373 ms | 167 ms | 393 ms | 398 ms | 23,025 | 25 |
-| 1,000 across 10 | 1280 | 622 ms | 160 ms | 45 ms | 30 ms | 23,250 | 250 |
-| 1,000 across 10 | 390 | 261 ms | 158 ms | 29 ms | 30 ms | 23,250 | 250 |
-
-Reading: deferring detail rows cuts the initial DOM from about 23,000 elements
-to 25/250 and improves the warmed initial visit by roughly 0.1–0.46 s. The
-cost moves to opening a group: the single 1,000-row group is about 65 ms
-slower on desktop and about the same on the phone viewport; 100-row groups
-are comparable. The 0-row and 1-row numbers are noisy (runs ranged from 85 ms
-to 1.7 s), so only the large-ledger DOM and initial-visit differences are
-meaningful. Screenshots show no visual difference for an expanded group.
-Evidence: `/tmp/opencode/ledger-measure/results.json` and
-`/tmp/opencode/ledger-measure/*.png`.
-
-Decision: the prototype is not shipped. The user asked to measure first; the
-product change needs separate approval. Recommendation: ship deferred detail
-rows only if large ledgers matter more than the one-off pause on the first
-opening of a very large group.
-
-### Checks
-
-- Perf worktree full suite: **1533 passed**.
-- Combined disposable copy (pending owner/security changes + this work,
-  excluding `instance/`): **1630 passed** after a mechanical merge of the
-  `db.py` call sites. No conflict required a behaviour decision.
-- Playwright smoke: four pages, zero console errors, no repository baseline
-  files changed.
-- Delivered as one squash commit to main. No live database change.
-- Ledger product code, chart preloads, Volume Leaders, market categories,
-  `PERIOD_MAP`, and money/FX rules are unchanged.
+- 2026-11-10: approved plan recorded; implementation started.
+- 2026-11-10: implementation and local checks complete; code review next.

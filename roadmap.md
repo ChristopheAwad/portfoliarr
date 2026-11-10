@@ -699,6 +699,35 @@ excluded behavior. Detailed plan in `feature.md`.
 
 ---
 
+### 63. Loading Performance and Duplicate Work
+Make page loads faster without changing the shipped dashboard preloads or
+Volume Leaders. Share simultaneous identical `(symbol, period)` history
+requests through the quote/profile single-flight pattern. Fetch Closed
+Sales company names with a bounded pool and attach them in one pass.
+Read a stock page's position through a `(portfolio_id, ticker)` query
+instead of loading the whole ledger. Load Chart.js and the annotation
+plugin only on Dashboard and Stock. Repair the performance harness so cold
+and warm runs are honest, seeded counts are verified, real charts render
+offline, and child servers cannot be confused with another process. Measure
+8/12/16 Gunicorn threads under two-client slow/failed-provider and
+concurrent-write load; change the thread count only if the approved safety
+gate passes.
+
+**Effort:** 4–7 days
+**Files:** `market_data.py`, `app.py`, `db.py`, `templates/base.html`,
+`templates/index.html`, `templates/stock.html`, `static/js/perf.js`,
+`scripts/perf_server.py`, `scripts/measure_perf.py`, `tests/fixtures/perf/`,
+`tests/test_market_data.py`, `tests/test_chart_speed.py`,
+`tests/test_realized.py`, `tests/test_db.py`, `tests/test_stock_position.py`,
+`tests/test_prev_close.py`, `tests/test_ledger_page.py`,
+`tests/test_stock.py`, `tests/test_allocation_ui.py`, `tests/test_perf.py`,
+`tests/test_perf_js.py`, `tests/test_perf_harness.py`, `Dockerfile`,
+`README.md`, `tests/test_docker.py`
+**Depends on:** #61 (shipped instrumentation and harness)
+**Status:** in progress
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout
