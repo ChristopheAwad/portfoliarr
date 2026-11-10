@@ -61,6 +61,12 @@ import db
 import perf
 
 
+# The portfolio chart's leading trim may only wait for a holiday-sized gap.
+# A CAD/USD market holiday cannot hide a price for longer than a long
+# weekend; a ticker whose data starts weeks later is a data gap, not a
+# holiday, and must fall back to the old "contributes 0" behavior.
+LEADING_TRIM_GRACE_DAYS = 7
+
 SLOW_REQUEST_MS = 2000
 # One durable perf_summary block every N completed non-static requests.
 PERF_SUMMARY_EVERY = 200
@@ -1836,7 +1842,7 @@ Algorithm: walk every trading day in the range forward, keeping a
                         # the date-sorted list)
     series_labels = []  # labels actually plotted (leading partials dropped)
     started = False     # has the first fully-priced bar been found?
-    for label in labels:
+    for label_index, label in enumerate(labels):
         # Choose which transactions this label should absorb, then apply
         # them BEFORE pricing (a trade dated this bar's day prices at this
         # bar). The list is sorted by date and every label carries a date,
@@ -1908,16 +1914,32 @@ Algorithm: walk every trading day in the range forward, keeping a
         # date-level on purpose: same-day intraday gaps keep their existing
         # behavior, and a ticker with no bars at all (dead/delisted) still
         # contributes 0 and never blocks the start.
+        #
+        # BOUND the wait twice, so a DATA gap can never be mistaken for a
+        # market holiday:
+        #   * only wait while the missing bar is within LEADING_TRIM_GRACE_DAYS
+        #     — a CAD/USD holiday cannot hide a price for longer than a long
+        #     weekend, so a ticker whose history starts weeks later (a
+        #     stale/renamed symbol, a thin-data provider gap) must fall
+        #     back to the old "contributes 0" behavior instead of trimming
+        #     the whole chart away.
+        #   * keep at least two plotted points — a one-point daily series
+        #     reads as a blank chart and makes TWR null.
         if not started:
             label_date = label[:10]
+            grace_end = (
+                date.fromisoformat(label_date)
+                + timedelta(days=LEADING_TRIM_GRACE_DAYS)
+            ).isoformat()
+            labels_after = len(labels) - 1 - label_index
             priced_anything = any(
                 held != 0 and symbol in last_closes
                 for symbol, held in net_qty.items()
             )
-            if any(
+            if labels_after >= 2 and any(
                 held != 0
                 and symbol not in last_closes
-                and first_bar_date.get(symbol, "") > label_date
+                and label_date < first_bar_date.get(symbol, "") <= grace_end
                 and (
                     not priced_anything
                     or first_tx_by_symbol.get(symbol, "") < label_date

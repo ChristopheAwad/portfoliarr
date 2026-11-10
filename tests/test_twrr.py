@@ -577,3 +577,76 @@ def test_cross_market_holiday_leading_bar_is_trimmed(client, fake_market):
     assert body["values"] == pytest.approx([1520.0, 1630.0])
     assert body["index_values"] == pytest.approx([100.0, 1630 / 1520 * 100])
     assert body["twrr_pct"] == pytest.approx(110 / 1520 * 100)
+
+
+# ── The leading trim must not blank a chart on a data gap ─────────────
+
+def test_sparse_daily_history_does_not_blank_the_chart(client, fake_market):
+    """REGRESSION: a held ticker whose DAILY history starts only on the
+    window's last date (a stale/renamed symbol, a thin-data provider gap)
+    is not a market holiday. Waiting for it must not trim the whole series
+    away — a one-point (or empty) daily chart reads as blank and makes TWR
+    null, while the same ticker's hourly data kept 1M healthy.
+
+        AAPL prints Aug 10/11/12 and Nov 9; SPARSE only Nov 9.
+        Start at Aug 10 (old forward-fill/0 behavior); the last bar still
+        prices SPARSE, and TWR stays computable.
+    """
+    seed_transaction(ticker="AAPL", date="2026-01-01", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="SPARSE", date="2026-01-01", qty=10,
+                     currency="CAD", price=50.0)
+    fake_market.histories["AAPL"] = {
+        "2026-08-10": 100.0, "2026-08-11": 101.0,
+        "2026-08-12": 102.0, "2026-11-09": 110.0,
+    }
+    fake_market.histories["SPARSE"] = {"2026-11-09": 50.0}
+
+    body = client.get("/api/portfolio/history?period=3M").get_json()
+    assert body["labels"] == [
+        "2026-08-10", "2026-08-11", "2026-08-12", "2026-11-09",
+    ]
+    assert body["values"] == pytest.approx([1000.0, 1010.0, 1020.0, 1600.0])
+    assert body["twrr_pct"] is not None
+
+
+def test_leading_trim_keeps_at_least_two_points(client, fake_market):
+    """The trim must stop rather than leave a single plotted point. A
+    ticker that first prices on the second-to-last label (inside the
+    holiday grace) is allowed to shift the start by one bar, never to
+    collapse the chart."""
+    seed_transaction(ticker="AAPL", date="2026-01-01", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="LATE", date="2026-01-01", qty=10,
+                     currency="CAD", price=50.0)
+    fake_market.histories["AAPL"] = {
+        "2026-08-10": 100.0, "2026-08-11": 101.0, "2026-08-12": 102.0,
+    }
+    fake_market.histories["LATE"] = {"2026-08-12": 50.0}
+
+    body = client.get("/api/portfolio/history?period=3M").get_json()
+    assert body["labels"] == ["2026-08-11", "2026-08-12"]
+    assert body["twrr_pct"] is not None
+
+
+@pytest.mark.parametrize("first_bar,expected_first", [
+    ("2026-08-17", "2026-08-17"),   # exactly 7 days later: inside grace, wait
+    ("2026-08-18", "2026-08-10"),   # 8 days later: data gap, start at once
+])
+def test_leading_trim_grace_boundary(client, fake_market, first_bar,
+                                     expected_first):
+    """The 7-day grace is inclusive: a first bar exactly a week after the
+    axis start still counts as a holiday gap, and 8+ days falls back to
+    the old contributes-0 behavior (no trim)."""
+    seed_transaction(ticker="AAPL", date="2026-01-01", qty=10,
+                     currency="CAD")
+    seed_transaction(ticker="LATE", date="2026-01-01", qty=10,
+                     currency="CAD", price=50.0)
+    labels = ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13",
+              "2026-08-14", "2026-08-17", "2026-08-18"]
+    fake_market.histories["AAPL"] = {label: 100.0 for label in labels}
+    fake_market.histories["LATE"] = {first_bar: 50.0}
+
+    body = client.get("/api/portfolio/history?period=3M").get_json()
+    assert body["labels"][0] == expected_first
+    assert body["twrr_pct"] is not None
