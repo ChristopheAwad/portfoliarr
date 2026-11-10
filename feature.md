@@ -181,7 +181,7 @@ allocation donut keeps its own config).
 | Check | Result | Evidence |
 |---|---|---|
 | Tooltip tests | Pass | `pytest tests/test_chart_tooltip.py` - 10 passed |
-| Full suite | Pass | `pytest` - 1534 passed |
+| Full suite | Pass | `pytest` - 1546 passed after merging origin/main |
 | Build/lint/type | Not applicable | Project has no JS build, lint, or type step; CI runs pytest only |
 | GUI check | Pass | Playwright hover screenshots, light + dark |
 | CI | Pending | Checked after PR push |
