@@ -976,6 +976,8 @@ _CLIENT_STATIC_ENDPOINTS = frozenset({
 })
 _CLIENT_DYNAMIC_ENDPOINTS = (
     (re.compile(r"/api/quote/[^/]+"), "/api/quote/:symbol"),
+    (re.compile(r"/api/fund-classification/[^/]+$"),
+     "/api/fund-classification/:symbol"),
     (re.compile(r"/api/stock/[^/]+$"), "/api/stock/:symbol"),
     (re.compile(r"/api/stock/[^/]+/stats$"), "/api/stock/:symbol/stats"),
     (re.compile(r"/api/stock/[^/]+/history$"), "/api/stock/:symbol/history"),
@@ -2734,14 +2736,29 @@ def portfolio_realized():
     # touch, and it never gates the money math). A ticker Yahoo can't
     # name keeps its full row: name null is cosmetic, not a gap in the
     # numbers.
-    for ticker in {row["ticker"] for row in rows}:
-        try:
-            name = get_name(ticker)
-        except Exception:
-            name = None
-        for row in rows:
-            if row["ticker"] == ticker:
-                row["name"] = name
+    #
+    # The lookups run in a SMALL bounded pool: a ledger with many distinct
+    # sold tickers used to wait for the sum of every slow .info call. Four
+    # workers overlap those waits without flooding Yahoo. Names attach in
+    # one pass afterwards, keeping row order and the null fallback.
+    sold_tickers = sorted({row["ticker"] for row in rows})
+    names = {}
+    if sold_tickers:
+
+        def fetch_name(ticker):
+            try:
+                return ticker, get_name(ticker)
+            except Exception:
+                return ticker, None
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(sold_tickers), 4)
+        ) as pool:
+            for ticker, name in pool.map(fetch_name, sold_tickers):
+                names[ticker] = name
+
+    for row in rows:
+        row["name"] = names.get(row["ticker"])
 
     rows.reverse()  # replay was oldest-first; display newest-first
 
@@ -4918,10 +4935,9 @@ def portfolio_position():
     if not symbol:
         return jsonify({"error": "symbol is required"}), 400
 
-    rows = [
-        tx for tx in db.get_transactions(g.portfolio_id)
-        if tx["ticker"] == symbol
-    ]
+    # One-ticker scoped read: the ledger can hold thousands of unrelated
+    # rows, and the position card only ever replays this symbol.
+    rows = db.get_transactions_for_ticker(g.portfolio_id, symbol)
     if not rows:
         return jsonify({"symbol": symbol, "held": False})
 

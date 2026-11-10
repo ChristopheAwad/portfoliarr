@@ -939,6 +939,32 @@ def get_transactions(portfolio_id):
     return [dict(row) for row in rows]
 
 
+def get_transactions_for_ticker(portfolio_id, ticker):
+    """Return ONE portfolio's transactions for ONE ticker, newest first.
+
+    The stock detail page's position card needs a single symbol; loading
+    the whole ledger and filtering in Python scaled with every unrelated
+    row. This uses the shipped (portfolio_id, ticker) index and keeps the
+    ledger's exact ordering rule: transaction_date DESC, then id DESC, so
+    same-day rows replay in insertion order once the caller reverses them.
+
+    portfolio_id is required for the same ownership reason as
+    get_transactions: the caller supplies the already-verified scope.
+    """
+    with _connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, ticker, transaction_date, price, qty, currency,
+                    fx_rate, transaction_type, fee, portfolio_id
+            FROM transactions INDEXED BY tx_portfolio_ticker
+            WHERE portfolio_id = ? AND ticker = ?
+            ORDER BY transaction_date DESC, id DESC
+            """, (portfolio_id, ticker)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_unrated_usd_transactions(portfolio_id):
     """Return the USD rows of ONE portfolio whose stored fx_rate is NULL —
     the rows the maintenance backfill (`python app.py backfill-fx`) can

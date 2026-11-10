@@ -64,6 +64,7 @@ def test_perf_js_normalizes_dynamic_paths():
                      "/api/transactions/:id",
                      "/api/transactions/ticker/:symbol",
                      "/api/watchlist/:symbol", "/api/portfolios/:id",
+                     "/api/fund-classification/:symbol",
                      "/api/widget/tokens/:id", "/api/users/:id"):
         assert template in src
 

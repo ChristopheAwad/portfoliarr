@@ -337,6 +337,7 @@ def test_beacon_normalizes_symbol_paths_and_drops_unknown(client):
             {"endpoint": "/api/stock/AAPL/financials", "ms": 10},
             {"endpoint": "/api/stock/AAPL/events", "ms": 10},
             {"endpoint": "/api/quote/MSFT", "ms": 10},
+            {"endpoint": "/api/fund-classification/VEQT.TO", "ms": 10},
             {"endpoint": "/api/transactions/12", "ms": 10},
             {"endpoint": "/api/watchlist/TSLA", "ms": 10},
             {"endpoint": "/api/ok", "ms": 10},
@@ -348,13 +349,14 @@ def test_beacon_normalizes_symbol_paths_and_drops_unknown(client):
             if row["name"] == "client.fetch"]
     endpoints = sorted(row["tags"]["endpoint"] for row in rows)
     assert endpoints == [
-        "/api/quote/:symbol", "/api/stock/:symbol",
+        "/api/fund-classification/:symbol", "/api/quote/:symbol",
+        "/api/stock/:symbol",
         "/api/stock/:symbol/events", "/api/stock/:symbol/financials",
         "/api/stock/:symbol/history", "/api/stock/:symbol/stats",
         "/api/transactions/:id", "/api/watchlist/:symbol",
     ]
     dumped = json.dumps(perf.snapshot())
-    for leaked in ("AAPL", "MSFT", "TSLA", "secret", "private"):
+    for leaked in ("AAPL", "MSFT", "TSLA", "VEQT", "secret", "private"):
         assert leaked not in dumped
 
 

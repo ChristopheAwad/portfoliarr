@@ -51,16 +51,12 @@
     <link rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Instrument+Sans:wght@400..700&display=swap">
 
-    <!-- Chart.js, loaded from a public CDN (a free hosted copy — nothing to
-         pip install, it ships straight to the browser). Loading it here adds
-         a global "Chart" class to the page. <head> placement guarantees the
-         library exists before main.js / stock.js (bottom of <body>) try to
-         use it. Both pages have a chart, so it lives in the shared head. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-    <!-- Annotation plugin for Chart.js — draws the prev-close reference
-         line on 1D charts. Loaded after Chart.js so the global "Chart"
-         class exists; the plugin auto-registers when it loads. -->
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+    <!-- Chart.js is loaded ONLY by pages that draw a chart. Dashboard and
+         Stock fill this block from their templates; Ledger and Preferences
+         leave it empty, so they never pay for a script they do not use.
+         <head> placement keeps the global "Chart" class ready before the
+         page script (bottom of <body>) runs. -->
+    {% block head_extra %}{% endblock %}
 
     <!-- Dark mode FOUC prevention: read the saved theme (or OS preference)
          and set class="dark" on <html> BEFORE first paint. Without this,
