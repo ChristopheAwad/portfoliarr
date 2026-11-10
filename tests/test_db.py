@@ -21,7 +21,6 @@
 #     may change; ticker/currency (identity + its yfinance fact) must not
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -456,5 +455,7 @@ def test_ticker_query_uses_the_portfolio_ticker_index(fresh_db):
     assert "tx_portfolio_ticker" in plan, plan
     # The function pins the same index: without it SQLite prefers the
     # date index and scans every portfolio row to find one ticker.
-    source = (Path(__file__).resolve().parents[1] / "db.py").read_text()
-    assert "INDEXED BY tx_portfolio_ticker" in source
+    import inspect
+
+    function_source = inspect.getsource(db.get_transactions_for_ticker)
+    assert "INDEXED BY tx_portfolio_ticker" in function_source

@@ -44,6 +44,10 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import perf_stub  # noqa: E402
+
 PAGES = [
     ("dashboard", "/"),
     ("ledger", "/ledger"),
@@ -214,8 +218,8 @@ def verify_seed(db_path, ledger_rows):
     The import route answers 200 even when rows fail, so the HTTP status
     alone is not evidence. Counts are checked directly, read-only.
     """
-    expected_rows = 2 + ledger_rows
-    expected_tickers = 10 if ledger_rows else 2
+    expected_rows, expected_tickers = perf_stub.expected_seed_counts(
+        ledger_rows)
     uri = f"file:{db_path}?mode=ro"
     with sqlite3.connect(uri, uri=True) as conn:
         rows, tickers = conn.execute(
@@ -273,6 +277,10 @@ def wait_for_page_ready(page, page_name, require_chart):
         page.wait_for_function(
             "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
             ".marks['ledger:rows']", timeout=30000)
+    elif page_name == "preferences":
+        page.wait_for_function(
+            "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
+            ".marks['preferences:perf-card']", timeout=30000)
 
 
 def measure(page, base, page_name, path, run, settle_s, require_chart):

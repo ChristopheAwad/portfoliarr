@@ -141,6 +141,14 @@ def test_stub_installs_every_market_boundary():
     assert module.get_fx_rate_on("USD", "CAD", "2026-08-28") == 1.35
 
 
+def test_expected_seed_counts_cover_small_and_large_ledgers():
+    assert perf_stub.expected_seed_counts(0) == (2, 2)
+    assert perf_stub.expected_seed_counts(1) == (3, 3)
+    assert perf_stub.expected_seed_counts(3) == (5, 5)
+    assert perf_stub.expected_seed_counts(8) == (10, 10)
+    assert perf_stub.expected_seed_counts(1000) == (1002, 10)
+
+
 def test_perf_server_redirects_the_database_before_importing_app():
     source = (ROOT / "scripts" / "perf_server.py").read_text()
     redirect = source.index("db.DB_PATH = DB_PATH")

@@ -1219,10 +1219,11 @@ def get_history(symbol, period_key):
             return dict(entry["data"])  # cache hit: no network involved
 
         in_flight = _inflight_history.get(cache_key)
+        waiter = None
+        future = None
         if in_flight is not None:
             waiter = in_flight
         else:
-            waiter = None
             future = Future()
             _inflight_history[cache_key] = future
 
