@@ -113,12 +113,26 @@ with screenshots in the PR.
 
 - Focused performance/feature files: **323 passed**.
 - Full suite in an isolated network namespace with a redirected disposable
-  database: **1544 passed** (80.9 s).
+  database: **1545 passed** (83.4 s) after the review fixes.
 - Offline browser run, desktop 1280x800 and phone-width 390x844, 1,002
   verified synthetic transactions: 0 unexpected console/page errors,
   real charts on Dashboard and Stock, no Chart.js on Ledger/Preferences.
+- GUI check, offline with real pinned charts and 1,002 verified synthetic
+  transactions: Dashboard (1M switch), Ledger (group expanded), Stock
+  (chart), Preferences, each at 1280x800 and 390x844. No page or console
+  errors. Screenshots in `docs/perf/screenshots-2026-11-10/`.
 - Docker is not installed on this host; the image build and publish must be
   validated by GitHub Actions after the PR merges.
+
+## Review
+
+- PR https://github.com/ChristopheAwad/portfoliarr/pull/106
+- Code review: one blocker (seed ticker count for `--ledger-rows` 1-7),
+  fixed with a shared tested helper; follow-up review found no blockers.
+  Reviewed base `10e272b`, first head `2df6932`, fix range through
+  `e33b4d1`. Boundary test added for 7 rows afterwards.
+- Merge gates still pending at this record: PR CI (none configured), Docker
+  workflow after merge.
 
 ## Evidence
 
