@@ -192,8 +192,11 @@ GUI evidence: PR #107 comment, images under
 
 ## Review log
 
-(Pending)
+Reviewer on PR #107 (base 5250bef, head 32dfeb0): no blocking issues. Nits
+fixed without a re-review: the test now locks the exact alpha 0.75, padding 8,
+and body size 12. The PR body test count was synced to 1546.
 
 ## Results
 
-(Pending)
+Semi-transparent, smaller tooltip shipped for the shared line charts only.
+Full suite 1546 passed after merging origin/main. GUI screenshots in the PR.

@@ -85,8 +85,10 @@ def test_shared_tooltip_background_is_translucent():
     one keeps the white text readable while the plot stays visible.
     """
     body = tooltip_options_body()
-    assert 'backgroundColor: hexToRgba("#1a1f36"' in body
+    assert 'backgroundColor: hexToRgba("#1a1f36", 0.75)' in body
     assert 'backgroundColor: "#1a1f36"' not in body
+    assert "padding: 8," in body
+    assert "bodyFont: { size: 12" in body
 
 
 def test_opposite_positioner_latches_tooltip_to_far_edge():
