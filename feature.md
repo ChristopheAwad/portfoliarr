@@ -200,3 +200,52 @@ and body size 12. The PR body test count was synced to 1546.
 
 Semi-transparent, smaller tooltip shipped for the shared line charts only.
 Full suite 1546 passed after merging origin/main. GUI screenshots in the PR.
+
+---
+
+# Mobile chart tooltip: compact labels
+
+Status: implemented, awaiting review and merge.
+Branch: `fix/mobile-tooltip-compact` from `origin/main` `77edeca` (PR #107
+already shipped the translucent fix).
+Small fix: one source file and one test file.
+
+## Request
+
+After PR #107 the tooltip was still too large on a phone: on a 390px-wide
+chart the card covered about 54% of the width because of the long
+"Portfolio Value (CAD): ..." labels.
+
+## Change
+
+- `static/js/common.js`: add `compactTooltip`, true when
+  `matchMedia("(max-width: 640px)")` matches.
+- Narrow screens: padding 6 (vs 8), title 10px (vs 11), body 11px (vs 12);
+  body lines become `Value: …` / `Cost: …`; the performance view shows the
+  index level alone. Desktop keeps the full labels.
+- `tests/test_chart_tooltip.py`: source test locks the compact branch.
+
+Acceptance: on a 390x844 viewport the card is about 85 CSS px wide (about 26%
+of the 336px chart), the line and crosshair stay visible, and white text stays
+readable in light and dark mode. Desktop labels are unchanged.
+
+## Verification
+
+| Check | Result | Evidence |
+|---|---|---|
+| Tooltip tests | Pass | `pytest tests/test_chart_tooltip.py` - 11 passed |
+| Full suite | Pass | `pytest` - 1547 passed |
+| Build/lint/type | Not applicable | No JS build/lint/type step; CI runs pytest |
+| GUI check | Pass | Playwright 390x844 hover, light + dark, left + right |
+| CI | Pending | Checked after PR push |
+| Code review | Pending | Reviewer runs on the PR diff |
+
+Mobile screenshots: `/tmp/opencode/mobile-chart-{light,dark}-{left,right}.png`.
+
+## Review log
+
+(Pending)
+
+## Results
+
+(Pending)
