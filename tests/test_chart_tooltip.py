@@ -78,6 +78,17 @@ def tooltip_footer_color_callback_body() -> str:
     return tooltip_callback_bodies()[3]
 
 
+def test_shared_tooltip_background_is_translucent():
+    """The card must let the chart show through, not hide the hovered line.
+
+    A fully opaque fill covered most of a narrow chart; a semi-transparent
+    one keeps the white text readable while the plot stays visible.
+    """
+    body = tooltip_options_body()
+    assert 'backgroundColor: hexToRgba("#1a1f36"' in body
+    assert 'backgroundColor: "#1a1f36"' not in body
+
+
 def test_opposite_positioner_latches_tooltip_to_far_edge():
     """The box must stay at its edge while the crosshair is near center."""
     js = common_js()

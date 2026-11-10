@@ -2102,15 +2102,20 @@ function setupTimeframeChart(
                         },
                     },
                     displayColors: false,
-                    // Fixed dark tooltip with white text — consistent contrast
-                    // in both light and dark mode.
-                    backgroundColor: "#1a1f36",
+                    // Semi-transparent dark tooltip with white text — keeps
+                    // consistent contrast in both themes while letting the
+                    // chart show through, so the card no longer hides the
+                    // line it describes. The fixed color (not a theme
+                    // variable) keeps the canvas text readable either way.
+                    backgroundColor: hexToRgba("#1a1f36", 0.75),
                     titleColor: "#fff",
                     bodyColor: "#fff",
-                    padding: 10,
+                    // Compact paddings and fonts shrink the card's footprint
+                    // on narrow charts; the content is unchanged.
+                    padding: 8,
                     cornerRadius: 8,
                     titleFont: { size: 11, weight: "normal" },
-                    bodyFont: { size: 13, weight: 600 },
+                    bodyFont: { size: 12, weight: 600 },
                     callbacks: {
                         // Tooltip title: reformat the raw ISO label
                         // (e.g. "2026-09-13" or "2026-09-13 14:30")
