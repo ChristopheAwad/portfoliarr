@@ -146,3 +146,57 @@ with screenshots in the PR.
 
 - 2026-11-10: approved plan recorded; implementation started.
 - 2026-11-10: implementation and local checks complete; code review next.
+
+---
+
+# Chart tooltip: translucent and more compact
+
+Status: implemented, awaiting code review and merge.
+Branch: `make-chart-hover-tooltip-transparent-smaller` from main `10e272b`.
+This is a small fix: one source file and one test file, no schema, auth,
+money, or route change. Plan review gate skipped; code review gate applies.
+
+## Request
+
+The portfolio/stock line-chart hover tooltip was a large opaque dark card that
+hid most of the chart. Make it more transparent and reduce its footprint.
+
+## Approved plan
+
+1. `static/js/common.js`: change the shared line-chart tooltip background from
+   opaque `#1a1f36` to `hexToRgba("#1a1f36", 0.75)` so the plot shows through,
+   and shrink padding 10 -> 8 and body font 13 -> 12. White title/body text and
+   the existing green/red footer stay unchanged.
+2. `tests/test_chart_tooltip.py`: add a source-level test that locks a
+   translucent `hexToRgba` background and rejects the old opaque literal.
+3. Run the tooltip tests, the full suite, code review, and a Playwright
+   screenshot check in light and dark mode.
+
+Acceptance: the tooltip is visibly see-through in both themes, white text stays
+readable, the card is smaller, and no other chart's tooltip changes (the
+allocation donut keeps its own config).
+
+## Verification
+
+| Check | Result | Evidence |
+|---|---|---|
+| Tooltip tests | Pass | `pytest tests/test_chart_tooltip.py` - 10 passed |
+| Full suite | Pass | `pytest` - 1546 passed after merging origin/main |
+| Build/lint/type | Not applicable | Project has no JS build, lint, or type step; CI runs pytest only |
+| GUI check | Pass | Playwright hover screenshots, light + dark |
+| CI | Pending | Checked after PR push |
+| Code review | Pending | Reviewer runs on the PR diff |
+
+GUI evidence: PR #107 comment, images under
+`pr-107-screenshots:docs/screenshots/chart-tooltip-*.png`.
+
+## Review log
+
+Reviewer on PR #107 (base 5250bef, head 32dfeb0): no blocking issues. Nits
+fixed without a re-review: the test now locks the exact alpha 0.75, padding 8,
+and body size 12. The PR body test count was synced to 1546.
+
+## Results
+
+Semi-transparent, smaller tooltip shipped for the shared line charts only.
+Full suite 1546 passed after merging origin/main. GUI screenshots in the PR.
