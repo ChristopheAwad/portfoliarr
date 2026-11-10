@@ -1,6 +1,6 @@
 # Performance release 2: slower loading and duplicate work
 
-Status: in progress. Approved by the user 2026-11-10 after an independent
+Status: shipped 2026-11-10 (PR #106). Approved by the user 2026-11-10 after an independent
 plan review (two rounds; no remaining blockers).
 
 Branch: `plan-portfoliarr-speed-performance` (existing linked worktree,

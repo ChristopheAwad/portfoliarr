@@ -724,7 +724,7 @@ gate passes.
 `tests/test_perf_js.py`, `tests/test_perf_harness.py`, `Dockerfile`,
 `README.md`, `tests/test_docker.py`
 **Depends on:** #61 (shipped instrumentation and harness)
-**Status:** in progress
+**Status:** shipped 2026-11-10 (PR #106)
 
 ---
 
