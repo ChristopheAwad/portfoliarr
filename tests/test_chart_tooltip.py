@@ -78,33 +78,21 @@ def tooltip_footer_color_callback_body() -> str:
     return tooltip_callback_bodies()[3]
 
 
-def test_shared_tooltip_background_is_translucent():
-    """The card must let the chart show through, not hide the hovered line.
+def test_shared_tooltip_is_translucent_without_changing_its_size():
+    """Only the fill is translucent; size and label text stay as before.
 
-    A fully opaque fill covered most of a narrow chart; a semi-transparent
-    one keeps the white text readable while the plot stays visible.
+    The card must let the chart show through while the white text stays
+    readable, but the owner does not want the tooltip made smaller.
     """
     body = tooltip_options_body()
     assert 'backgroundColor: hexToRgba("#1a1f36", 0.75)' in body
     assert 'backgroundColor: "#1a1f36"' not in body
-
-
-def test_narrow_tooltip_gets_compact_labels_and_type():
-    """A phone chart is too narrow for the full label text.
-
-    The same facts stay, but the prefixes shrink and the type/padding are
-    smaller so the card cannot cover most of a small plot. Desktop keeps the
-    full labels and sizes.
-    """
-    body = tooltip_options_body()
-    assert "compactTooltip ? 6 : 8" in body
-    assert "compactTooltip ? 11 : 12" in body
-    assert "compactTooltip ? 10 : 11" in body
+    assert "padding: 10," in body
+    assert 'titleFont: { size: 11, weight: "normal" }' in body
+    assert "bodyFont: { size: 13, weight: 600 }" in body
+    assert "compactTooltip" not in body
     label = tooltip_label_callback_body()
-    assert "compactTooltip" in label
-    assert "`Value: ${formatPrice(item.parsed.y)}`" in label
-    assert "`Cost: ${formatPrice(cost)}`" in label
-    assert "? formatPrice(item.parsed.y)" in label
+    assert "compactTooltip" not in label
     assert "`${item.dataset.label}: ${formatPrice(item.parsed.y)}`" in label
     assert "`Cost Basis (CAD): ${formatPrice(cost)}`" in label
 

@@ -1480,13 +1480,6 @@ function setupTimeframeChart(
     // below opts in with position: "opposite".
     Chart.Tooltip.positioners.opposite = oppositePositioner;
 
-    // Phones and other narrow viewports get a compact tooltip: the full
-    // "Portfolio Value (CAD): …" prefixes and 12px type push the card across
-    // most of a small plot and hide the line. Same facts, shorter labels and
-    // smaller type, so the card leaves the chart visible.
-    const compactTooltip = typeof window.matchMedia === "function"
-        && window.matchMedia("(max-width: 640px)").matches;
-
     // Which way the CURRENT period moved — "up" (green) or "down" (red).
     // refresh() recomputes it from the data and BOTH presentational
     // readers below (borderColor, the gradient's fill color) derive from
@@ -2117,14 +2110,10 @@ function setupTimeframeChart(
                     backgroundColor: hexToRgba("#1a1f36", 0.75),
                     titleColor: "#fff",
                     bodyColor: "#fff",
-                    // Compact paddings and fonts shrink the card's footprint.
-                    // Narrow viewports shrink them further (see compactTooltip
-                    // above) so the card leaves most of a phone chart visible.
-                    padding: compactTooltip ? 6 : 8,
+                    padding: 10,
                     cornerRadius: 8,
-                    titleFont: { size: compactTooltip ? 10 : 11,
-                        weight: "normal" },
-                    bodyFont: { size: compactTooltip ? 11 : 12, weight: 600 },
+                    titleFont: { size: 11, weight: "normal" },
+                    bodyFont: { size: 13, weight: 600 },
                     callbacks: {
                         // Tooltip title: reformat the raw ISO label
                         // (e.g. "2026-09-13" or "2026-09-13 14:30")
@@ -2156,13 +2145,8 @@ function setupTimeframeChart(
                             // show it as itself — the dataset label names
                             // the unit, the number is the index level.
                             if (mode === "performance") {
-                                // On a phone the index level alone is enough;
-                                // the bottom readout still names the series.
                                 return [
-                                    compactTooltip
-                                        ? formatPrice(item.parsed.y)
-                                        : `${item.dataset.label}: `
-                                            + `${formatPrice(item.parsed.y)}`,
+                                    `${item.dataset.label}: ${formatPrice(item.parsed.y)}`,
                                 ];
                             }
                             // The dataset-label prefix exists to tell the
@@ -2175,15 +2159,6 @@ function setupTimeframeChart(
                                 const i = item.dataIndex;
                                 const cost = lastCosts[i];
                                 if (cost !== undefined) {
-                                    // Narrow screens: drop the long prefixes
-                                    // so the card stays narrow. "Value"/"Cost"
-                                    // keep the two lines unambiguous.
-                                    if (compactTooltip) {
-                                        return [
-                                            `Value: ${formatPrice(item.parsed.y)}`,
-                                            `Cost: ${formatPrice(cost)}`,
-                                        ];
-                                    }
                                     return [
                                         `${item.dataset.label}: ${formatPrice(item.parsed.y)}`,
                                         `Cost Basis (CAD): ${formatPrice(cost)}`,
