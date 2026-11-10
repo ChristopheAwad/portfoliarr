@@ -254,3 +254,54 @@ compact labels omit the "(CAD)" qualifier to save width.
 
 Compact tooltip shipped for narrow screens only. Full suite 1547 passed. Mobile
 screenshots in the PR.
+
+---
+
+# Tooltip: keep transparency, restore the old size
+
+Status: implemented, awaiting review and merge.
+Branch: `fix/tooltip-restore-size` from `origin/main` `4f016c7`.
+Small fix: one source file and one test file.
+
+## Request
+
+The owner wanted ONLY a more transparent tooltip. The size reductions in
+PR #107 (padding 10 -> 8, body 13 -> 12) and PR #108 (compact mobile labels
+and smaller type) were not wanted. Keep the translucent fill; restore the
+original size and labels everywhere.
+
+## Change
+
+- `static/js/common.js`: keep `backgroundColor: hexToRgba("#1a1f36", 0.75)`.
+  Restore `padding: 10`, `titleFont` 11, and `bodyFont` 13. Remove the
+  `compactTooltip` variable and its label branches, so the full
+  "Portfolio Value (CAD): ..." / "Cost Basis (CAD): ..." labels and the
+  performance dataset-label line return on every width.
+- `tests/test_chart_tooltip.py`: replace the two size tests with one test
+  that locks the translucent fill, the original padding/fonts, and the full
+  labels, and rejects any `compactTooltip` leftover.
+
+Acceptance: the tooltip is translucent, but its size and text match the
+version before PR #107 at desktop and phone widths.
+
+## Verification
+
+| Check | Result | Evidence |
+|---|---|---|
+| Tooltip tests | Pass | `pytest tests/test_chart_tooltip.py` - 10 passed |
+| Full suite | Pass | `pytest` - 1546 passed |
+| Build/lint/type | Not applicable | No JS build/lint/type step; CI runs pytest |
+| GUI check | Pass | Playwright 1280x800 and 390x844, light + dark |
+| CI | Pending | Checked after PR push |
+| Code review | Pending | Reviewer runs on the PR diff |
+
+Screenshots: `/tmp/opencode/tooltip-chart-{light,dark}.png` (desktop) and
+`/tmp/opencode/mobile-chart-{light,dark}-{left,right}.png` (phone).
+
+## Review log
+
+(Pending)
+
+## Results
+
+(Pending)
