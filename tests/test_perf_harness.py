@@ -145,6 +145,7 @@ def test_expected_seed_counts_cover_small_and_large_ledgers():
     assert perf_stub.expected_seed_counts(0) == (2, 2)
     assert perf_stub.expected_seed_counts(1) == (3, 3)
     assert perf_stub.expected_seed_counts(3) == (5, 5)
+    assert perf_stub.expected_seed_counts(7) == (9, 9)
     assert perf_stub.expected_seed_counts(8) == (10, 10)
     assert perf_stub.expected_seed_counts(1000) == (1002, 10)
 
