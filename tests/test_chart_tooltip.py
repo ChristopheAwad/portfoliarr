@@ -87,24 +87,26 @@ def test_shared_tooltip_background_is_translucent():
     body = tooltip_options_body()
     assert 'backgroundColor: hexToRgba("#1a1f36", 0.75)' in body
     assert 'backgroundColor: "#1a1f36"' not in body
-    assert "padding: compactTooltip ? 6 : 8," in body
-    assert "bodyFont: { size: compactTooltip ? 11 : 12" in body
 
 
 def test_narrow_tooltip_gets_compact_labels_and_type():
     """A phone chart is too narrow for the full label text.
 
     The same facts stay, but the prefixes shrink and the type/padding are
-    smaller so the card cannot cover most of a small plot.
+    smaller so the card cannot cover most of a small plot. Desktop keeps the
+    full labels and sizes.
     """
     body = tooltip_options_body()
-    assert "compactTooltip" in body
     assert "compactTooltip ? 6 : 8" in body
     assert "compactTooltip ? 11 : 12" in body
+    assert "compactTooltip ? 10 : 11" in body
     label = tooltip_label_callback_body()
     assert "compactTooltip" in label
     assert "`Value: ${formatPrice(item.parsed.y)}`" in label
     assert "`Cost: ${formatPrice(cost)}`" in label
+    assert "? formatPrice(item.parsed.y)" in label
+    assert "`${item.dataset.label}: ${formatPrice(item.parsed.y)}`" in label
+    assert "`Cost Basis (CAD): ${formatPrice(cost)}`" in label
 
 
 def test_opposite_positioner_latches_tooltip_to_far_edge():

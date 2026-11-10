@@ -244,8 +244,13 @@ Mobile screenshots: `/tmp/opencode/mobile-chart-{light,dark}-{left,right}.png`.
 
 ## Review log
 
-(Pending)
+Reviewer on PR #108 (base 77edeca, head c3a728a): no blocking issues. Safe test
+nits fixed without a re-review: assert the desktop full labels, the performance
+compact literal, and the compact title font. Left as-is by choice: the
+breakpoint is read once at chart construction (reload fixes rotation), and the
+compact labels omit the "(CAD)" qualifier to save width.
 
 ## Results
 
-(Pending)
+Compact tooltip shipped for narrow screens only. Full suite 1547 passed. Mobile
+screenshots in the PR.
