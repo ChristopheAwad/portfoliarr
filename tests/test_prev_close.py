@@ -44,14 +44,25 @@ def main_js() -> str:
 # ── CDN ──────────────────────────────────────────────────────────────────────
 
 
-def test_annotation_plugin_cdn_in_base_html():
-    """The annotation plugin must be loaded from a CDN in base.html, right
-    after the Chart.js tag. Without it, the prevCloseLine plugin's
-    annotations config would be silently ignored."""
-    html = base_html()
-    assert "chartjs-plugin-annotation" in html, (
-        "base.html must include the chartjs-plugin-annotation CDN"
-    )
+def test_annotation_plugin_loads_on_chart_pages():
+    """Only Dashboard and Stock draw charts, so only they load Chart.js and
+    the annotation plugin. The plugin must come after Chart.js; Ledger and
+    Preferences must load neither."""
+    for template in ("index.html", "stock.html"):
+        src = (ROOT / "templates" / template).read_text()
+        assert "chart.js@4" in src, f"{template} must load Chart.js"
+        chart_at = src.index("chart.js@4")
+        plugin_at = src.index("chartjs-plugin-annotation", chart_at + 1)
+        assert chart_at < plugin_at, (
+            f"{template} must load the annotation plugin after Chart.js"
+        )
+    shared = base_html()
+    assert "chart.js@4" not in shared
+    assert "chartjs-plugin-annotation" not in shared
+    for template in ("ledger.html", "preferences.html"):
+        src = (ROOT / "templates" / template).read_text()
+        assert "chart.js@4" not in src
+        assert "chartjs-plugin-annotation" not in src
 
 
 def test_prev_close_css_token_in_light_and_dark():

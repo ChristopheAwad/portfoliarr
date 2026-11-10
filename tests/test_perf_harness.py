@@ -141,9 +141,18 @@ def test_stub_installs_every_market_boundary():
     assert module.get_fx_rate_on("USD", "CAD", "2026-08-28") == 1.35
 
 
+def test_expected_seed_counts_cover_small_and_large_ledgers():
+    assert perf_stub.expected_seed_counts(0) == (2, 2)
+    assert perf_stub.expected_seed_counts(1) == (3, 3)
+    assert perf_stub.expected_seed_counts(3) == (5, 5)
+    assert perf_stub.expected_seed_counts(7) == (9, 9)
+    assert perf_stub.expected_seed_counts(8) == (10, 10)
+    assert perf_stub.expected_seed_counts(1000) == (1002, 10)
+
+
 def test_perf_server_redirects_the_database_before_importing_app():
     source = (ROOT / "scripts" / "perf_server.py").read_text()
-    redirect = source.index("db.DB_PATH = TMP")
+    redirect = source.index("db.DB_PATH = DB_PATH")
     app_import = source.index("import app as app_module")
     assert redirect < app_import
     assert "db.init()" in source[:app_import]
@@ -167,15 +176,12 @@ def _run_measure(tmp_path, *extra):
     playwright_python = _playwright_python()
     if playwright_python is None:
         pytest.skip("Playwright is unavailable for the smoke run")
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
     out_base = tmp_path / "smoke"
     result = subprocess.run(
         [str(playwright_python), str(ROOT / "scripts" / "measure_perf.py"),
          "--runs", "1", "--stub-ms", "1", "--settle", "0.2",
-         "--port", str(port), "--out", str(out_base),
-         "--block-external", "--python", sys.executable, *extra],
+         "--out", str(out_base),
+         "--offline-assets", "--python", sys.executable, *extra],
         cwd=str(ROOT), capture_output=True, text=True, timeout=180)
     report = None
     if out_base.with_suffix(".json").exists():
@@ -197,7 +203,13 @@ def test_measure_perf_smoke_writes_only_the_requested_output(tmp_path):
         "dashboard", "ledger", "stock", "preferences"]
     assert report["page_errors"] == []
     assert report["console_errors"] == []
+    assert report["chart_required"] is True
     assert all(row["summary"] for row in report["measurements"])
+    charts = {row["page"]: row["chart"] for row in report["measurements"]}
+    assert charts["dashboard"]["portfolio_chart"] is True
+    assert charts["stock"]["stock_chart"] is True
+    assert charts["ledger"]["chart_loaded"] is False
+    assert charts["preferences"]["chart_loaded"] is False
 
     after = {path.name: path.read_bytes()
              for path in docs.iterdir() if path.is_file()}
@@ -225,3 +237,27 @@ def test_empty_stock_degrades_without_uncaught_page_errors(tmp_path):
     assert statuses["/api/stock/:symbol/financials"] == {404}
     assert statuses["/api/stock/:symbol/events"] == {404}
     assert 200 in statuses["/api/stock/:symbol/stats"]
+
+
+def test_missing_chart_assets_stay_a_separate_expected_failure(tmp_path):
+    """A missing CDN chart library is a real degradation, not a clean run.
+    The report must say charts were not required and not rendered."""
+    result, report = _run_measure(
+        tmp_path, "--missing-chart", "--allow-console-errors")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report is not None
+    assert report["missing_chart"] is True
+    assert report["chart_required"] is False
+    assert report["page_errors"] == []
+    assert all(row["chart"]["chart_loaded"] is False
+               for row in report["measurements"])
+
+
+def test_cold_mode_restarts_the_server_per_page(tmp_path):
+    result, report = _run_measure(tmp_path, "--cold", "--settle", "0.1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report is not None
+    assert report["cold"] is True
+    assert [row["page"] for row in report["measurements"]] == [
+        "dashboard", "ledger", "stock", "preferences"]
+    assert report["page_errors"] == []

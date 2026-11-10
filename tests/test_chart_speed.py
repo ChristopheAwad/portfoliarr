@@ -39,6 +39,7 @@
 #   contracts the rest of the suite established.
 
 import threading
+import time
 from types import SimpleNamespace
 
 import pandas as pd
@@ -517,3 +518,169 @@ def test_parallel_fetch_failure_isolation(client, monkeypatch):
             [100.0, 100.0 + 100.0 / 11.0]),
         "twrr_pct": pytest.approx(100.0 / 11.0),
     }
+
+
+# ── In-flight coordination for identical history requests ─────────────
+#
+# The dashboard prefetches several periods at once, and two clients (phone
+# and PC) can ask for the same (symbol, period) in the same window. A cache
+# miss in both threads used to mean two identical Yahoo calls. These lock
+# the quote/profile single-flight rule onto the history cache: one owner
+# fetches, every other caller waits for the same result, different keys
+# still overlap, and a failure wakes all waiters and stays retryable.
+
+def test_concurrent_identical_history_misses_share_one_fetch(monkeypatch):
+    calls = []
+    entered = []
+    gate = threading.Event()
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            calls.append((self.symbol, kwargs.get("period")))
+            entered.append(self.symbol)
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            return pd.DataFrame(
+                {"Close": [100.0, 110.0]},
+                index=pd.to_datetime(["2026-09-01", "2026-09-02"]),
+            )
+
+    monkeypatch.setattr(market_data, "yf",
+                        SimpleNamespace(Ticker=FakeTicker))
+    market_data.clear_market_caches()
+
+    answers = []
+
+    def fetch():
+        answers.append(market_data.get_history("AAPL", "1M"))
+
+    threads = [threading.Thread(target=fetch) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 5
+    while not entered and time.monotonic() < deadline:
+        time.sleep(0.005)
+    time.sleep(0.3)
+    gate.set()
+    for thread in threads:
+        thread.join(10)
+
+    assert not any(thread.is_alive() for thread in threads), \
+        "concurrent history callers hung — in-flight coordination deadlocked"
+    assert calls == [("AAPL", "1mo")], \
+        f"identical concurrent misses must share ONE fetch, got {calls}"
+    assert len(answers) == 4
+    for data in answers:
+        assert data == answers[0]
+    assert len({id(data) for data in answers}) == 4, \
+        "each caller must receive its own defensive dict"
+
+
+def test_different_history_keys_fetch_concurrently(monkeypatch):
+    barrier = threading.Barrier(2, timeout=5)
+    calls = []
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            calls.append((self.symbol, kwargs.get("period")))
+            barrier.wait()
+            return pd.DataFrame({"Close": [100.0]},
+                                index=pd.to_datetime(["2026-09-01"]))
+
+    monkeypatch.setattr(market_data, "yf",
+                        SimpleNamespace(Ticker=FakeTicker))
+    market_data.clear_market_caches()
+
+    errors = []
+
+    def fetch(period):
+        try:
+            market_data.get_history("AAPL", period)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=fetch, args=(period,))
+               for period in ("1M", "5D")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert not any(thread.is_alive() for thread in threads), \
+        "different keys must not serialize behind one lock"
+    assert errors == []
+    assert sorted(calls) == [("AAPL", "1mo"), ("AAPL", "5d")]
+
+
+def test_concurrent_history_failure_wakes_waiters_and_stays_retryable(
+        monkeypatch):
+    calls = []
+    gate = threading.Event()
+    state = {"fail": True}
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            calls.append(self.symbol)
+            if not gate.wait(10):
+                raise RuntimeError("gate never opened")
+            if state["fail"]:
+                raise ValueError("Yahoo is down (fake)")
+            return pd.DataFrame({"Close": [100.0]},
+                                index=pd.to_datetime(["2026-09-01"]))
+
+    monkeypatch.setattr(market_data, "yf",
+                        SimpleNamespace(Ticker=FakeTicker))
+    market_data.clear_market_caches()
+
+    errors = []
+
+    def fetch():
+        try:
+            market_data.get_history("AAPL", "1M")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=fetch) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    while not calls and time.monotonic() < 5:
+        time.sleep(0.005)
+    time.sleep(0.2)
+    gate.set()
+    for thread in threads:
+        thread.join(10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert calls == ["AAPL"], "a failed owner must be shared, not retried"
+    assert len(errors) == 3, "every waiter must see the owner's failure"
+
+    state["fail"] = False
+    gate.set()
+    retry = market_data.get_history("AAPL", "1M")
+    assert retry == {"2026-09-01 00:00": 100.0}
+    assert calls == ["AAPL", "AAPL"], "a failure must stay retryable"
+
+
+def test_invalid_history_period_raises_before_touching_the_provider(
+        fake_yf):
+    with pytest.raises(KeyError):
+        market_data.get_history("AAPL", "NOPE")
+    assert fake_yf.calls == []
+
+
+def test_empty_history_success_keeps_the_normal_ttl(fake_yf):
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": []}, index=pd.to_datetime([]))
+
+    assert market_data.get_history("AAPL", "1M") == {}
+    assert market_data.get_history("AAPL", "1M") == {}
+    assert len(fake_yf.calls) == 1

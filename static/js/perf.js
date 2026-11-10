@@ -25,6 +25,8 @@
         [/^\/api\/stock\/[^/]+\/financials$/, "/api/stock/:symbol/financials"],
         [/^\/api\/stock\/[^/]+\/events$/, "/api/stock/:symbol/events"],
         [/^\/api\/quote\/[^/]+$/, "/api/quote/:symbol"],
+        [/^\/api\/fund-classification\/[^/]+$/,
+         "/api/fund-classification/:symbol"],
         [/^\/api\/transactions\/\d+$/, "/api/transactions/:id"],
         [/^\/api\/transactions\/ticker\/[^/]+$/,
          "/api/transactions/ticker/:symbol"],

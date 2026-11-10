@@ -20,8 +20,6 @@ Every label and field comes from the same contracts the app uses:
 from datetime import date, datetime, timedelta
 import time
 
-from market_data import PERIOD_MAP
-
 
 # (step, bar count) per PERIOD_MAP key. The step only shapes the fake axis;
 # no route reads it. Each count keeps labels unique and the last bar on
@@ -39,8 +37,22 @@ _BARS = {
 }
 
 
+def expected_seed_counts(ledger_rows):
+    """Return (transactions, distinct tickers) `measure_perf` should store.
+
+    Seeding creates two base tickers (AAPL, RY.TO) plus synthetic
+    SYN0..SYN7 rows; a run smaller than eight rows uses only its first N
+    synthetic tickers.
+    """
+    return 2 + ledger_rows, 2 + min(8, ledger_rows)
+
+
 def history_labels(period_key, now=None):
     """Ascending, unique labels in PERIOD_MAP's format for `period_key`."""
+    # Imported lazily so the measurement driver (system Python, no
+    # yfinance) can import this module for its pure seed-count helper.
+    from market_data import PERIOD_MAP
+
     period = PERIOD_MAP[period_key]
     step, count = _BARS[period_key]
     anchor = (now or datetime.now()).replace(second=0, microsecond=0)
