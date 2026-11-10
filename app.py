@@ -1698,6 +1698,27 @@ Algorithm: walk every trading day in the range forward, keeping a
     if not labels:
         return empty_history_response(benchmark_errors)
 
+    # A held ticker's first bar can be LATER than the axis start when its
+    # market was closed on an earlier label's date (a cross-market holiday:
+    # the date came from another exchange). Forward-fill has no earlier
+    # close to carry at the window's leading edge, so pricing that label
+    # would value the position at 0 and understate the whole portfolio —
+    # the visible leading drop. Record each ticker's first DATE inside the
+    # trimmed window; the walk below skips leading labels until every held
+    # ticker with in-window data has reached that date.
+    first_bar_date = {}
+    for symbol, history in histories.items():
+        in_range = [label for label in history if label >= first_tx_date]
+        if in_range:
+            first_bar_date[symbol] = min(in_range)[:10]
+    # Each ticker's first logged DATE. A position bought BEFORE the label
+    # was already carried into it, so it must have an earlier close to
+    # forward-fill; a position bought ON the label enters at its first bar
+    # (its flow is deferred), so it only blocks when nothing prices yet.
+    first_tx_by_symbol = {}
+    for tx in transactions:       # already sorted ascending
+        first_tx_by_symbol.setdefault(tx["ticker"], tx["transaction_date"])
+
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
     # user logs a "Saturday" buy). So we use a POINTER into the
@@ -1813,6 +1834,8 @@ Algorithm: walk every trading day in the range forward, keeping a
     pending_flows = {}   # symbol → flows absorbed BEFORE it first prices
     tx_index = 0        # next un-applied transaction (advances through
                         # the date-sorted list)
+    series_labels = []  # labels actually plotted (leading partials dropped)
+    started = False     # has the first fully-priced bar been found?
     for label in labels:
         # Choose which transactions this label should absorb, then apply
         # them BEFORE pricing (a trade dated this bar's day prices at this
@@ -1873,6 +1896,37 @@ Algorithm: walk every trading day in the range forward, keeping a
             elif currency != "CAD":
                 continue       # unsupported currency — contributes 0
             total += held * close
+
+        # Never START the line on a partial total. A position carried into
+        # the window has no earlier close to forward-fill, so if its first
+        # bar is on a later DATE (its market was closed on this label), this
+        # label cannot price it. Skip leading labels until every carried-in
+        # ticker with in-window data has started trading. A ticker bought ON
+        # this label is a new position (its flow waits for its first price),
+        # so it blocks only while nothing else prices — that keeps a new
+        # same-day buy from hiding the morning line. The comparison is
+        # date-level on purpose: same-day intraday gaps keep their existing
+        # behavior, and a ticker with no bars at all (dead/delisted) still
+        # contributes 0 and never blocks the start.
+        if not started:
+            label_date = label[:10]
+            priced_anything = any(
+                held != 0 and symbol in last_closes
+                for symbol, held in net_qty.items()
+            )
+            if any(
+                held != 0
+                and symbol not in last_closes
+                and first_bar_date.get(symbol, "") > label_date
+                and (
+                    not priced_anything
+                    or first_tx_by_symbol.get(symbol, "") < label_date
+                )
+                for symbol, held in net_qty.items()
+            ):
+                continue
+            started = True
+        series_labels.append(label)
         values.append(total)
 
         # Netted cost basis at this LABEL = the sum of every ticker's
@@ -1895,6 +1949,11 @@ Algorithm: walk every trading day in the range forward, keeping a
                 flows_by_label[label] = (
                     flows_by_label.get(label, 0.0) + flow
                 )
+
+    # The plotted series may start later than the fetched axis (see the
+    # leading-edge guard above). Values, costs, flows and every consumer
+    # below (TWR, comparisons) must share that same trimmed label list.
+    labels = series_labels
 
     # Time-weighted return: chain the value line with each bar's cash
     # flow removed. Label-keyed flows are aligned to the label order,

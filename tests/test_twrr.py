@@ -556,11 +556,11 @@ def test_bar_zero_base_behavior_is_unchanged():
     assert pct == pytest.approx(10.0)
 
 
-def test_cross_market_holiday_leading_zero_bar_still_computes_twr(
-        client, fake_market):
-    """End to end: the first held ticker has no bar on the first date (its
-    market was closed; the date came from the other market), so values[0]
-    is 0. The index must still be computed from the first positive bar."""
+def test_cross_market_holiday_leading_bar_is_trimmed(client, fake_market):
+    """End to end: AAPL has no bar on the first date (its market was closed;
+    the date came from RY.TO's market), so pricing that label would show a
+    partial portfolio worth 0 and then jump to the real value. The axis
+    must start on the first fully-priced bar instead — no leading drop."""
     seed_transaction(ticker="AAPL", date="2026-11-27", qty=10,
                      currency="CAD")
     seed_transaction(ticker="RY.TO", date="2026-11-30", qty=10,
@@ -573,8 +573,7 @@ def test_cross_market_holiday_leading_zero_bar_still_computes_twr(
     }
 
     body = client.get("/api/portfolio/history?period=1M").get_json()
-    assert body["labels"] == ["2026-11-27", "2026-11-30", "2026-12-01"]
-    assert body["values"][0] == 0.0
-    assert body["values"] == pytest.approx([0.0, 1520.0, 1630.0])
+    assert body["labels"] == ["2026-11-30", "2026-12-01"]
+    assert body["values"] == pytest.approx([1520.0, 1630.0])
     assert body["index_values"] == pytest.approx([100.0, 1630 / 1520 * 100])
     assert body["twrr_pct"] == pytest.approx(110 / 1520 * 100)

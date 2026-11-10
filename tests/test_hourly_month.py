@@ -88,6 +88,61 @@ def test_month_weekend_trade_waits_for_next_session(client, hourly_yahoo, with_m
     assert body["twrr_pct"] == pytest.approx(220 / 3 if with_monday else 10)
 
 
+def test_month_leading_cross_market_holiday_starts_fully_priced(
+        client, hourly_yahoo):
+    """A 1M window can open on a date only ONE held market trades (for
+    example Canadian Thanksgiving, when the TSX is closed and the US market
+    is open). Forward-fill has no earlier close to carry at the window's
+    leading edge, so the closed market's position priced at 0 and the line
+    jumped up on the next session — the visible leading drop and the fake
+    TWR headline. The axis must start on the first bar that prices EVERY
+    held position, never on a partial total.
+
+        held: 10 AAPL (US) + 100 RY.TO (TSX), both bought before the window
+        AAPL: Oct 12 and Oct 13 hourly bars
+        RY.TO: first bar Oct 13 (TSX closed Oct 12)
+        Oct 12 cannot price RY.TO → trimmed.
+        Oct 13 09:30: 10×102 + 100×50 = 6020
+        Oct 13 10:30: 10×103 + 100×51 = 6130 → TWR +110/6020
+    """
+    db.add_transaction("AAPL", "2026-09-01", 100, 10, "CAD", "BUY", 1,
+                       portfolio_id=1)
+    db.add_transaction("RY.TO", "2026-09-01", 50, 100, "CAD", "BUY", 1,
+                       portfolio_id=1)
+    hourly_yahoo.frames["AAPL"] = pd.DataFrame(
+        {"Close": [100.0, 101.0, 102.0, 103.0]},
+        index=pd.to_datetime([
+            "2026-10-12 09:30", "2026-10-12 10:30",
+            "2026-10-13 09:30", "2026-10-13 10:30",
+        ]),
+    )
+    hourly_yahoo.frames["RY.TO"] = pd.DataFrame(
+        {"Close": [50.0, 51.0]},
+        index=pd.to_datetime(["2026-10-13 09:30", "2026-10-13 10:30"]),
+    )
+
+    body = client.get("/api/portfolio/history?period=1M").get_json()
+    assert body["labels"] == ["2026-10-13 09:30", "2026-10-13 10:30"]
+    assert body["values"] == pytest.approx([6020.0, 6130.0])
+    assert body["costs"] == pytest.approx([6000.0, 6000.0])
+    assert body["index_values"] == pytest.approx([100.0, 6130 / 6020 * 100])
+    assert body["twrr_pct"] == pytest.approx(110 / 6020 * 100)
+
+    # A comparison line is rebased over the SAME trimmed axis: it starts at
+    # 100 on the first fully-priced label, never on the dropped partial bar.
+    hourly_yahoo.frames["SPY"] = pd.DataFrame(
+        {"Close": [200.0, 210.0]},
+        index=pd.to_datetime(["2026-10-13 09:30", "2026-10-13 10:30"]),
+    )
+    body = client.get(
+        "/api/portfolio/history?period=1M&benchmark=SPY"
+    ).get_json()
+    assert body["labels"] == ["2026-10-13 09:30", "2026-10-13 10:30"]
+    assert body["benchmarks"][0]["symbol"] == "SPY"
+    assert body["benchmarks"][0]["values"] == pytest.approx([100.0, 105.0])
+    assert body["benchmarks"][0]["error"] is None
+
+
 @pytest.mark.parametrize("endpoint", ["/api/stock/AAPL/history", "/api/portfolio/history"])
 def test_month_comparisons_and_price_gaps(client, hourly_yahoo, endpoint):
     db.add_transaction("AAPL", "2026-09-03", 90, 1, "CAD", "BUY", 1, portfolio_id=1)
