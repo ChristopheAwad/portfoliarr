@@ -72,6 +72,14 @@ _HISTORY_TTL_SETTLED = 600    # seconds: settled date-spaced bars
 _HISTORY_TTL_LIVE = 120       # seconds: series including today's live bar
 _history_cache = {}
 
+# In-flight coordination: {(symbol, period_key): Future}. Same rule as
+# quotes and profiles — held only while one fetch runs, never a cache.
+# Two clients, or a prefetch and a click, can miss the same key at once;
+# without this they each pay for the identical Yahoo call. Different keys
+# never wait on each other. Guarded by _market_lock; the network call runs
+# outside it.
+_inflight_history = {}
+
 
 def clear_history_cache():
     """Empty the history cache — test isolation's escape hatch.
@@ -79,7 +87,11 @@ def clear_history_cache():
     Production never needs this (entries expire by TTL); tests do, or a
     chart test would inherit an entry a previous test cached and call
     counts would depend on execution order."""
-    _history_cache.clear()
+    with _market_lock:
+        _history_cache.clear()
+        # In-flight entries should be empty between tests already; clearing
+        # keeps a stray future from leaking across tests if one remains.
+        _inflight_history.clear()
 
 # ── Profile cache — the allocation donut's answer to "what sector is this
 #    ticker in?".
@@ -166,6 +178,7 @@ def clear_market_caches():
         _cache.clear()
         _name_cache.clear()
         _history_cache.clear()
+        _inflight_history.clear()
         _profile_cache.clear()
         _fund_cache.clear()
         _financials_cache.clear()
@@ -1185,6 +1198,8 @@ def get_history(symbol, period_key):
     # label format and "live" flag that drive everything below. No
     # interval string-sniffing: these are explicit PERIOD_MAP data (see
     # the map's comment for why — a string check already broke once).
+    # The lookup happens BEFORE any in-flight slot exists, so an invalid
+    # key raises KeyError without leaving a future behind.
     timeframe = PERIOD_MAP[period_key]
     label_format = timeframe["label"]
 
@@ -1194,52 +1209,85 @@ def get_history(symbol, period_key):
     started = time.perf_counter()
     now = time.time()
     ttl = _HISTORY_TTL_LIVE if timeframe["live"] else _HISTORY_TTL_SETTLED
-    entry = _history_cache.get((symbol, period_key))
-    if entry and (now - entry["fetched_at"]) < ttl:
+    cache_key = (symbol, period_key)
+    with _market_lock:
+        entry = _history_cache.get(cache_key)
+        if entry and (now - entry["fetched_at"]) < ttl:
+            perf.record("market.get_history",
+                        (time.perf_counter() - started) * 1000,
+                        cache="hit", period=period_key)
+            return dict(entry["data"])  # cache hit: no network involved
+
+        in_flight = _inflight_history.get(cache_key)
+        if in_flight is not None:
+            waiter = in_flight
+        else:
+            waiter = None
+            future = Future()
+            _inflight_history[cache_key] = future
+
+    # Waiter path: share the owner's result (or its exact failure). The
+    # waiter never writes the cache and gets its own copy.
+    if waiter is not None:
+        data = dict(waiter.result())
         perf.record("market.get_history",
                     (time.perf_counter() - started) * 1000,
-                    cache="hit", period=period_key)
-        return dict(entry["data"])  # cache hit: no network involved
+                    cache="wait", period=period_key)
+        return data
 
+    # Owner path: pay the network cost once, then publish.
     try:
-        # auto_adjust=False: the RAW close, not Yahoo's dividend/split-
-        # adjusted one. The ledger stores raw quantities and prices, and
-        # the chart multiplies quantity by close — mixing them with
-        # adjusted closes would show fake losses on dividend payers and a
-        # scale break across splits. Raw closes are also what the planned
-        # SPLIT rows (roadmap #46) need to fold correctly.
-        df = yf.Ticker(symbol).history(
-            period=timeframe["period"],
-            interval=timeframe["interval"],
-            auto_adjust=False,
-        )
-    except Exception:
+        try:
+            # auto_adjust=False: the RAW close, not Yahoo's dividend/split-
+            # adjusted one. The ledger stores raw quantities and prices, and
+            # the chart multiplies quantity by close — mixing them with
+            # adjusted closes would show fake losses on dividend payers and a
+            # scale break across splits. Raw closes are also what the planned
+            # SPLIT rows (roadmap #46) need to fold correctly.
+            df = yf.Ticker(symbol).history(
+                period=timeframe["period"],
+                interval=timeframe["interval"],
+                auto_adjust=False,
+            )
+        except Exception:
+            perf.record("market.get_history",
+                        (time.perf_counter() - started) * 1000,
+                        cache="miss", period=period_key)
+            raise
+
+        # df is a pandas DataFrame indexed by timezone-aware timestamps
+        # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
+        # dict. Vectorized ops replace the old iterrows() loop for speed:
+        # dropna() removes NaN closes (same as the old continue), then
+        # strftime on the index builds all labels at once.
+        valid = df["Close"].dropna()
+        valid = valid[
+            valid.map(lambda value: _finite_number(value) is not None)]
+        labels = valid.index.strftime(label_format)
+        result = dict(zip(labels, valid))
+
+        # Cache the SUCCESS (an exception above never reaches this line).
+        # A successful empty dict is still a success and keeps the normal
+        # TTL, exactly as before.
+        with _market_lock:
+            _history_cache[cache_key] = {
+                "data": result,
+                "fetched_at": time.time(),
+            }
+        future.set_result(result)
         perf.record("market.get_history",
                     (time.perf_counter() - started) * 1000,
                     cache="miss", period=period_key)
+        return dict(result)
+    except Exception as exc:
+        future.set_exception(exc)
         raise
-
-    # df is a pandas DataFrame indexed by timezone-aware timestamps
-    # (e.g. 2026-08-31 00:00:00-04:00). We want a plain {label: price}
-    # dict. Vectorized ops replace the old iterrows() loop for speed:
-    # dropna() removes NaN closes (same as the old continue), then
-    # strftime on the index builds all labels at once.
-    valid = df["Close"].dropna()
-    valid = valid[valid.map(lambda value: _finite_number(value) is not None)]
-    labels = valid.index.strftime(label_format)
-    result = dict(zip(labels, valid))
-
-    # Cache the SUCCESS (an exception above never reaches this line) and
-    # hand back a copy — see the docstring for why callers get their own
-    # dict rather than the cached object itself.
-    _history_cache[(symbol, period_key)] = {
-        "data": result,
-        "fetched_at": time.time(),
-    }
-    perf.record("market.get_history",
-                (time.perf_counter() - started) * 1000,
-                cache="miss", period=period_key)
-    return dict(result)
+    finally:
+        with _market_lock:
+            # Identity check: never delete a newer future that a later
+            # caller registered after this owner finished.
+            if _inflight_history.get(cache_key) is future:
+                del _inflight_history[cache_key]
 
 
 # ── FX rates — the CAD display layer's exchange rates ─────────────────

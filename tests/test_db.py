@@ -21,6 +21,7 @@
 #     may change; ticker/currency (identity + its yfinance fact) must not
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -412,3 +413,48 @@ def test_commit_failure_closes_and_leaves_no_row(fresh_db, monkeypatch):
 def test_connection_helper_keeps_foreign_keys(fresh_db):
     with db._connection() as conn:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+# ── One-ticker reads (stock detail position card) ─────────────────────
+
+def test_get_transactions_for_ticker_reads_only_that_ticker(fresh_db):
+    """The stock page needs ONE symbol's rows, not the whole ledger. The
+    read keeps the ledger's newest-first (date DESC, id DESC) order and is
+    exact: no substring match, no other portfolio."""
+    db.add_transaction("AAPL", "2026-08-01", 100.0, 1, "USD", "BUY", 1.40,
+                       portfolio_id=1)
+    db.add_transaction("AAPL", "2026-08-31", 110.0, 2, "USD", "SELL", 1.39,
+                       portfolio_id=1)
+    db.add_transaction("AAPL", "2026-08-31", 120.0, 3, "USD", "BUY", 1.39,
+                       portfolio_id=1)
+    db.add_transaction("AAPLX", "2026-08-31", 1.0, 1, "USD", "BUY", 1.39,
+                       portfolio_id=1)
+    other = db.create_portfolio("Other", 1)
+    db.add_transaction("AAPL", "2026-08-31", 9.0, 1, "USD", "BUY", 1.39,
+                       portfolio_id=other)
+
+    rows = db.get_transactions_for_ticker(1, "AAPL")
+
+    assert [(row["id"]) for row in rows] == [3, 2, 1]
+    assert {row["portfolio_id"] for row in rows} == {1}
+    assert db.get_transactions_for_ticker(1, "NONE") == []
+
+
+def test_ticker_query_uses_the_portfolio_ticker_index(fresh_db):
+    """The read must not become a full-ledger scan: the shipped
+    (portfolio_id, ticker) index is the reason it can stay cheap."""
+    with sqlite3.connect(db.DB_PATH) as conn:
+        plan = " ".join(
+            row[3] for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT id, ticker, transaction_date, "
+                "price, qty, currency, fx_rate, transaction_type, fee, "
+                "portfolio_id FROM transactions "
+                "INDEXED BY tx_portfolio_ticker "
+                "WHERE portfolio_id = ? AND ticker = ? "
+                "ORDER BY transaction_date DESC, id DESC", (1, "AAPL"))
+        )
+    assert "tx_portfolio_ticker" in plan, plan
+    # The function pins the same index: without it SQLite prefers the
+    # date index and scans every portfolio row to find one ticker.
+    source = (Path(__file__).resolve().parents[1] / "db.py").read_text()
+    assert "INDEXED BY tx_portfolio_ticker" in source

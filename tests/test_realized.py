@@ -439,3 +439,66 @@ def test_names_attach_when_known_degrade_when_not(client, fake_names):
     assert payload["total_realized"] == pytest.approx(
         (10 * 120.0 - 10 * 100.0)
         + (5 * 12.0 * 1.40 - 5 * 10.0 * 1.35))
+
+
+# ── Name lookup: bounded, parallel, still cosmetic ────────────────────
+
+def test_names_are_fetched_with_a_bounded_pool(client, monkeypatch):
+    """Company names are cosmetic, but fetching them one at a time made a
+    ledger with many closed tickers wait for the sum of every Yahoo call.
+    The route must overlap them, bounded, with the same null fallback."""
+    import threading
+
+    import app as app_module
+
+    calls = []
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    barrier = threading.Barrier(2, timeout=5)
+
+    def fake_name(symbol):
+        nonlocal active, peak
+        calls.append(symbol)
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            barrier.wait()
+            return symbol + " Inc"
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(app_module, "get_name", fake_name)
+
+    tickers = [f"T{index}" for index in range(4)]
+    for ticker in tickers:
+        seed(ticker=ticker, price=100.0, qty=1, tx_type="BUY")
+        seed(ticker=ticker, date="2026-08-05", price=110.0, qty=1,
+             tx_type="SELL")
+
+    payload = get_payload(client)
+
+    assert sorted(calls) == sorted(tickers), "each sold ticker named once"
+    assert 2 <= peak <= 4, f"names must overlap but stay bounded, peak={peak}"
+    names = {row["ticker"]: row["name"] for row in payload["rows"]}
+    assert names == {ticker: ticker + " Inc" for ticker in tickers}
+    assert payload["total_realized"] == pytest.approx(4 * 10.0)
+
+
+def test_no_sales_never_looks_up_a_name(client, monkeypatch):
+    """An empty Closed Sales table must not create a worker pool or ask
+    Yahoo for anything."""
+    import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module, "get_name",
+                        lambda symbol: calls.append(symbol) or symbol)
+
+    seed(price=100.0, qty=10, tx_type="BUY")
+
+    payload = get_payload(client)
+    assert payload["rows"] == []
+    assert calls == []
+    assert payload["total_realized"] == pytest.approx(0.0)
