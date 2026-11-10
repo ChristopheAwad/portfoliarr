@@ -131,8 +131,15 @@ with screenshots in the PR.
   fixed with a shared tested helper; follow-up review found no blockers.
   Reviewed base `10e272b`, first head `2df6932`, fix range through
   `e33b4d1`. Boundary test added for 7 rows afterwards.
-- Merge gates still pending at this record: PR CI (none configured), Docker
-  workflow after merge.
+- Merge gates: PR had no CI checks configured. After squash merge, the
+  Docker workflow for main succeeded, including the image smoke test and
+  publication.
+- `plan-portfoliarr-speed-performance` shipped as
+  `5250beff04a42e8c56641b0a56111505de517da1` (PR #106). A later merged PR
+  (#107) is the current main tip; the published `latest` image
+  (`sha256:17b2803552acea68922aa3e2e557ebf1bf5de6daea000914b2922e1720b1d067`)
+  contains this work. The local worktree branch is kept for the owner to
+  delete from the main checkout.
 
 ## Evidence
 
