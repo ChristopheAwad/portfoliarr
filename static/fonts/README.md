@@ -17,7 +17,13 @@ CSS source: <https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,
 
 Both families use the SIL Open Font License 1.1. The copyright and license
 notices are included in `fraunces.OFL.txt` and `instrument-sans.OFL.txt`.
-Their pinned sources and SHA-256 digests are:
+Their pinned sources and unmodified upstream SHA-256 digests are:
 
 - Fraunces: <https://raw.githubusercontent.com/google/fonts/4024282d9b0cffcdb8e3024560862746178d741f/ofl/fraunces/OFL.txt>, `bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b`.
 - Instrument Sans: <https://raw.githubusercontent.com/google/fonts/19cdcec59967f4aa6defb86bd0550dff1ac43abb/ofl/instrumentsans/OFL.txt>, `9e27a72ed30eb49a08678f6a5d6ed98ec7ba5368f541637ee0683ec9134ef966`.
+
+The distributed license copies remove one trailing space from line 21. Their
+copyright and license wording are unchanged. Distributed SHA-256 digests:
+
+- `fraunces.OFL.txt`: `6732d6cc72c5d09292ff754dc1f39d9ea14918f74e87a17afa3f00a5120c3d48`.
+- `instrument-sans.OFL.txt`: `bc29b497c4e8316b2d248322a9cea670c2f0afc24ae0eb7bbaa54e02e00eebab`.
