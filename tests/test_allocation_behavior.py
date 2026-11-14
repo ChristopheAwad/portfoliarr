@@ -76,7 +76,7 @@ def test_excluded_note_updates_and_clears_on_portfolio_change():
     src = MAIN.read_text()
     switch = src.split('document.addEventListener("portfoliochange", () => {', 1)[1]
     assert "updateAllocExcluded([])" in switch
-    assert 'setAllocState("loading")' in switch
+    assert 'setAllocState(hasPortfolio ? "loading" : "unavailable")' in switch
 
 
 def test_unclassified_note_updates_and_clears():
