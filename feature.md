@@ -192,6 +192,14 @@ API/fallback text while bytes are held, without waiting for the load event.
   newer accepted paints and old-scope rejection. Final cached 1Y draw repeated
   at 12.9 ms with no additional HTTP reads. Raw result:
   `after-review-chart-final.json`. Final structured follow-up review pending.
+- Follow-up review on `2a5180b` verified all original/pending-mode reproductions
+  but found storage-started recovery was not shared with equivalent retry
+  events. Report: PR comment `issuecomment-6883265209`. Fixed in `5a03319`:
+  fresh reads during failed startup are tracked immediately; later storage
+  events still force fresh reads. New cases failed before the minimal fix.
+  **139 affected tests passed in 26.47 s**; the strengthened real-browser file
+  then passed **63 tests in 8.11 s**. Syntax/diff checks pass. Final scoped
+  independent review is still required before GUI/merge.
 - Final GUI/merge: pending. Required final GUI is scheduled after code review
   passes and will inspect screenshots, action outcomes and logs.
 - PR workflow: none configured for these changes; absence is not a passing run.
@@ -221,6 +229,7 @@ passed consistency/hash checks. The four review fixes are not covered by this
 checked full-suite code. Their affected-check code is
 `391721b`; the reviewed follow-up head will be recorded after verification.
 The remaining mode scheduling checks cover runtime commit `877175a`.
+The final recovery-sharing checks cover runtime commit `5a03319`.
 
 Review-fix affected command, with a redirected disposable database:
 
@@ -234,6 +243,12 @@ Final pending-mode affected command, with the same disposable DB redirect:
 
 ```bash
 /home/Chris/Documents/code/portfoliarr/.venv/bin/python -c 'import pathlib,tempfile,db,pytest; db.DB_PATH=pathlib.Path(tempfile.mkdtemp(dir="/tmp/opencode"))/"tests.db"; raise SystemExit(pytest.main(["-q","--tb=short","tests/test_loading_performance_behavior.py","tests/test_chart_refresh.py","tests/test_chart_recovery.py","tests/test_chart_tooltip.py","tests/test_period_return_ui.py","tests/test_stock_period_return.py","tests/test_compare_ui.py","tests/test_compare_reconcile_behavior.py"]))'
+```
+
+Final recovery-sharing affected command:
+
+```bash
+/home/Chris/Documents/code/portfoliarr/.venv/bin/python -c 'import pathlib,tempfile,db,pytest; db.DB_PATH=pathlib.Path(tempfile.mkdtemp(dir="/tmp/opencode"))/"tests.db"; raise SystemExit(pytest.main(["-q","--tb=short","tests/test_loading_performance_behavior.py","tests/test_portfolios_ui.py","tests/test_portfolios.py","tests/test_web_refresh_wiring.py","tests/test_stock_position.py","tests/test_allocation_behavior.py","tests/test_ledger_lazy_behavior.py"]))'
 ```
 
 ## Historical shipped handoffs

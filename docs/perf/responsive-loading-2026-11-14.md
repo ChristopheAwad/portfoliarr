@@ -2,6 +2,7 @@
 
 Roadmap #64. Baseline code: `c784bfd`. Full-suite checked code: `523707c`.
 Review-fix affected-check code: `391721b`, then `877175a` for pending modes.
+Final recovery-sharing affected-check code: `5a03319`.
 
 These measurements use disposable synthetic portfolios and controlled providers
 on the audit host. They do not measure the deployed server, LAN, live Yahoo, or
@@ -70,6 +71,10 @@ beside the production files in `static/fonts/` and `static/vendor/`.
   affected tests passed in 8.59 seconds**, including real Chromium with the
   newer request held pending, first-draw controls and stale-scope rejection.
   The final chart acceptance repeated at 12.9 ms with zero additional requests.
+- The final storage/retry sharing correction passed **139 affected tests** and
+  then **63 tests** in the strengthened behavior file, including the real
+  storage/reconnect race. It changes recovery tracking, not steady-state chart
+  rendering or the measured lazy ledger/provider behavior.
 - The full run used the main checkout venv, a redirected disposable DB and a
   network namespace with loopback only. Browser smoke tests use local assets.
 - New behavior checks run actual JS in Node and actual pages in Chromium.
