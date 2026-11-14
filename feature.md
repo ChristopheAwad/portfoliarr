@@ -14,7 +14,8 @@ fixing chart-state races, recovery semantics, and honest measurement checks.
 ## Approved scope and ownership
 
 1. Browser agent: `static/js/common.js`, `static/js/main.js`, the chart-ready
-   mark in `static/js/stock.js`, `tests/test_loading_performance_behavior.py`,
+   mark and null-selection response guard in `static/js/stock.js`,
+   `tests/test_loading_performance_behavior.py`,
    and directly affected chart/portfolio contracts.
    - Nonanimated period/view/recovery drawing; retain layout-aware frame resize.
    - Always store the newest previous-close value, but skip unchanged or
@@ -146,7 +147,26 @@ API/fallback text while bytes are held, without waiting for the load event.
 ## Gates, release and current evidence
 
 - Plan review: pass, independent Terra Max reviewer, no outstanding findings.
-- Implementation/focused checks/full suite/GUI/PR review/merge: pending.
+- Implementation and focused checks: pass. Four agents wrote failing tests
+  before their fixes; all changes are integrated through `523707c`.
+- Full suite: **1614 passed in 114.97 s**, lead-run on the combined code in an
+  isolated network namespace with loopback enabled and a disposable DB.
+  No local browser/Node skips. JavaScript syntax and `git diff --check` pass.
+- Focused performance acceptance: pass, all 52 checks. Exactly 5,000 rows/eight
+  groups at 4x CPU sorted in 9.2-15.4 ms versus 1786.8-2095.0 ms before.
+  Collapsed descendants fell 115,200 -> 200; expanded/collapsed row counts and
+  mixed-sale fixture checks pass. Cached 1Y drawing completed in 21.6 ms versus
+  about 1046 ms before, matching its preload data with zero new history reads.
+- Standard offline harness: both desktop 1280x800 and phone 390x844, two visits
+  per screen, all four screens with 1,002 verified synthetic rows. No page or
+  console errors and zero external browser requests. Both real charts render;
+  Ledger/Preferences load no Chart library. Stub timings are not live Yahoo
+  latency or cache measurements.
+- Lead cache probe: eight identical history reads plus a warm read still make
+  one provider call; two cold Volume reads now make 33 info reads, versus 66
+  before, and the following warm read adds none.
+- Final GUI/PR review/merge: pending. Required final GUI is scheduled after
+  code review and will inspect screenshots, action outcomes and logs.
 - PR workflow: none configured for these changes; absence is not a passing run.
 - Docker publish: required merged-main workflow, pending. Watch with
   `gh run watch <id> --exit-status`, verify merged-SHA and latest publication,
@@ -160,6 +180,17 @@ API/fallback text while bytes are held, without waiting for the load event.
 - Full reviewed plan, audit, exact-font URLs, baseline reports, measurement
   scripts and review notes are under
   `/tmp/opencode/portfoliarr-audit-20261113/` on this host.
+
+Integration boundary fixes stay within scoped recovery: a loaded selection that
+becomes empty emits one null `portfoliochange`, clears old Dashboard/Ledger/Stock
+content, and suppresses null-scope chart requests. Late Stock position responses
+are epoch-guarded. Ledger boot also handles an empty/failed list that settled
+before its deferred script subscribed. These regressions were reproduced first
+and checked in Node/Chromium; no position calculations or API behavior changed.
+
+Checked code: `523707c3b5a7cb41ebb4ebd3de4837937bf9cbcb`. The subsequent
+documentation-only evidence checkpoint will be consistency-checked. PR URL and
+reviewed base/head SHAs will be added after creation/review.
 
 ---
 
