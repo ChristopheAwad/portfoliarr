@@ -184,6 +184,7 @@ def clear_market_caches():
         _financials_cache.clear()
         _events_cache.clear()
         _volume_cache.clear()
+        _inflight_volume.clear()
         # In-flight entries should be empty between tests already (no market
         # operation is active at fixture time); clearing keeps stale state
         # from leaking across tests if a test left one behind.
@@ -1517,6 +1518,10 @@ _VOLUME_TTL = 300  # 5 minutes — volume changes slowly during the day
 # per-symbol entries — every consumer of this endpoint wants the same list.
 _volume_cache = {}
 
+# All consumers share the same composite scan. The lock protects this slot
+# and the cache; provider calls and waits happen outside it.
+_inflight_volume = {}
+
 
 def get_volume_leaders():
     """Return today's highest-volume stocks, top 1 per sector, capped at 10.
@@ -1538,14 +1543,64 @@ def get_volume_leaders():
     anywhere" for a TTL window). Partial failures are graceful: sectors
     that couldn't answer are simply absent from the result.
     """
-    # Cache check
+    # A cold or expired composite result has one owner; other callers wait
+    # for that owner's scan instead of each starting 33 provider calls.
     started = time.perf_counter()
     now = time.time()
-    entry = _volume_cache.get("data")
-    if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
+    with _market_lock:
+        entry = _volume_cache.get("data")
+        if entry and (now - entry["fetched_at"]) < _VOLUME_TTL:
+            perf.record("market.get_volume_leaders",
+                        (time.perf_counter() - started) * 1000, cache="hit")
+            return [dict(leader) for leader in entry["leaders"]]
+
+        waiter = _inflight_volume.get("data")
+        if waiter is None:
+            future = Future()
+            _inflight_volume["data"] = future
+
+    if waiter is not None:
+        leaders = waiter.result()
         perf.record("market.get_volume_leaders",
-                    (time.perf_counter() - started) * 1000, cache="hit")
-        return [dict(leader) for leader in entry["leaders"]]
+                    (time.perf_counter() - started) * 1000, cache="wait")
+        return [dict(leader) for leader in leaders]
+
+    try:
+        leaders = _scan_volume_leaders()
+        with _market_lock:
+            # A test may clear the caches while this scan is active. Its
+            # original waiters still get the result, but it must not replace
+            # a newer scan's cache or repopulate the cleared cache.
+            if _inflight_volume.get("data") is future:
+                _volume_cache["data"] = {
+                    "leaders": leaders, "fetched_at": time.time(),
+                }
+    except BaseException as exc:
+        # Remove the failed scan before waking its waiters. A caller that
+        # retries as soon as it sees the error must start a new scan, not
+        # join the already-failed Future. Do not remove a replacement.
+        with _market_lock:
+            if _inflight_volume.get("data") is future:
+                del _inflight_volume["data"]
+        # Notify every waiter even for an unexpected owner interruption,
+        # then propagate the same failure to the owner.
+        future.set_exception(exc)
+        perf.record("market.get_volume_leaders",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        raise
+    else:
+        future.set_result(leaders)
+        perf.record("market.get_volume_leaders",
+                    (time.perf_counter() - started) * 1000, cache="miss")
+        return [dict(leader) for leader in leaders]
+    finally:
+        with _market_lock:
+            if _inflight_volume.get("data") is future:
+                del _inflight_volume["data"]
+
+
+def _scan_volume_leaders():
+    """Run one uncached sector scan; the caller handles sharing and caching."""
 
     # Flatten all candidate symbols (deduplicated — a ticker might appear
     # in multiple sectors, though our list avoids that).
@@ -1623,10 +1678,4 @@ def get_volume_leaders():
     if not leaders:
         raise ValueError("no volume leaders resolved from any sector")
 
-    # Cache the result
-    _volume_cache["data"] = {
-        "leaders": leaders, "fetched_at": time.time(),
-    }
-    perf.record("market.get_volume_leaders",
-                (time.perf_counter() - started) * 1000, cache="miss")
-    return [dict(leader) for leader in leaders]
+    return leaders
