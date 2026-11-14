@@ -437,9 +437,11 @@ def test_common_formatPrice_stays_two_decimals():
     block gets adaptive precision."""
     m = re.search(r"function formatPrice\(value\) \{.*?\}", COMMON_JS, re.S)
     assert m, "common.js must keep formatPrice"
-    body = m.group(0)
-    assert "minimumFractionDigits: 2" in body
-    assert "maximumFractionDigits: 2" in body
+    assert "priceFormatter.format(value)" in m.group(0)
+    formatter = COMMON_JS.split("const priceFormatter = new Intl.NumberFormat", 1)[1]
+    formatter = formatter.split("});", 1)[0]
+    assert "minimumFractionDigits: 2" in formatter
+    assert "maximumFractionDigits: 2" in formatter
 
 
 # ═══ 3. CSS + RESPONSIVE ═════════════════════════════════════════════

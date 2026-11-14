@@ -4,7 +4,7 @@ These are string checks, not rendering tests — pytest can't run a browser
 or JavaScript. What they lock is the CONTRACT that the previous-close
 horizontal dotted line (1D only) is wired end-to-end:
 
-  1. base.html ships the chartjs-plugin-annotation CDN;
+  1. chart pages ship the local chartjs-plugin-annotation library;
   2. common.js's setupTimeframeChart has the prevCloseLine plugin and the
      updatePrevClose method;
   3. stock.js reads previous_close from the quote and passes it to the
@@ -41,7 +41,7 @@ def main_js() -> str:
     return (ROOT / "static" / "js" / "main.js").read_text()
 
 
-# ── CDN ──────────────────────────────────────────────────────────────────────
+# ── Chart library ────────────────────────────────────────────────────────────
 
 
 def test_annotation_plugin_loads_on_chart_pages():
@@ -50,18 +50,18 @@ def test_annotation_plugin_loads_on_chart_pages():
     Preferences must load neither."""
     for template in ("index.html", "stock.html"):
         src = (ROOT / "templates" / template).read_text()
-        assert "chart.js@4" in src, f"{template} must load Chart.js"
-        chart_at = src.index("chart.js@4")
+        assert "chart.umd.4.6.1.js" in src, f"{template} must load Chart.js"
+        chart_at = src.index("chart.umd.4.6.1.js")
         plugin_at = src.index("chartjs-plugin-annotation", chart_at + 1)
         assert chart_at < plugin_at, (
             f"{template} must load the annotation plugin after Chart.js"
         )
     shared = base_html()
-    assert "chart.js@4" not in shared
+    assert "chart.umd.4.6.1.js" not in shared
     assert "chartjs-plugin-annotation" not in shared
     for template in ("ledger.html", "preferences.html"):
         src = (ROOT / "templates" / template).read_text()
-        assert "chart.js@4" not in src
+        assert "chart.umd.4.6.1.js" not in src
         assert "chartjs-plugin-annotation" not in src
 
 

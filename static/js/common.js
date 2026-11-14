@@ -63,6 +63,11 @@ let activePortfolioId = null;
 let knownPortfolios = [];
 let portfoliosLoaded = false;
 let portfolioGeneration = 0;
+let portfolioListGeneration = 0;
+let portfolioStartupFailed = false;
+let portfolioRecoveryPending = null;
+let latestPortfolioListPromise = null;
+let finishPortfolioStartup = null;
 
 function currentPortfolioId() { return activePortfolioId; }
 function portfolioEpoch() { return portfolioGeneration; }
@@ -100,30 +105,133 @@ function setActivePortfolio(id) {
             { detail: { id, previous } }));
     }
 }
-async function refreshPortfolioList() {
-    const response = await fetch("/api/portfolios");
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    knownPortfolios = await response.json();
-    const saved = Number(localStorage.getItem("activePortfolioId"));
-    const wanted = knownPortfolios.some((item) => item.id === saved)
-        ? saved : knownPortfolios[0]?.id;
-    if (wanted) setActivePortfolio(wanted);
-    portfoliosLoaded = true;
-    paintPortfolioSelect();
-    document.dispatchEvent(new CustomEvent("portfoliolistchange"));
-    return wanted;
+function setPortfolioLoadStatus(message) {
+    const status = document.getElementById("portfolio-load-status");
+    const text = document.getElementById("portfolio-load-message");
+    if (text) text.textContent = message;
+    if (status) status.hidden = !message;
+}
+
+// This public read is always fresh: Preferences calls it after a write, so
+// it must never join a request that could have started before that write.
+function refreshPortfolioList() {
+    const generation = ++portfolioListGeneration;
+    const flight = loadPortfolioList(generation);
+    latestPortfolioListPromise = flight;
+    if (finishPortfolioStartup) {
+        const finish = (result) => {
+            if (generation !== portfolioListGeneration || !finishPortfolioStartup) return;
+            const resolve = finishPortfolioStartup;
+            finishPortfolioStartup = null;
+            resolve(result);
+        };
+        flight.then(finish, () => finish(null));
+    }
+    // A fresh read during failed startup also serves as the recovery read.
+    // Later forced reads replace its slot even if an older one never settles.
+    if (portfolioRecoveryPending || (portfolioStartupFailed && !activePortfolioId)) {
+        trackPortfolioRecovery(flight);
+    }
+    return flight;
+}
+
+async function loadPortfolioList(generation) {
+    try {
+        const response = await fetch("/api/portfolios");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const list = await response.json();
+        // A superseded boot read follows the newer read instead of resolving
+        // readiness before any current list has been published.
+        if (generation !== portfolioListGeneration) return latestPortfolioListPromise;
+        if (!Array.isArray(list) || list.some((item) => !item ||
+            !Number.isSafeInteger(item.id) || item.id <= 0 || typeof item.name !== "string")) {
+            throw new Error("Invalid portfolio list");
+        }
+        if (!list.length) {
+            const previous = activePortfolioId;
+            knownPortfolios = [];
+            if (previous !== null) ++portfolioGeneration;
+            activePortfolioId = null;
+            portfoliosLoaded = false;
+            portfolioStartupFailed = true;
+            paintPortfolioSelect();
+            setPortfolioLoadStatus("No portfolios available.");
+            document.dispatchEvent(new CustomEvent("portfoliolistchange"));
+            if (previous !== null) {
+                document.dispatchEvent(new CustomEvent("portfoliochange",
+                    { detail: { id: null, previous } }));
+            }
+            return null;
+        }
+        const recovering = portfolioStartupFailed && activePortfolioId === null;
+        knownPortfolios = list;
+        const saved = Number(localStorage.getItem("activePortfolioId"));
+        const wanted = list.some((item) => item.id === saved) ? saved : list[0].id;
+        setActivePortfolio(wanted);
+        portfoliosLoaded = true;
+        portfolioStartupFailed = false;
+        setPortfolioLoadStatus("");
+        document.dispatchEvent(new CustomEvent("portfoliolistchange"));
+        if (recovering) {
+            document.dispatchEvent(new CustomEvent("portfoliochange",
+                { detail: { id: wanted, previous: null } }));
+        }
+        return wanted;
+    } catch (error) {
+        if (generation !== portfolioListGeneration) return latestPortfolioListPromise;
+        if (!activePortfolioId) {
+            portfolioStartupFailed = true;
+            setPortfolioLoadStatus("Could not load portfolios. Try again.");
+        }
+        throw error;
+    }
+}
+
+// Only failed startup is retried here. Online, foreground and manual retries
+// join one read; a direct post-write refresh above remains independent.
+function trackPortfolioRecovery(flight) {
+    const retry = document.getElementById("portfolio-load-retry");
+    if (retry) retry.disabled = true;
+    // The original caller owns error reporting. This tracking promise only
+    // coordinates retry state and must settle on either success or failure.
+    const pending = flight.catch(() => null);
+    portfolioRecoveryPending = pending;
+    pending.then(() => {
+        if (portfolioRecoveryPending === pending) {
+            portfolioRecoveryPending = null;
+            if (retry) retry.disabled = false;
+        }
+    });
+    return pending;
+}
+
+function retryInitialPortfolioList() {
+    if (!portfolioStartupFailed || activePortfolioId) return portfolioRecoveryPending;
+    if (portfolioRecoveryPending) return portfolioRecoveryPending;
+    const flight = refreshPortfolioList();
+    flight.catch((error) => {
+        console.error("portfolio list failed", error);
+    });
+    return portfolioRecoveryPending;
 }
 document.getElementById("portfolio-select")?.addEventListener("change", (event) => {
     setActivePortfolio(Number(event.target.value));
 });
+document.getElementById("portfolio-load-retry")?.addEventListener("click", retryInitialPortfolioList);
+window.addEventListener("online", retryInitialPortfolioList);
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) retryInitialPortfolioList();
+});
 window.addEventListener("storage", (event) => {
-    if (event.key === "activePortfolioId" || event.key === "portfolioRevision") {
+    if (event.key === "portfolioRevision" || event.key === "activePortfolioId") {
+        // Another tab can select a newly created portfolio before its revision
+        // event arrives. Neither signal may reuse a pre-write list request.
         refreshPortfolioList().catch((error) => console.error("portfolio selection failed", error));
     }
 });
-const portfolioReady = refreshPortfolioList().catch((error) => {
+const portfolioReady = new Promise((resolve) => { finishPortfolioStartup = resolve; });
+refreshPortfolioList().catch((error) => {
     console.error("portfolio list failed", error);
-    return null;
 });
 
 // How long after a finger LIFTS from the chart to keep treating mouse
@@ -223,21 +331,36 @@ function setupAutoRefresh(refreshFn) {
 // 7711.759765625 -> "7,711.76". This is why the backend sends raw floats.
 // ---------------------------------------------------------------------------
 
+const priceFormatter = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+});
+const numberFormatters = new Map([[2, priceFormatter]]);
+
 function formatPrice(value) {
+    return priceFormatter.format(value);
+}
+
+function makeNumberFormatter(maxDigits) {
     return new Intl.NumberFormat("en-US", {
         minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    }).format(value);
+        maximumFractionDigits: maxDigits,
+    });
 }
 
 // Grouped-thousands formatter with a flexible decimal cap. Unlike
 // formatPrice (fixed at 2), maxDigits lets a qty column show fractional
 // amounts ("0.0050" BTC) without trailing-zero spam on whole numbers.
 function formatNumber(value, maxDigits = 2) {
-    return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: maxDigits,
-    }).format(value);
+    // Exotic option values still go through Intl on every call, preserving
+    // its coercion and exception behavior. The app uses integer precisions.
+    if (!Number.isInteger(maxDigits) || maxDigits < 2 || maxDigits > 20) {
+        return makeNumberFormatter(maxDigits).format(value);
+    }
+    if (!numberFormatters.has(maxDigits)) {
+        numberFormatters.set(maxDigits, makeNumberFormatter(maxDigits));
+    }
+    return numberFormatters.get(maxDigits).format(value);
 }
 
 // Signed money text: 12.3 -> "+12.30 CAD", -7.1 -> "-7.10 CAD".
@@ -1462,7 +1585,7 @@ function reconcileOverlays(replyBenchmarks, pickerSymbols) {
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
-      onPeriodSummary, modeBar, getBenchmarks, comparisonReadout,
+      onPeriodSummary, onPaintComplete, modeBar, getBenchmarks, comparisonReadout,
       comparisonPrimaryLabel = datasetLabel, getScope = () => "global" }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
@@ -1509,6 +1632,8 @@ function setupTimeframeChart(
     let visibleRequestGeneration = 0;
     let scopeGeneration = 0;
     const chartRequestGenerations = {};
+    let pendingPaint = null;
+    let paintGeneration = 0;
 
     function isLatestChartRequest(period, generation) {
         return chartRequestGenerations[period] === generation;
@@ -1583,17 +1708,21 @@ function setupTimeframeChart(
             mode = savedMode;
         }
     }
+    let requestedMode = mode;
     // The last fetched reply, kept whole — a view swap repaints from it
     // with NO second network request (both series ride one fetch).
     let lastReply = null;
+    // Remember a failed picker state when repainting the last valid reply.
+    let failedComparisonSymbols = null;
 
     // ── Frontend chart cache ──────────────────────────────────────────
     // Avoids redundant network requests when the user toggles back and
-    // forth between timeframes. Keyed by period string, stores the
-    // server response until its TTL expires. TTLs mirror the backend's
+    // forth between timeframes. Each key includes scope, period and ordered
+    // benchmarks. Entries last until their TTL expires, which mirrors the backend's
     // _HISTORY_TTL_LIVE / _HISTORY_TTL_SETTLED so the client never
     // serves data older than the server would.
     const chartCache = {};
+    const chartPending = new Map();
     const TTL_LIVE_MS = 120_000;     // 1D, 5D, 1M: live bars still moving
     const TTL_SETTLED_MS = 600_000;  // 3M–MAX: settled daily/weekly/monthly bars
     const LIVE_PERIODS = new Set(["1D", "5D", "1M"]);
@@ -2482,12 +2611,15 @@ function setupTimeframeChart(
     // therefore refreshed WITH the data.
     async function refresh(period = defaultPeriod, { silent = false } = {}) {
         const scope = getScope();
+        // A portfolio may have disappeared while this page stayed open.
+        // Stock charts use their default "global" scope and remain available.
+        if (scope === null || scope === undefined) return null;
         const scopeAtStart = scopeGeneration;
         const benchmarks = (getBenchmarks && getBenchmarks()) || [];
         const benchmarkParam = benchmarks.length
             ? `&benchmark=${encodeURIComponent(benchmarks.join(","))}`
             : "";
-        const cacheKey = `${scope}|${period}|${benchmarks.join(",")}`;
+        const cacheKey = JSON.stringify([scope, period, benchmarks]);
         const requestGeneration =
             (chartRequestGenerations[period] || 0) + 1;
         chartRequestGenerations[period] = requestGeneration;
@@ -2516,17 +2648,28 @@ function setupTimeframeChart(
             if (cached && (Date.now() - cached.fetchedAt) < ttl) {
                 data = cached.data;
             } else {
-                const endpointUrl = typeof endpoint === "function"
-                    ? endpoint() : endpoint;
-                const response = await fetch(
-                    historyRequestUrl(endpointUrl, period, benchmarkParam)
-                );
-                // fetch does NOT throw on 4xx/5xx — only on network failure. A
-                // 400 (bad period key) arrives with ok === false; the buttons
-                // only ever send valid keys, so this mainly guards against
-                // drift between the two ends.
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                data = await response.json(); // {labels, values}
+                // Scope generation is part of the flight key: returning to
+                // the same portfolio after invalidation must not join a read
+                // that started before the change.
+                const flightKey = JSON.stringify([scopeAtStart, cacheKey]);
+                let flight = chartPending.get(flightKey);
+                if (!flight) {
+                    flight = (async () => {
+                        const endpointUrl = typeof endpoint === "function"
+                            ? endpoint() : endpoint;
+                        const response = await fetch(
+                            historyRequestUrl(endpointUrl, period, benchmarkParam)
+                        );
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        return response.json();
+                    })();
+                    chartPending.set(flightKey, flight);
+                    const cleanup = () => {
+                        if (chartPending.get(flightKey) === flight) chartPending.delete(flightKey);
+                    };
+                    flight.then(cleanup, cleanup);
+                }
+                data = await flight;
                 // An older same-period response must not replace fresher data.
                 if (scopeAtStart === scopeGeneration && scope === getScope() &&
                     isLatestChartRequest(period, requestGeneration)) {
@@ -2548,8 +2691,9 @@ function setupTimeframeChart(
             // Repaint with this reply — the render half of a refresh
             // lives in paint() below so the view toggle can reuse it
             // without refetching.
-            paint(data, period);
-            syncTimeframeButtons(period);
+            return await schedulePaint(data, period, () =>
+                scopeAtStart === scopeGeneration && scope === getScope() &&
+                visibleGeneration === visibleRequestGeneration);
         } catch (err) {
             if (scopeAtStart !== scopeGeneration || scope !== getScope()) return;
             console.error("chart refresh failed:", err);
@@ -2564,8 +2708,17 @@ function setupTimeframeChart(
             if (silent || visibleGeneration !== visibleRequestGeneration) return;
             if (lastReply === null) {
                 emitPeriodSummary(period, null);
+                // The initial queued draw can be superseded before any data
+                // reaches the canvas. Keep the chosen view usable for retry.
+                if (requestedMode !== mode) {
+                    applyRequestedMode();
+                }
             } else {
+                failedComparisonSymbols = [...((getBenchmarks && getBenchmarks()) || [])];
                 reconcileOverlaysOnFailure();
+                // A newer failed timeframe may have invalidated the frame
+                // that was going to apply the user's requested view.
+                if (requestedMode !== mode) repaintRequestedMode();
             }
         }
     }
@@ -2577,12 +2730,92 @@ function setupTimeframeChart(
     // reply, so a swap is a pure repaint of what we already hold.
     function resizeAndUpdateChart() {
         // A restored mobile tab can report stale or zero geometry until its
-        // first layout frame. Measure again on that frame before drawing so
-        // the canvas cannot remain at its intrinsic 300x150 top-left size.
-        requestAnimationFrame(() => {
-            chart.resize();
-            chart.update();
+        // first layout frame. schedulePaint calls this on that frame.
+        chart.resize();
+        chart.update("none");
+    }
+
+    // Keep every visible state change inside the accepted draw frame. The
+    // second frame is the browser's next paint opportunity, not evidence
+    // that pixels have physically appeared on a display.
+    function applyRequestedMode() {
+        mode = requestedMode;
+        if (modeBar) {
+            modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
+                b.classList.toggle("active", b.dataset.chartMode === mode));
+        }
+    }
+
+    function schedulePaint(data, period, isCurrent, { reuseReply = false } = {}) {
+        const ticket = { isCurrent, generation: ++paintGeneration,
+            scope: getScope(), scopeGeneration };
+        pendingPaint = ticket;
+        return new Promise((resolve, reject) => {
+            requestAnimationFrame(() => {
+                if (pendingPaint !== ticket || !isCurrent()) {
+                    if (pendingPaint === ticket) {
+                        pendingPaint = null;
+                        // A newer timeframe may still be waiting on the
+                        // network. Do not make a view toggle wait for it.
+                        if (ticket.scopeGeneration === scopeGeneration &&
+                            ticket.scope === getScope() && requestedMode !== mode) {
+                            if (lastReply) repaintRequestedMode();
+                            else applyRequestedMode();
+                        }
+                    }
+                    resolve(null);
+                    return;
+                }
+                pendingPaint = null;
+                try {
+                    if (!reuseReply) failedComparisonSymbols = null;
+                    applyRequestedMode();
+                    paint(data, period);
+                    syncTimeframeButtons(period);
+                    const drawable = () => {
+                        const area = chart.chartArea;
+                        return chart.width > 0 && chart.height > 0 && area &&
+                            area.right > area.left && area.bottom > area.top;
+                    };
+                    // A hidden or zero-sized canvas has not drawn usable
+                    // content. Foreground recovery will resize and retry.
+                    if (!drawable()) {
+                        resolve(null);
+                        return;
+                    }
+                    const hasData = chart.data.datasets[0].data.some((value, index) =>
+                        index < chart.data.labels.length && Number.isFinite(value));
+                    requestAnimationFrame(() => {
+                        if (ticket.generation !== paintGeneration || !isCurrent() || !drawable()) {
+                            resolve(null);
+                            return;
+                        }
+                        try {
+                            const result = { period, hasData };
+                            if (hasData) perfMark("chart:paint");
+                            if (onPaintComplete) onPaintComplete(result);
+                            resolve(result);
+                        } catch (error) {
+                            reject(error);
+                        }
+                    });
+                } catch (error) {
+                    reject(error);
+                }
+            });
         });
+    }
+
+    function repaintRequestedMode() {
+        const reply = lastReply;
+        const period = currentPeriod;
+        const scope = getScope();
+        const epoch = scopeGeneration;
+        if (!reply || scope === null || scope === undefined) return;
+        schedulePaint(reply, period, () =>
+            epoch === scopeGeneration && scope === getScope() && lastReply === reply,
+            { reuseReply: true })
+            .catch((error) => console.error("chart repaint failed:", error));
     }
 
     // Reconcile the chart to exactly one primary dataset plus the currently
@@ -2631,14 +2864,12 @@ function setupTimeframeChart(
         const painted = Array.isArray(lastReply && lastReply.benchmarks)
             ? lastReply.benchmarks : [];
         const current = (getBenchmarks && getBenchmarks()) || [];
-        const paintedSymbols = painted.map((b) => b.symbol);
-        if (current.join(",") === paintedSymbols.join(",")) return;
         const reconciled = reconcileOverlays(painted, current);
         comparisonMode = reconciled.length > 0
             && (chartNormalized === true || mode === "performance");
         syncOverlayDatasets(comparisonMode ? reconciled : [], chart.data.labels);
         renderComparisonReadout(comparisonReadoutIndex);
-        chart.update();
+        chart.update("none");
     }
 
     // Render the bottom comparison readout — the legend AND live
@@ -2778,7 +3009,13 @@ function setupTimeframeChart(
         // comparison replies explicitly mark their primary line normalized.
         // comparisonMode is the ONE switch for date-only tooltips + the
         // bottom readout, so both pages behave identically.
-        const overlays = Array.isArray(data.benchmarks) ? data.benchmarks : [];
+        const paintedOverlays = Array.isArray(data.benchmarks) ? data.benchmarks : [];
+        const selectedOverlays = (getBenchmarks && getBenchmarks()) || [];
+        const failedSelection = failedComparisonSymbols &&
+            failedComparisonSymbols.length === selectedOverlays.length &&
+            failedComparisonSymbols.every((symbol, i) => symbol === selectedOverlays[i]);
+        const overlays = failedSelection
+            ? reconcileOverlays(paintedOverlays, selectedOverlays) : paintedOverlays;
         comparisonMode = overlays.length > 0
             && (data.normalized === true || plottingIndex);
         syncOverlayDatasets(comparisonMode ? overlays : [], plotLabels);
@@ -2815,7 +3052,6 @@ function setupTimeframeChart(
         // Runs on a mode-only repaint too, handing back the same twrr_pct —
         // the metric is mode-independent.
         emitPeriodSummary(period, data);
-        perfMark("chart:paint");
     }
 
     // The highlighted button describes the data that successfully reached
@@ -2874,15 +3110,17 @@ function setupTimeframeChart(
             b.classList.toggle("active", b.dataset.chartMode === mode));
         modeBar.addEventListener("click", (event) => {
             const btn = event.target.closest("[data-chart-mode]");
-            if (!btn || btn.dataset.chartMode === mode) return;
+            if (!btn || btn.dataset.chartMode === requestedMode) return;
             clearMeasurement();
-            mode = btn.dataset.chartMode;
-            localStorage.setItem("chartMode", mode);
-            modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
-                b.classList.toggle("active", b.dataset.chartMode === mode));
+            requestedMode = btn.dataset.chartMode;
+            localStorage.setItem("chartMode", requestedMode);
             // Nothing fetched yet (first load failed) → just the buttons
             // are switched; the next successful refresh paints the view.
-            if (lastReply) paint(lastReply, currentPeriod);
+            if (!lastReply && !pendingPaint) {
+                applyRequestedMode();
+            } else if (!pendingPaint || !pendingPaint.isCurrent()) {
+                repaintRequestedMode();
+            }
         });
     }
 
@@ -2892,12 +3130,18 @@ function setupTimeframeChart(
         invalidate() {
             ++scopeGeneration;
             ++visibleRequestGeneration;
+            ++paintGeneration;
+            pendingPaint = null;
             lastReply = null;
+            failedComparisonSymbols = null;
             lastCosts = null;
             clearMeasurement();
             chart.data.labels = [];
             chart.data.datasets.forEach((dataset) => { dataset.data = []; });
-            chart.update();
+            // With no old data left to show, keep the selected view in sync
+            // while the new portfolio's history is still pending.
+            applyRequestedMode();
+            chart.update("none");
             if (comparisonReadout) comparisonReadout.replaceChildren();
             emitPeriodSummary(requestedPeriod, null);
         },
@@ -2918,11 +3162,15 @@ function setupTimeframeChart(
                 getComputedStyle(document.documentElement)
                     .getPropertyValue("--border-subtle").trim();
             renderComparisonReadout(comparisonReadoutIndex);
-            chart.update();
+            chart.update("none");
         },
         updatePrevClose(val) {
+            const changed = !Object.is(prevClose, val);
             prevClose = val;
-            chart.update();
+            if (changed && currentPeriod === "1D" && mode !== "performance" &&
+                !chartNormalized && chart.data.datasets[0].data.length) {
+                chart.update("none");
+            }
         },
         clearMeasurement() {
             clearMeasurement();

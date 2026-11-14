@@ -186,15 +186,18 @@ async function refreshPosition() {
         positionCard.hidden = true;
         return;
     }
+    const epoch = portfolioEpoch();
     try {
         const response = await fetch(
             `/api/portfolio/position?symbol=${encodeURIComponent(symbol)}` +
             `&portfolio_id=${pid}`);
+        if (epoch !== portfolioEpoch()) return;
         if (!response.ok) {
             positionCard.hidden = true;
             return;
         }
         const pos = await response.json();
+        if (epoch !== portfolioEpoch()) return;
         if (!pos.held) {
             positionCard.hidden = true;
             return;
@@ -232,6 +235,7 @@ async function refreshPosition() {
         positionNoteEl.textContent = "Native currency.";
         positionCard.hidden = false;
     } catch (err) {
+        if (epoch !== portfolioEpoch()) return;
         console.error("stock position refresh failed:", err);
         positionCard.hidden = true;
     }
@@ -1062,6 +1066,9 @@ const stockChartHandle = setupTimeframeChart({
     getBenchmarks: () => (comparePicker ? comparePicker.getSymbols() : []),
     comparisonReadout: document.getElementById("stock-comparison-readout"),
     defaultPeriod: "5D", // must match the `active` button in stock.html
+    onPaintComplete({ hasData }) {
+        if (hasData) perfMark("stock:chart");
+    },
     // When the chart loads new period data, compute the period return
     // and paint the change pill. Both units show in the stock pill's
     // "period: +$amount (+pct%)" shape, so every timeframe reads the
@@ -1109,8 +1116,7 @@ refreshStockFinancials();
 refreshStockEvents();
 loadClassification();
 if (stockChartHandle) {
-    const stockChartReady = stockChartHandle.refresh();
-    stockChartReady?.then?.(() => perfMark("stock:chart"));
+    stockChartHandle.refresh();
 }
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).
@@ -1119,4 +1125,7 @@ setupAutoRefresh(async () => {
     await refreshStockQuote();
     await refreshPosition();
 });
-document.addEventListener("portfoliochange", refreshPosition);
+document.addEventListener("portfoliochange", () => {
+    if (positionCard && !currentPortfolioId()) positionCard.hidden = true;
+    refreshPosition();
+});

@@ -40,6 +40,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -56,12 +57,17 @@ PAGES = [
 ]
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "perf"
+# Kept for the original audit probes, which record the old CDN URLs.
 CHART_URLS = {
     "https://cdn.jsdelivr.net/npm/chart.js@4":
         FIXTURE_DIR / "chart.umd.4.6.1.js",
     "https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3":
         FIXTURE_DIR / "chartjs-plugin-annotation.3.1.0.min.js",
 }
+CHART_PATHS = (
+    "/static/vendor/chart.umd.4.6.1.js",
+    "/static/vendor/chartjs-plugin-annotation.3.1.0.min.js",
+)
 
 PERF_ENV_KEYS = (
     "PERF_STUB_YAHOO_MS", "PERF_STUB_EMPTY_STOCK", "PERF_PORT",
@@ -233,54 +239,41 @@ def verify_seed(db_path, ledger_rows):
 
 
 def fulfill_external(route, missing_chart=False):
-    """Serve deterministic bytes for CDN requests in an offline run."""
-    url = route.request.url
-    if missing_chart and url in CHART_URLS:
-        route.fulfill(status=200, headers={
-            "content-type": "application/javascript"}, body="")
-        return
-    asset = CHART_URLS.get(url)
-    if asset is not None and asset.exists():
-        route.fulfill(status=200, headers={
-            "content-type": "application/javascript"},
-            body=asset.read_bytes())
-        return
-    # Fonts and anything else: inert. A stylesheet needs a CSS MIME type or
-    # the browser logs an error even for an empty body.
-    content_type = ("text/css" if url.endswith(".css")
-                    or "fonts.googleapis.com" in url else "text/plain")
-    route.fulfill(status=200, headers={"content-type": content_type},
-                  body="")
+    """Reject external browser requests; retain the audit probes' API."""
+    route.abort()
 
 
-def wait_for_page_ready(page, page_name, require_chart):
+def wait_for_page_ready(page, page_name, require_chart, timeout_ms=30000):
     """Wait for the page's own evidence that useful content painted."""
     if page_name == "dashboard":
         page.wait_for_function(
             "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
-            ".marks['dashboard:summary']", timeout=30000)
-        if require_chart:
-            page.wait_for_function(
-                "typeof Chart !== 'undefined' && "
-                "!!Chart.getChart(document.getElementById('portfolioChart'))",
-                timeout=30000)
+            ".marks['dashboard:summary']", timeout=timeout_ms)
     elif page_name == "stock":
         page.wait_for_function(
             "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
-            ".marks['stock:quote']", timeout=30000)
-        if require_chart:
-            page.wait_for_function(
-                "typeof Chart !== 'undefined' && "
-                "!!Chart.getChart(document.getElementById('stockChart'))",
-                timeout=30000)
+            ".marks['stock:quote']", timeout=timeout_ms)
     elif page_name == "ledger":
         page.wait_for_function(
             "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
-            ".marks['ledger:rows']", timeout=30000)
+            ".marks['ledger:rows']", timeout=timeout_ms)
     elif page_name == "preferences":
         page.wait_for_function(
             "window.PortfoliarrPerf && window.PortfoliarrPerf.summary()"
-            ".marks['preferences:perf-card']", timeout=30000)
+            ".marks['preferences:perf-card']", timeout=timeout_ms)
+
+    if require_chart and page_name in ("dashboard", "stock"):
+        chart_id = "portfolioChart" if page_name == "dashboard" else "stockChart"
+        page.wait_for_function(
+            """({mark, chartId}) => {
+                const marks = window.PortfoliarrPerf?.summary().marks || {};
+                if (!(mark in marks) || typeof Chart === 'undefined') return false;
+                const canvas = document.getElementById(chartId);
+                const chart = canvas && Chart.getChart(canvas);
+                const data = chart?.data?.datasets?.[0]?.data;
+                return Array.isArray(data) && data.some(Number.isFinite);
+            }""", arg={"mark": f"{page_name}:chart", "chartId": chart_id},
+            timeout=timeout_ms)
 
 
 def measure(page, base, page_name, path, run, settle_s, require_chart):
@@ -300,13 +293,20 @@ def measure(page, base, page_name, path, run, settle_s, require_chart):
     summary = page.evaluate(
         "window.PortfoliarrPerf ? window.PortfoliarrPerf.summary() : null")
     chart_state = page.evaluate(
-        """() => ({
-            chart_loaded: typeof Chart !== 'undefined',
-            portfolio_chart: typeof Chart !== 'undefined' &&
-                !!Chart.getChart(document.getElementById('portfolioChart')),
-            stock_chart: typeof Chart !== 'undefined' &&
-                !!Chart.getChart(document.getElementById('stockChart')),
-        })""")
+        """() => {
+            const loaded = typeof Chart !== 'undefined';
+            const portfolio = document.getElementById('portfolioChart');
+            const stock = document.getElementById('stockChart');
+            const portfolioChart = loaded && portfolio && Chart.getChart(portfolio);
+            const stockChart = loaded && stock && Chart.getChart(stock);
+            const data = (portfolioChart || stockChart)?.data?.datasets?.[0]?.data;
+            return {
+                chart_loaded: loaded,
+                portfolio_chart: !!portfolioChart,
+                stock_chart: !!stockChart,
+                finite_points: Array.isArray(data) ? data.filter(Number.isFinite).length : 0,
+            };
+        }""")
     server = page.evaluate("fetch('/api/perf').then((r) => r.json())")
     return {
         "page": page_name,
@@ -357,7 +357,7 @@ def to_markdown(report):
         f"- Viewport: {report.get('viewport', '1280x800')}",
         f"- Synthetic ledger rows: {report.get('ledger_rows', 0)}",
         f"- Empty stock degrade mode: {report.get('empty_stock', False)}",
-        f"- Offline test assets: {report.get('offline_assets', False)}",
+        f"- External browser requests blocked: {report.get('offline_assets', False)}",
         f"- Charts required: {report.get('chart_required', False)}",
         f"- Cold server per page: {report.get('cold', False)}",
     ]
@@ -442,6 +442,13 @@ def to_markdown(report):
             lines.append(f"- {message}")
     else:
         lines.append("- No console errors recorded.")
+    external_requests = report.get("external_requests") or []
+    if external_requests:
+        lines.append(f"- Blocked external browser requests: {len(external_requests)}")
+        for origin in sorted(set(external_requests)):
+            lines.append(f"  - {origin}")
+    elif report.get("offline_assets"):
+        lines.append("- No external browser requests occurred.")
     lines.append("")
 
     lines += [
@@ -525,11 +532,11 @@ def main():
     parser.add_argument("--allow-console-errors", action="store_true",
                         help="exit 0 even when the browser logged an error")
     parser.add_argument("--offline-assets", action="store_true",
-                        help="serve pinned local Chart.js files for the CDN "
-                             "URLs and inert responses for other https")
+                        help="block external browser requests while using "
+                             "the real local production assets")
     parser.add_argument("--missing-chart", action="store_true",
-                        help="like --offline-assets but the chart library "
-                             "returns an empty body, to measure degradation")
+                        help="like --offline-assets but local chart scripts "
+                             "return empty bodies, to measure degradation")
     parser.add_argument("--cold", action="store_true",
                         help="restart the server before each page so process "
                              "caches are cold for every measured page")
@@ -545,10 +552,10 @@ def main():
         parser.error("--empty-stock requires --stub-ms N (live mode has no stub)")
     if options.missing_chart:
         options.offline_assets = True
-    if not options.offline_assets and not CHART_URLS[
-            "https://cdn.jsdelivr.net/npm/chart.js@4"].exists():
-        parser.error("pinned test assets are missing; run with "
-                     "--offline-assets only after restoring tests/fixtures/perf")
+    if not options.missing_chart:
+        missing = [path for path in CHART_PATHS if not (ROOT / path.lstrip("/")).is_file()]
+        if missing:
+            parser.error("local production chart assets are missing: " + ", ".join(missing))
 
     width, height = options.viewport
     viewport_label = f"{width}x{height}"
@@ -572,7 +579,7 @@ def main():
     env = dict(os.environ)
     env["TMPDIR"] = str(run_dir)
 
-    require_chart = options.offline_assets and not options.missing_chart
+    require_chart = not options.missing_chart
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": (f"stub {options.stub_ms} ms per Yahoo call"
@@ -590,6 +597,7 @@ def main():
         "measurements": [],
         "console_errors": [],
         "page_errors": [],
+        "external_requests": [],
         "server_final": None,
     }
 
@@ -607,13 +615,26 @@ def main():
             context = browser.new_context(viewport={"width": width,
                                                     "height": height})
             if options.offline_assets:
-                # Playwright's glob handling does not match a bare
-                # "https://**" pattern here, so match the scheme with a
-                # regex and decide per request.
+                # The cold mode replaces the server and its port between
+                # pages; resolve the current same-origin URL per request.
+                def route_offline(route):
+                    parts = urlsplit(route.request.url)
+                    origin = f"{parts.scheme}://{parts.netloc}"
+                    if origin == server.base:
+                        if options.missing_chart and parts.path in CHART_PATHS:
+                            route.fulfill(status=200, headers={
+                                "content-type": "application/javascript"}, body="")
+                        else:
+                            route.continue_()
+                    else:
+                        # Keep query strings and request paths out of reports.
+                        report["external_requests"].append(origin)
+                        fulfill_external(route, missing_chart=options.missing_chart)
+
+                # A one-argument wrapper prevents Playwright's Request
+                # argument from being mistaken for a missing-chart flag.
                 context.route(
-                    re.compile(r"^https://"),
-                    lambda route: fulfill_external(
-                        route, missing_chart=options.missing_chart))
+                    re.compile(r"^https?://"), lambda route: route_offline(route))
             page = context.new_page()
             page.on("pageerror", lambda exc: report["page_errors"].append(
                 str(exc)))
@@ -669,6 +690,10 @@ def main():
               file=sys.stderr)
         for message in report["page_errors"]:
             print(f"  {message}", file=sys.stderr)
+        sys.exit(1)
+    if report["external_requests"]:
+        print(f"\n{len(report['external_requests'])} external browser request(s) blocked",
+              file=sys.stderr)
         sys.exit(1)
     if report["console_errors"]:
         print(f"\n{len(report['console_errors'])} console error(s) recorded:",

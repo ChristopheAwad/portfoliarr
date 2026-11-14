@@ -207,6 +207,10 @@ let editingTxId = null;
 // The freshest GET result. Action clicks (edit/delete) look rows up HERE,
 // by id — never by scraping the row's cell text back into data.
 let lastTransactions = [];
+// A later refresh supersedes earlier reads, including reads started before a
+// currency change. The cached rows always belong to the selected currency.
+let ledgerRequestId = 0;
+let ledgerHasResult = false;
 
 // True once a refresh cycle fails AFTER rows have painted. The cached
 // lastTransactions then still describe a quote the page has stopped
@@ -448,7 +452,7 @@ function stampCell(col, cells) {
 // on phones the whole line is removed by style.css's card-mode rule.
 function buildTxRow(tx) {
     const row = document.createElement("tr");
-    row.className = "ledger-row"; // refreshLedger's failure check keys on this class
+    row.className = "ledger-row";
     row.dataset.id = tx.id; // action buttons' hook: look this row up by id
 
     // --- Facts (from the DB, always present) ---
@@ -953,8 +957,21 @@ function prepareFullSale(ticker, txs) {
     txForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-// Rebuild the tbody: one collapsed summary row per ticker, followed by that
-// ticker's individual transactions as hidden detail rows. The GROUPS
+// Build only the details for an expanded ticker. The same helper serves a
+// refresh and a click, so both paths keep row order and the CSS hooks.
+function buildTickerDetails(ticker, txs) {
+    const fragment = document.createDocumentFragment();
+    for (const tx of txs) {
+        const detailRow = buildTxRow(tx);
+        detailRow.classList.add("tx-detail");
+        detailRow.dataset.ticker = ticker;
+        fragment.append(detailRow);
+    }
+    return fragment;
+}
+
+// Rebuild the tbody: one summary row per ticker, followed by details only
+// for expanded groups. The GROUPS
 // (ticker summary rows) are what the header-click sort controls — the
 // individual detail rows are never re-sorted, always newest-first within
 // their group (the backend's order). With no sort clicked the groups keep
@@ -1029,18 +1046,13 @@ function renderLedger(transactions) {
     }
 
     for (const { ticker, txs } of visibleGroups) {
-        ledgerBody.append(buildGroupRow(ticker, txs));
-
         // Expanded state is consulted from the Set, not the DOM — a group
         // the user opened stays open across every poll rebuild.
         const open = expandedTickers.has(ticker);
-        for (const tx of txs) {
-            const detailRow = buildTxRow(tx);
-            detailRow.classList.add("tx-detail");
-            detailRow.dataset.ticker = ticker; // click-handler hook
-            detailRow.hidden = !open; // collapsed by default
-            ledgerBody.append(detailRow);
-        }
+        const groupRow = buildGroupRow(ticker, txs);
+        groupRow.classList.toggle("open", open);
+        ledgerBody.append(groupRow);
+        if (open) ledgerBody.append(buildTickerDetails(ticker, txs));
     }
 }
 
@@ -1114,17 +1126,22 @@ ledgerBody.addEventListener("click", (event) => {
     const ticker = groupRow.dataset.ticker;
     const open = !expandedTickers.has(ticker);
 
-    // State first (it must survive the next poll rebuild), then the DOM
-    // for the instant visual flip — no re-fetch, no re-render.
+    // State first (it must survive the next poll rebuild), then insert or
+    // remove just this group's details without another fetch.
     if (open) expandedTickers.add(ticker);
     else expandedTickers.delete(ticker);
     groupRow.classList.toggle("open", open);
 
-    // CSS.escape: tickers can contain selector-hostile characters
-    // ("BRK.B") — the attribute-selector cousin of encodeURIComponent.
-    ledgerBody.querySelectorAll(
-        `.tx-detail[data-ticker="${CSS.escape(ticker)}"]`
-    ).forEach((detailRow) => { detailRow.hidden = !open; });
+    if (open) {
+        const txs = lastTransactions.filter((tx) => tx.ticker === ticker);
+        groupRow.after(buildTickerDetails(ticker, txs));
+    } else {
+        // Detail rows are contiguous under their own group. Walking siblings
+        // avoids constructing a selector from a ticker's punctuation.
+        while (groupRow.nextElementSibling?.classList.contains("tx-detail")) {
+            groupRow.nextElementSibling.remove();
+        }
+    }
 });
 
 // Header-click sorting: ONE delegated listener on the <thead>, the same
@@ -1147,7 +1164,8 @@ function applyLedgerSort(col) {
         ledgerSort = { col, dir: defaultDir };
     }
 
-    renderLedger(lastTransactions);
+    if (ledgerHasResult) renderLedger(lastTransactions);
+    else renderSortIndicators();
 }
 ledgerHead.addEventListener("click", (event) => {
     const th = event.target.closest("th.sortable");
@@ -1213,7 +1231,7 @@ function moveLedgerColumn(sourceCol, targetCol, before) {
         localStorage.setItem("ledgerColOrder", JSON.stringify(ledgerColOrder));
     } catch { /* persistence unavailable — session-only order */ }
     paintLedgerColOrder();
-    renderLedger(lastTransactions);
+    if (ledgerHasResult) renderLedger(lastTransactions);
 }
 
 for (const th of ledgerHead.querySelectorAll("th")) {
@@ -1446,25 +1464,33 @@ function markLedgerUnavailable() {
 async function refreshLedger() {
     if (!currentPortfolioId()) return;
     const epoch = portfolioEpoch();
+    const currency = ledgerCurrencyParam();
+    const requestId = ++ledgerRequestId;
+    const isCurrent = () => epoch === portfolioEpoch()
+        && requestId === ledgerRequestId && currency === ledgerCurrencyParam();
     try {
         const response = await fetch(
-            `/api/transactions${portfolioQuery()}&${ledgerCurrencyParam()}`
+            `/api/transactions${portfolioQuery()}&${currency}`
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const transactions = await response.json();
-        if (epoch !== portfolioEpoch()) return;
+        if (!isCurrent()) return;
+        if (!Array.isArray(transactions)) throw new Error("Invalid ledger response");
         lastTransactions = transactions; // cache for action-click lookups
         ledgerStale = false; // fresh quotes — live cells and Sell may return
+        ledgerHasResult = true;
         renderLedger(transactions);
         perfMark("ledger:rows");
     } catch (err) {
-        if (epoch !== portfolioEpoch()) return;
+        if (!isCurrent()) return;
         console.error("ledger refresh failed:", err);
-        if (ledgerBody.querySelector(".ledger-row")) {
+        if (ledgerBody.querySelector(".ledger-group")) {
             markLedgerUnavailable();
         } else {
             // We never got rows at all — can't know if the ledger is empty
             // or unreachable, so say exactly that.
+            lastTransactions = [];
+            ledgerHasResult = false;
             setLedgerMessage("Ledger unavailable");
         }
     }
@@ -1473,7 +1499,15 @@ async function refreshLedger() {
 // The toggle: one click = one immediate ledger refetch (waiting up to a
 // minute for the next poll would make the checkbox feel broken). Nothing
 // else refreshes — the summary and chart are CAD in both modes.
-usdNativeToggle.addEventListener("change", () => refreshLedger());
+usdNativeToggle.addEventListener("change", () => {
+    // Do not show or expand the previous currency's payload under the new
+    // setting. Expanded ticker selection survives until the new data arrives.
+    lastTransactions = [];
+    ledgerHasResult = false;
+    ledgerStale = false;
+    setLedgerMessage("Loading ledger...");
+    refreshLedger();
+});
 
 // Form submit: the ONLY way rows are born (POST) or corrected (PUT).
 // preventDefault stops the browser's native full-page form POST — we want
@@ -1918,6 +1952,9 @@ const realizedTotalEl = document.querySelector("#realized-total");
 // the wrapper, so it stays visible in both states by construction.
 const closedSalesToggle = document.querySelector("#closed-sales-toggle");
 const closedSalesWrap = document.querySelector("#closed-sales-wrap");
+let lastClosedSales = null;
+let closedSalesState = "loading";
+let closedSalesRequestId = 0;
 
 // One toggle for both input paths (click + keyboard). Reading the wrapper's
 // hidden BEFORE flipping: "is it showing right now?" → close it. The .open
@@ -1929,6 +1966,7 @@ function toggleClosedSales() {
     closedSalesToggle.classList.toggle("open", open);
     closedSalesToggle.setAttribute(
         "aria-expanded", String(!closedSalesWrap.hidden));
+    renderClosedSalesBody();
 }
 closedSalesToggle.addEventListener("click", () => toggleClosedSales());
 closedSalesToggle.addEventListener("keydown", (event) => {
@@ -1974,6 +2012,8 @@ function setClosedSalesMessage(text) {
 }
 
 function renderClosedSales(payload) {
+    lastClosedSales = payload;
+    closedSalesState = "ready";
     // Header total first. null means at least one row's CAD math was
     // unknowable — summing the rest would look complete and be wrong.
     realizedTotalEl.textContent = payload.total_realized === null
@@ -1984,14 +2024,41 @@ function renderClosedSales(payload) {
     realizedTotalEl.classList.toggle(
         "neg", payload.total_realized !== null && payload.total_realized < 0);
 
+    renderClosedSalesBody();
+}
+
+// Clear both the rows and the header when the last result no longer belongs
+// to the current portfolio, or the latest refresh fails.
+function resetClosedSales(state) {
+    lastClosedSales = null;
+    closedSalesState = state;
+    realizedTotalEl.textContent = "—";
+    realizedTotalEl.classList.remove("pos", "neg");
+    renderClosedSalesBody();
+}
+
+function renderClosedSalesBody() {
     closedSalesBody.textContent = "";
-    if (payload.rows.length === 0) {
+    if (closedSalesWrap.hidden) return;
+    if (closedSalesState === "loading") {
+        setClosedSalesMessage("Loading portfolio...");
+        return;
+    }
+    if (closedSalesState === "unavailable") {
+        setClosedSalesMessage("Closed sales unavailable");
+        return;
+    }
+    if (closedSalesState === "no-portfolio") {
+        setClosedSalesMessage("No portfolios available");
+        return;
+    }
+    if (lastClosedSales.rows.length === 0) {
         setClosedSalesMessage(
             "No closed sales yet — the realized result of each SELL " +
             "appears here.");
         return;
     }
-    for (const sale of payload.rows) {
+    for (const sale of lastClosedSales.rows) {
         const row = document.createElement("tr");
         row.className = "closed-sales-row";
 
@@ -2074,18 +2141,30 @@ function refreshLedgerViews() {
 async function refreshClosedSales() {
     if (!currentPortfolioId()) return;
     const epoch = portfolioEpoch();
+    const requestId = ++closedSalesRequestId;
+    const isCurrent = () => epoch === portfolioEpoch()
+        && requestId === closedSalesRequestId;
+    // While a read is pending, expanding the table cannot reveal an older
+    // payload. The header retains its last result until success or failure.
+    lastClosedSales = null;
+    closedSalesState = "loading";
+    renderClosedSalesBody();
     try {
         const response = await fetch(`/api/portfolio/realized${portfolioQuery()}`);
         // fetch does NOT throw on 4xx/5xx — only on network failure.
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        if (epoch !== portfolioEpoch()) return;
+        if (!isCurrent()) return;
+        if (!data || !Array.isArray(data.rows) ||
+            !(data.total_realized === null || Number.isFinite(data.total_realized))) {
+            throw new Error("Invalid closed sales response");
+        }
         renderClosedSales(data);
         perfMark("ledger:closed");
     } catch (err) {
-        if (epoch !== portfolioEpoch()) return;
+        if (!isCurrent()) return;
         console.error("closed sales refresh failed:", err);
-        setClosedSalesMessage("Closed sales unavailable");
+        resetClosedSales("unavailable");
     }
 }
 
@@ -2097,21 +2176,41 @@ async function refreshClosedSales() {
 // ---------------------------------------------------------------------------
 
 portfolioReady.then(() => {
+    // The initial list can settle before this deferred script subscribes to
+    // portfoliolistchange. Its null result can mean either an empty list or
+    // a failed read, so leave the shared status to explain which one it is.
+    if (!currentPortfolioId()) {
+        setLedgerMessage("Portfolio unavailable");
+        resetClosedSales("unavailable");
+        return;
+    }
     refreshLedger();
     refreshClosedSales();
 });
-document.addEventListener("portfoliochange", () => {
+function resetPortfolioViews(hasPortfolio) {
     exitEditMode();
     expandedTickers.clear();
     lastTransactions = [];
+    ledgerHasResult = false;
+    ledgerStale = false;
+    ++ledgerRequestId;
+    ++closedSalesRequestId;
     previewPortfolioId = null;
     previewText = null;
     importCommitBtn.hidden = true;
     importReportEl.hidden = true;
-    setLedgerMessage("Loading portfolio...");
-    setClosedSalesMessage("Loading portfolio...");
-    refreshLedger();
-    refreshClosedSales();
+    setLedgerMessage(hasPortfolio ? "Loading portfolio..." : "No portfolios available");
+    resetClosedSales(hasPortfolio ? "loading" : "no-portfolio");
+}
+document.addEventListener("portfoliochange", () => {
+    const hasPortfolio = !!currentPortfolioId();
+    resetPortfolioViews(hasPortfolio);
+    if (hasPortfolio) refreshLedgerViews();
+});
+// A successful empty portfolio list has no selected id. Clear old scoped
+// facts immediately, including when no portfoliochange event was emitted.
+document.addEventListener("portfoliolistchange", () => {
+    if (!currentPortfolioId()) resetPortfolioViews(false);
 });
 // setupAutoRefresh owns the interval and wires visibility/online events
 // so the page refreshes instantly when the user returns (see common.js).

@@ -48,7 +48,7 @@ def test_silent_prefetch_never_changes_or_paints_the_selection():
     latest_guard = body.index(
         "if (visibleGeneration !== visibleRequestGeneration) return;"
     )
-    paint = body.index("paint(data, period);")
+    paint = body.index("schedulePaint(data, period,")
     assert silent_return < latest_guard < paint
 
 
@@ -66,8 +66,7 @@ def test_stale_same_period_response_cannot_replace_newer_cache_data():
     cache_guard = body.index(
         "isLatestChartRequest(period, requestGeneration))"
     )
-    assert "const cacheKey = `" in body
-    assert "${benchmarks.join(",")}" in body
+    assert "JSON.stringify([scope, period, benchmarks])" in body
     assert "scopeAtStart === scopeGeneration && scope === getScope()" in body
     assert cache_guard < cache_write
 
@@ -84,10 +83,12 @@ def test_a_b_a_response_order_uses_request_generation_not_period_name():
 
 def test_successful_current_paint_updates_the_timeframe_button():
     """Selection changes only after the requested period successfully paints."""
-    body = refresh_body()
-    assert body.index("paint(data, period);") < body.index(
-        "syncTimeframeButtons(period);"
-    )
+    text = common_js()
+    start = text.index("function schedulePaint(")
+    body = text[start:text.index("// Reconcile the chart", start)]
+    assert body.index("if (pendingPaint !== ticket || !isCurrent())") < body.index(
+        "paint(data, period);"
+    ) < body.index("syncTimeframeButtons(period);")
 
 
 def test_click_does_not_claim_the_period_before_fetch_success():

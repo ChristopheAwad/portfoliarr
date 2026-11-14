@@ -204,10 +204,17 @@ def test_measure_perf_smoke_writes_only_the_requested_output(tmp_path):
     assert report["page_errors"] == []
     assert report["console_errors"] == []
     assert report["chart_required"] is True
+    assert report["external_requests"] == []
     assert all(row["summary"] for row in report["measurements"])
     charts = {row["page"]: row["chart"] for row in report["measurements"]}
     assert charts["dashboard"]["portfolio_chart"] is True
     assert charts["stock"]["stock_chart"] is True
+    assert charts["dashboard"]["finite_points"] > 0
+    assert charts["stock"]["finite_points"] > 0
+    marks = {row["page"]: row["summary"]["marks"]
+             for row in report["measurements"]}
+    assert "dashboard:chart" in marks["dashboard"]
+    assert "stock:chart" in marks["stock"]
     assert charts["ledger"]["chart_loaded"] is False
     assert charts["preferences"]["chart_loaded"] is False
 
@@ -240,7 +247,7 @@ def test_empty_stock_degrades_without_uncaught_page_errors(tmp_path):
 
 
 def test_missing_chart_assets_stay_a_separate_expected_failure(tmp_path):
-    """A missing CDN chart library is a real degradation, not a clean run.
+    """A missing local chart library is a real degradation, not a clean run.
     The report must say charts were not required and not rendered."""
     result, report = _run_measure(
         tmp_path, "--missing-chart", "--allow-console-errors")
@@ -253,6 +260,175 @@ def test_missing_chart_assets_stay_a_separate_expected_failure(tmp_path):
                for row in report["measurements"])
 
 
+def test_chart_readiness_rejects_empty_stale_or_missing_data():
+    """Use a browser to distinguish a completed finite draw from an empty one.
+
+    The success harness seeds real holdings, so an empty canvas is not ready.
+    Missing-chart mode can still measure the non-chart part of the page.
+    """
+    playwright_python = _playwright_python()
+    if playwright_python is None:
+        pytest.skip("Playwright is unavailable for the readiness check")
+    probe = r'''
+from playwright.sync_api import sync_playwright, TimeoutError
+from scripts.measure_perf import wait_for_page_ready
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.set_content('<canvas id="portfolioChart"></canvas><canvas id="stockChart"></canvas>')
+    page.evaluate("""() => {
+        window.marks = {'dashboard:summary': 1, 'stock:quote': 1};
+        window.PortfoliarrPerf = {summary: () => ({marks: window.marks})};
+        window.chart = {data: {datasets: [{data: []}]}};
+        window.Chart = {getChart: () => window.chart};
+    }""")
+    for name, mark in [('dashboard', 'dashboard:chart'), ('stock', 'stock:chart')]:
+        page.evaluate("(mark) => { window.marks[mark] = 1; }", mark)
+        # A chart object and a stale mark still cannot make an empty or
+        # non-finite series a seeded-run success.
+        for values in ([], [None, '5']):
+            page.evaluate("(values) => { window.chart.data.datasets[0].data = values; }", values)
+            try:
+                wait_for_page_ready(page, name, True, timeout_ms=250)
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError(f'{name}: accepted empty/non-finite chart')
+        page.evaluate("() => { window.chart.data.datasets[0].data = [null, 42]; }")
+        page.evaluate("(mark) => { delete window.marks[mark]; }", mark)
+        try:
+            wait_for_page_ready(page, name, True, timeout_ms=250)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError(f'{name}: accepted a chart without a draw mark')
+        page.evaluate("(mark) => { window.marks[mark] = 1; }", mark)
+        wait_for_page_ready(page, name, True, timeout_ms=2500)
+    page.evaluate("() => { delete window.Chart; }")
+    wait_for_page_ready(page, 'dashboard', False, timeout_ms=2500)
+    browser.close()
+'''
+    result = subprocess.run(
+        [str(playwright_python), "-c", probe], cwd=str(ROOT),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_slow_local_fonts_do_not_block_authenticated_startup():
+    """Hold the font responses while a real browser starts the dashboard."""
+    playwright_python = _playwright_python()
+    if playwright_python is None:
+        pytest.skip("Playwright is unavailable for the font-delay check")
+    probe = r'''
+import asyncio
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from playwright.async_api import async_playwright
+from scripts.measure_perf import PerfServer
+
+async def run(server):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        seed_context = await browser.new_context()
+        seed_page = await seed_context.new_page()
+        await seed_page.goto(server.base + '/auth/setup')
+        await seed_page.fill('#setup-username', 'fontcheck')
+        await seed_page.fill('#setup-password', 'font-pass-1234')
+        await seed_page.fill('#setup-confirm', 'font-pass-1234')
+        await seed_page.click('.auth-form button[type=submit]')
+        await seed_page.wait_for_url(server.base + '/')
+        cookies = await seed_context.cookies()
+        await seed_context.close()
+
+        context = await browser.new_context(viewport={'width': 390, 'height': 844})
+        await context.add_cookies(cookies)
+        await context.add_init_script("localStorage.setItem('theme', 'dark')")
+        font_started = asyncio.Event()
+        release_fonts = asyncio.Event()
+        portfolios_requested = asyncio.Event()
+        external = []
+        font_paths = set()
+        errors = []
+        async def route_request(route):
+            parts = urlsplit(route.request.url)
+            origin = f'{parts.scheme}://{parts.netloc}'
+            if origin != server.base:
+                external.append(origin)
+                await route.abort()
+            elif parts.path.endswith('.woff2'):
+                font_paths.add(parts.path)
+                font_started.set()
+                await release_fonts.wait()
+                await route.continue_()
+            else:
+                await route.continue_()
+        await context.route(re.compile(r'^https?://'), route_request)
+        page = await context.new_page()
+        page.on('request', lambda req: portfolios_requested.set()
+                if urlsplit(req.url).path == '/api/portfolios' else None)
+        page.on('pageerror', lambda exc: errors.append(str(exc)))
+        try:
+            await page.goto(server.base + '/', wait_until='commit')
+            await asyncio.wait_for(font_started.wait(), timeout=10)
+            await asyncio.wait_for(portfolios_requested.wait(), timeout=10)
+            await page.locator('.navbar').wait_for(state='visible', timeout=10000)
+            assert await page.evaluate("document.documentElement.classList.contains('dark')")
+            assert await page.evaluate("document.fonts.status === 'loading'")
+            assert not release_fonts.is_set()
+        finally:
+            release_fonts.set()
+        await page.wait_for_load_state('load', timeout=20000)
+        await page.wait_for_function("""() => {
+            const loaded = new Set(Array.from(document.fonts)
+                .filter(face => face.status === 'loaded')
+                .map(face => face.family.replaceAll('"', '')));
+            return loaded.has('Instrument Sans') && loaded.has('Fraunces');
+        }""", timeout=10000)
+        loaded_subsets = await page.evaluate("""async () => {
+            const samples = [
+                ['600 20px "Fraunces"', 'A'],
+                ['600 20px "Fraunces"', 'Ž'],
+                ['600 20px "Fraunces"', 'ậ'],
+                ['400 20px "Instrument Sans"', 'A'],
+                ['400 20px "Instrument Sans"', 'Ž'],
+            ];
+            const faces = await Promise.all(samples.map(([font, text]) =>
+                document.fonts.load(font, text)));
+            return faces.every(group => group.length > 0 &&
+                group.every(face => face.status === 'loaded'));
+        }""")
+        assert loaded_subsets
+        assert font_paths == {
+            '/static/fonts/fraunces-v38-latin.woff2',
+            '/static/fonts/fraunces-v38-latin-ext.woff2',
+            '/static/fonts/fraunces-v38-vietnamese.woff2',
+            '/static/fonts/instrument-sans-v4-latin.woff2',
+            '/static/fonts/instrument-sans-v4-latin-ext.woff2',
+        }, font_paths
+        assert not external, external
+        assert not errors, errors
+        await context.close()
+        await browser.close()
+
+with tempfile.TemporaryDirectory(prefix='font-delay-', dir='/tmp/opencode') as temp:
+    server = PerfServer(Path(sys.argv[1]), dict(os.environ), Path(temp) / 'perf.db', stub_ms=1)
+    try:
+        asyncio.run(run(server))
+    finally:
+        server.stop()
+'''
+    result = subprocess.run(
+        [str(playwright_python), "-c", probe, sys.executable], cwd=str(ROOT),
+        capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_cold_mode_restarts_the_server_per_page(tmp_path):
     result, report = _run_measure(tmp_path, "--cold", "--settle", "0.1")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -261,3 +437,18 @@ def test_cold_mode_restarts_the_server_per_page(tmp_path):
     assert [row["page"] for row in report["measurements"]] == [
         "dashboard", "ledger", "stock", "preferences"]
     assert report["page_errors"] == []
+
+
+def test_missing_chart_in_cold_mode_uses_each_new_server_port(tmp_path):
+    result, report = _run_measure(
+        tmp_path, "--cold", "--missing-chart", "--allow-console-errors",
+        "--settle", "0.1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report is not None
+    assert report["cold"] is True
+    assert report["missing_chart"] is True
+    assert report["chart_required"] is False
+    assert report["external_requests"] == []
+    assert report["page_errors"] == []
+    assert all(row["chart"]["chart_loaded"] is False
+               for row in report["measurements"])
