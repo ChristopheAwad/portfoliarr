@@ -749,7 +749,7 @@ semantics. The reviewed implementation plan and acceptance checks are in
 `static/fonts/`, `market_data.py`, `scripts/measure_perf.py`, related tests,
 `docs/perf/`, `feature.md`
 **Depends on:** #61 instrumentation and #63 history sharing/measurement harness
-**Status:** in progress
+**Status:** shipped 2026-11-14 (PR #110)
 
 ---
 

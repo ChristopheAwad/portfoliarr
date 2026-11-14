@@ -1,6 +1,7 @@
 # Performance first pass: responsive charts, startup, and ledger
 
-Status: in progress. Owner approved the reviewed five-item plan on 2026-11-14.
+Status: ready to merge PR #110. All pre-merge gates passed; merged-image CI pending.
+Owner approved the reviewed five-item plan on 2026-11-14.
 Roadmap: #64. Base: `origin/main` / HEAD `c784bfd`.
 Branch: `audit-app-performance-loading-times`, an existing linked worktree.
 The name differs from the normal feature/fix pattern. Adopt it without renaming
@@ -200,8 +201,29 @@ API/fallback text while bytes are held, without waiting for the load event.
   **139 affected tests passed in 26.47 s**; the strengthened real-browser file
   then passed **63 tests in 8.11 s**. Syntax/diff checks pass. Final scoped
   independent review is still required before GUI/merge.
-- Final GUI/merge: pending. Required final GUI is scheduled after code review
-  passes and will inspect screenshots, action outcomes and logs.
+- Final independent review: **pass**, base
+  `c784bfd144f82b07ad5a61ec4386843604e96765`, final reviewed head
+  `1b9e2e64c74bcbc52b634e2172caacae7e87326d`. No blockers or nits.
+  Final report posted as PR comment `issuecomment-6883372726`.
+- Final GUI: **pass** on that reviewed head with no uncommitted code changes.
+  Desktop 1280x800 and phone-width 390x844, both light/dark themes, all four
+  screens, real fonts/charts, period/mode/comparison add/remove, lazy details,
+  privacy, keyboard edit/save confirmed in disposable DB, quick-sell preparation
+  without submission, delete cancellation, Closed Sales keyboard expand/collapse,
+  Preferences creation/theme and manual/online recovery on every page. Zero
+  unexpected page/console errors, failed requests, bad responses or external
+  requests. Only explicitly injected 503s are expected. Server logs inspected.
+- Final chart-interaction GUI: **pass**. Clicking pending 1M makes one request;
+  a failed initial 5D followed by successful 1D starts all eight other periods,
+  including a new 5D read. No unexpected errors.
+- GUI evidence: 20 synthetic-only JPEGs visually inspected under
+  `docs/perf/screenshots-2026-11-13/`; the folder retains the audit's start-date
+  label. Raw action/log reports: `gui-first-pass.json`,
+  `gui-first-pass-server.log`, `after-interactions.json`, and
+  `after-interactions-server.log` in the audit folder. Final driver commands:
+  `/usr/bin/python3 /tmp/opencode/portfoliarr-audit-20261113/gui_first_pass.py`
+  and `/usr/bin/python3 /tmp/opencode/portfoliarr-audit-20261113/interaction_first_pass.py`.
+- Pending approvals: none. Merge and post-merge image publication remain.
 - PR workflow: none configured for these changes; absence is not a passing run.
 - Docker publish: required merged-main workflow, pending. Watch with
   `gh run watch <id> --exit-status`, verify merged-SHA and latest publication,
@@ -229,7 +251,10 @@ passed consistency/hash checks. The four review fixes are not covered by this
 checked full-suite code. Their affected-check code is
 `391721b`; the reviewed follow-up head will be recorded after verification.
 The remaining mode scheduling checks cover runtime commit `877175a`.
-The final recovery-sharing checks cover runtime commit `5a03319`.
+The final recovery-sharing checks cover runtime commit `5a03319`. The final GUI
+and code review cover head `1b9e2e6`. Subsequent roadmap/handoff/evidence changes
+are documentation/images only and require a consistency check, not another
+runtime suite or code review.
 
 Review-fix affected command, with a redirected disposable database:
 

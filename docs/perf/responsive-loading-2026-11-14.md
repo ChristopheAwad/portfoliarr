@@ -82,8 +82,16 @@ beside the production files in `static/fonts/` and `static/vendor/`.
 - No frontend build/lint/type command exists in this repository.
 - Docker is unavailable locally. The existing main workflow must build,
   smoke-test and publish the verified merged image.
-- Final GUI screenshots, independent PR review and release results are recorded
-  in `feature.md` and the PR. They were pending when this evidence file was made.
+- Independent review passed through head `1b9e2e6` with no remaining findings.
+- Final GUI/action checks passed on that head at desktop/phone widths in both
+  themes. Comparison add/remove restores primary data, lazy rows and keyboard
+  actions work, saved edits reach the disposable DB, and manual/online recovery
+  works on all four pages. No unexpected browser/server errors or requests.
+- The pending-preload and failed-default/recovered chart cases also passed.
+- Twenty synthetic-only screenshots were visually inspected under
+  `docs/perf/screenshots-2026-11-13/`, retaining the audit's start-date label.
+  The PR embeds representative evidence before merge.
+- Merge and merged-image publication are recorded in `feature.md` and the PR.
 
 The standard CI requirements do not install Playwright. Browser-only checks can
 skip there; their local execution above is required evidence, not a CI claim.
