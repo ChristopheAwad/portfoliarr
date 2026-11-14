@@ -655,6 +655,99 @@ def test_cross_tab_revision_starts_fresh_read_during_recovery(keys):
     """)
 
 
+@pytest.mark.parametrize("initial", ["http", "empty"])
+@pytest.mark.parametrize("key", ["portfolioRevision", "activePortfolioId"])
+def test_storage_recovery_is_shared_with_retry_events(initial, key):
+    run_node(PORTFOLIO_HARNESS, f"const initial = {initial!r}, key = {key!r};\n" + r"""
+        (async () => {
+            if (initial === 'http') await fail(0);
+            else await succeed(0, []);
+            window.dispatch('storage', {key});
+            assert.equal(requests.length, 2);
+            assert.equal(retry.disabled, true);
+            window.dispatch('online');
+            document.dispatch('visibilitychange');
+            retry.dispatch('click');
+            assert.equal(requests.length, 2, 'retry events must join the storage recovery');
+            await succeed(1, [{id:2,name:'Recovered'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(retry.disabled, false);
+            assert.equal(status.hidden, true);
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail), [{id:2,previous:null}]);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+@pytest.mark.parametrize("outcome", ["http", "network", "empty"])
+def test_storage_recovery_failure_releases_retry(outcome):
+    run_node(PORTFOLIO_HARNESS, f"const outcome = {outcome!r};\n" + r"""
+        (async () => {
+            await fail(0);
+            window.dispatch('storage', {key:'portfolioRevision'});
+            window.dispatch('online');
+            assert.equal(requests.length, 2);
+            if (outcome === 'http') await fail(1);
+            else if (outcome === 'network') {requests[1].reject(new Error('offline')); await flush();}
+            else await succeed(1, []);
+            assert.equal(retry.disabled, false);
+            assert.equal(status.hidden, false);
+            retry.dispatch('click');
+            assert.equal(requests.length, 3);
+            await succeed(2, [{id:2,name:'Recovered'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(changes('portfoliochange').length, 1);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_later_storage_event_supersedes_storage_recovery():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            await fail(0);
+            saved.set('activePortfolioId', '2');
+            window.dispatch('storage', {key:'portfolioRevision'});
+            window.dispatch('online');
+            assert.equal(requests.length, 2);
+            window.dispatch('storage', {key:'activePortfolioId'});
+            document.dispatch('visibilitychange');
+            retry.dispatch('click');
+            assert.equal(requests.length, 3, 'later storage event must force a fresh read');
+            await succeed(1, [{id:1,name:'Old'}]);
+            assert.equal(currentPortfolioId(), null);
+            assert.equal(retry.disabled, true, 'old completion cannot release the newest read');
+            await succeed(2, [{id:1,name:'Old'}, {id:2,name:'New'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(saved.get('activePortfolioId'), '2');
+            assert.equal(retry.disabled, false);
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail), [{id:2,previous:null}]);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+@pytest.mark.parametrize("outcome", ["http", "empty"])
+def test_superseded_storage_failure_retries_before_old_read_settles(outcome):
+    run_node(PORTFOLIO_HARNESS, f"const outcome = {outcome!r};\n" + r"""
+        (async () => {
+            await fail(0);
+            window.dispatch('storage', {key:'portfolioRevision'});
+            window.dispatch('storage', {key:'activePortfolioId'});
+            assert.equal(requests.length, 3);
+            if (outcome === 'http') await fail(2);
+            else await succeed(2, []);
+            assert.equal(retry.disabled, false);
+            retry.dispatch('click');
+            assert.equal(requests.length, 4);
+            await succeed(1, [{id:1,name:'Old'}]);
+            assert.equal(currentPortfolioId(), null);
+            assert.equal(retry.disabled, true);
+            await succeed(3, [{id:2,name:'Recovered'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(retry.disabled, false);
+            assert.equal(changes('portfoliochange').length, 1);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
 @pytest.mark.parametrize("outcome", ["http", "network", "empty"], ids=["http", "network", "empty"])
 @pytest.mark.parametrize("trigger", ["manual", "online"])
 @pytest.mark.parametrize("old_first", [True, False], ids=["old-first", "new-first"])
@@ -848,6 +941,7 @@ with tempfile.TemporaryDirectory(prefix='portfolio-recovery-') as tmp:
                         qty:2, type:'BUY', portfolio_id:list[0].id})}).then(r=>r.status);
             }''')
             assert created == 201, created
+            real_portfolios = setup.request.get(server.base + '/api/portfolios').json()
             cookies = setup.cookies(); setup.close()
 
             cases = [('/', 'http', 'manual'), ('/ledger', 'http', 'online'),
@@ -1048,6 +1142,41 @@ with tempfile.TemporaryDirectory(prefix='portfolio-recovery-') as tmp:
                     assert result['error'] == 'refresh failed', result
                     assert 'SPY unavailable' in result['readout'], result
                 context.close()
+
+            # Exercise the storage/reconnect race on a real dashboard. The
+            # pending list response is controlled in-page, not served twice.
+            context = browser.new_context(); context.add_cookies(cookies)
+            context.route(re.compile(r'^https://'), lambda route: route.abort())
+            context.route('**/api/portfolios', lambda route: route.fulfill(
+                status=503, content_type='application/json', body='{}'))
+            context.add_init_script('''window.recoveryChanges=[];
+                document.addEventListener('portfoliochange', e => recoveryChanges.push(e.detail));''')
+            page = context.new_page()
+            page.goto(server.base + '/', wait_until='domcontentloaded')
+            page.locator('#portfolio-load-status').wait_for(state='visible')
+            race = page.evaluate('''async portfolios => {
+                const previous = window.fetch, pending = [];
+                window.fetch = (url, ...args) => String(url) === '/api/portfolios'
+                    ? new Promise(resolve => pending.push(resolve)) : previous(url, ...args);
+                try {
+                    window.dispatchEvent(new StorageEvent('storage', {key:'portfolioRevision'}));
+                    window.dispatchEvent(new Event('online'));
+                    document.dispatchEvent(new Event('visibilitychange'));
+                    document.getElementById('portfolio-load-retry').click();
+                    const recovery = retryInitialPortfolioList();
+                    const count = pending.length;
+                    for (const resolve of pending) resolve(new Response(JSON.stringify(portfolios), {
+                        status:200, headers:{'Content-Type':'application/json'}}));
+                    await recovery;
+                    return {count, id:currentPortfolioId(), changes:window.recoveryChanges};
+                } finally {window.fetch = previous;}
+            }''', real_portfolios)
+            assert race['count'] == 1, race
+            assert race['id'] == real_portfolios[0]['id'], race
+            assert race['changes'] == [{'id':real_portfolios[0]['id'], 'previous':None}], race
+            page.locator('#portfolio-load-status').wait_for(state='hidden')
+            page.wait_for_function("window.PortfoliarrPerf.summary().marks['dashboard:summary']")
+            context.close()
             browser.close()
     finally:
         server.stop()

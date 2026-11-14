@@ -127,9 +127,11 @@ function refreshPortfolioList() {
         };
         flight.then(finish, () => finish(null));
     }
-    // A forced fresh read supersedes an older recovery attempt. Retry state
-    // must follow this newer read even if the old request never completes.
-    if (portfolioRecoveryPending) trackPortfolioRecovery(flight);
+    // A fresh read during failed startup also serves as the recovery read.
+    // Later forced reads replace its slot even if an older one never settles.
+    if (portfolioRecoveryPending || (portfolioStartupFailed && !activePortfolioId)) {
+        trackPortfolioRecovery(flight);
+    }
     return flight;
 }
 
@@ -206,11 +208,11 @@ function trackPortfolioRecovery(flight) {
 function retryInitialPortfolioList() {
     if (!portfolioStartupFailed || activePortfolioId) return portfolioRecoveryPending;
     if (portfolioRecoveryPending) return portfolioRecoveryPending;
-    const flight = refreshPortfolioList().catch((error) => {
+    const flight = refreshPortfolioList();
+    flight.catch((error) => {
         console.error("portfolio list failed", error);
-        return null;
     });
-    return trackPortfolioRecovery(flight);
+    return portfolioRecoveryPending;
 }
 document.getElementById("portfolio-select")?.addEventListener("change", (event) => {
     setActivePortfolio(Number(event.target.value));
