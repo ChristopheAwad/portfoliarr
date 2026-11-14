@@ -67,6 +67,7 @@ let portfolioListGeneration = 0;
 let portfolioStartupFailed = false;
 let portfolioRecoveryPending = null;
 let latestPortfolioListPromise = null;
+let finishPortfolioStartup = null;
 
 function currentPortfolioId() { return activePortfolioId; }
 function portfolioEpoch() { return portfolioGeneration; }
@@ -117,6 +118,18 @@ function refreshPortfolioList() {
     const generation = ++portfolioListGeneration;
     const flight = loadPortfolioList(generation);
     latestPortfolioListPromise = flight;
+    if (finishPortfolioStartup) {
+        const finish = (result) => {
+            if (generation !== portfolioListGeneration || !finishPortfolioStartup) return;
+            const resolve = finishPortfolioStartup;
+            finishPortfolioStartup = null;
+            resolve(result);
+        };
+        flight.then(finish, () => finish(null));
+    }
+    // A forced fresh read supersedes an older recovery attempt. Retry state
+    // must follow this newer read even if the old request never completes.
+    if (portfolioRecoveryPending) trackPortfolioRecovery(flight);
     return flight;
 }
 
@@ -174,22 +187,30 @@ async function loadPortfolioList(generation) {
 
 // Only failed startup is retried here. Online, foreground and manual retries
 // join one read; a direct post-write refresh above remains independent.
-function retryInitialPortfolioList() {
-    if (!portfolioStartupFailed || activePortfolioId) return portfolioRecoveryPending;
-    if (portfolioRecoveryPending) return portfolioRecoveryPending;
+function trackPortfolioRecovery(flight) {
     const retry = document.getElementById("portfolio-load-retry");
     if (retry) retry.disabled = true;
-    const flight = refreshPortfolioList().catch((error) => {
-        console.error("portfolio list failed", error);
-        return null;
-    }).finally(() => {
-        if (portfolioRecoveryPending === flight) {
+    // The original caller owns error reporting. This tracking promise only
+    // coordinates retry state and must settle on either success or failure.
+    const pending = flight.catch(() => null);
+    portfolioRecoveryPending = pending;
+    pending.then(() => {
+        if (portfolioRecoveryPending === pending) {
             portfolioRecoveryPending = null;
             if (retry) retry.disabled = false;
         }
     });
-    portfolioRecoveryPending = flight;
-    return flight;
+    return pending;
+}
+
+function retryInitialPortfolioList() {
+    if (!portfolioStartupFailed || activePortfolioId) return portfolioRecoveryPending;
+    if (portfolioRecoveryPending) return portfolioRecoveryPending;
+    const flight = refreshPortfolioList().catch((error) => {
+        console.error("portfolio list failed", error);
+        return null;
+    });
+    return trackPortfolioRecovery(flight);
 }
 document.getElementById("portfolio-select")?.addEventListener("change", (event) => {
     setActivePortfolio(Number(event.target.value));
@@ -200,14 +221,15 @@ document.addEventListener("visibilitychange", () => {
     if (!document.hidden) retryInitialPortfolioList();
 });
 window.addEventListener("storage", (event) => {
-    if (event.key === "activePortfolioId" || event.key === "portfolioRevision") {
-        if (portfolioStartupFailed && !activePortfolioId) retryInitialPortfolioList();
-        else refreshPortfolioList().catch((error) => console.error("portfolio selection failed", error));
+    if (event.key === "portfolioRevision" || event.key === "activePortfolioId") {
+        // Another tab can select a newly created portfolio before its revision
+        // event arrives. Neither signal may reuse a pre-write list request.
+        refreshPortfolioList().catch((error) => console.error("portfolio selection failed", error));
     }
 });
-const portfolioReady = refreshPortfolioList().catch((error) => {
+const portfolioReady = new Promise((resolve) => { finishPortfolioStartup = resolve; });
+refreshPortfolioList().catch((error) => {
     console.error("portfolio list failed", error);
-    return null;
 });
 
 // How long after a finger LIFTS from the chart to keep treating mouse
@@ -1688,6 +1710,8 @@ function setupTimeframeChart(
     // The last fetched reply, kept whole — a view swap repaints from it
     // with NO second network request (both series ride one fetch).
     let lastReply = null;
+    // Remember a failed picker state when repainting the last valid reply.
+    let failedComparisonSymbols = null;
 
     // ── Frontend chart cache ──────────────────────────────────────────
     // Avoids redundant network requests when the user toggles back and
@@ -2682,8 +2706,21 @@ function setupTimeframeChart(
             if (silent || visibleGeneration !== visibleRequestGeneration) return;
             if (lastReply === null) {
                 emitPeriodSummary(period, null);
+                // The initial queued draw can be superseded before any data
+                // reaches the canvas. Keep the chosen view usable for retry.
+                if (requestedMode !== mode) {
+                    mode = requestedMode;
+                    if (modeBar) {
+                        modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
+                            b.classList.toggle("active", b.dataset.chartMode === mode));
+                    }
+                }
             } else {
+                failedComparisonSymbols = [...((getBenchmarks && getBenchmarks()) || [])];
                 reconcileOverlaysOnFailure();
+                // A newer failed timeframe may have invalidated the frame
+                // that was going to apply the user's requested view.
+                if (requestedMode !== mode) repaintRequestedMode();
             }
         }
     }
@@ -2703,7 +2740,7 @@ function setupTimeframeChart(
     // Keep every visible state change inside the accepted draw frame. The
     // second frame is the browser's next paint opportunity, not evidence
     // that pixels have physically appeared on a display.
-    function schedulePaint(data, period, isCurrent) {
+    function schedulePaint(data, period, isCurrent, { reuseReply = false } = {}) {
         const ticket = { isCurrent, generation: ++paintGeneration };
         pendingPaint = ticket;
         return new Promise((resolve, reject) => {
@@ -2715,6 +2752,7 @@ function setupTimeframeChart(
                 }
                 pendingPaint = null;
                 try {
+                    if (!reuseReply) failedComparisonSymbols = null;
                     mode = requestedMode;
                     if (modeBar) {
                         modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
@@ -2754,6 +2792,18 @@ function setupTimeframeChart(
                 }
             });
         });
+    }
+
+    function repaintRequestedMode() {
+        const reply = lastReply;
+        const period = currentPeriod;
+        const scope = getScope();
+        const epoch = scopeGeneration;
+        if (!reply || scope === null || scope === undefined) return;
+        schedulePaint(reply, period, () =>
+            epoch === scopeGeneration && scope === getScope() && lastReply === reply,
+            { reuseReply: true })
+            .catch((error) => console.error("chart repaint failed:", error));
     }
 
     // Reconcile the chart to exactly one primary dataset plus the currently
@@ -2802,8 +2852,6 @@ function setupTimeframeChart(
         const painted = Array.isArray(lastReply && lastReply.benchmarks)
             ? lastReply.benchmarks : [];
         const current = (getBenchmarks && getBenchmarks()) || [];
-        const paintedSymbols = painted.map((b) => b.symbol);
-        if (current.join(",") === paintedSymbols.join(",")) return;
         const reconciled = reconcileOverlays(painted, current);
         comparisonMode = reconciled.length > 0
             && (chartNormalized === true || mode === "performance");
@@ -2949,7 +2997,13 @@ function setupTimeframeChart(
         // comparison replies explicitly mark their primary line normalized.
         // comparisonMode is the ONE switch for date-only tooltips + the
         // bottom readout, so both pages behave identically.
-        const overlays = Array.isArray(data.benchmarks) ? data.benchmarks : [];
+        const paintedOverlays = Array.isArray(data.benchmarks) ? data.benchmarks : [];
+        const selectedOverlays = (getBenchmarks && getBenchmarks()) || [];
+        const failedSelection = failedComparisonSymbols &&
+            failedComparisonSymbols.length === selectedOverlays.length &&
+            failedComparisonSymbols.every((symbol, i) => symbol === selectedOverlays[i]);
+        const overlays = failedSelection
+            ? reconcileOverlays(paintedOverlays, selectedOverlays) : paintedOverlays;
         comparisonMode = overlays.length > 0
             && (data.normalized === true || plottingIndex);
         syncOverlayDatasets(comparisonMode ? overlays : [], plotLabels);
@@ -3055,13 +3109,7 @@ function setupTimeframeChart(
                 modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
                     b.classList.toggle("active", b.dataset.chartMode === mode));
             } else if (!pendingPaint || !pendingPaint.isCurrent()) {
-                const reply = lastReply;
-                const period = currentPeriod;
-                const scope = getScope();
-                const epoch = scopeGeneration;
-                if (reply) schedulePaint(reply, period, () =>
-                    epoch === scopeGeneration && scope === getScope() && lastReply === reply)
-                    .catch((error) => console.error("chart repaint failed:", error));
+                repaintRequestedMode();
             }
         });
     }
@@ -3075,6 +3123,7 @@ function setupTimeframeChart(
             ++paintGeneration;
             pendingPaint = null;
             lastReply = null;
+            failedComparisonSymbols = null;
             lastCosts = null;
             clearMeasurement();
             chart.data.labels = [];

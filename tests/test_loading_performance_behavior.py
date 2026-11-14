@@ -5,6 +5,7 @@ fake network and animation frames make response ordering deterministic without
 requiring a browser or changing the application's dependencies.
 """
 
+import json
 import shutil
 import subprocess
 import sys
@@ -53,7 +54,7 @@ globalThis.window = {handlers:{}, addEventListener(name, fn) {
     (this.handlers[name] ||= []).push(fn);
 }, dispatch(name) {for (const fn of this.handlers[name] || []) fn();}};
 globalThis.document = {documentElement: {}, hidden: false, addEventListener() {},
-    createElement() { return {style: {}, classList: classes(), append() {}}; }};
+    createElement() { return element(); }};
 globalThis.localStorage = {getItem() {return null;}, setItem() {}};
 globalThis.getComputedStyle = () => ({getPropertyValue: () => '#123456'});
 globalThis.hexToRgba = () => 'rgba(1,2,3,.75)';
@@ -71,6 +72,14 @@ function classes() {
             add(name) {set.add(name);}, remove(name) {set.delete(name);},
             contains(name) {return set.has(name);}};
 }
+function element() {
+    let text = '';
+    return {children: [], hidden: false, style: {}, classList: classes(),
+        get textContent() {return text;},
+        set textContent(value) {text = value; this.children = [];},
+        append(...nodes) {this.children.push(...nodes);},
+        replaceChildren(...nodes) {this.children = nodes;}};
+}
 function button(text, mode) {
     return {textContent: text, dataset: mode ? {chartMode: mode} : {},
             classList: classes(), closest() {return this;}};
@@ -84,6 +93,7 @@ const modeBar = {handlers: {}, querySelectorAll() {return modes;},
     addEventListener(name, fn) {this.handlers[name] = fn;}};
 const canvas = {parentElement: {clientWidth: 600}, getContext() {return {};},
     addEventListener() {}, getBoundingClientRect() {return {left: 0, top: 0};}};
+const comparisonReadout = element();
 class FakeChart {
     static Tooltip = {positioners: {}};
     constructor(ctx, config) {
@@ -109,7 +119,7 @@ globalThis.Chart = FakeChart;
 vm.runInThisContext(source.slice(start, end));
 const handle = setupTimeframeChart({canvas, buttonBar, modeBar, datasetLabel: 'Value',
     endpoint: () => `/history?scope=${scope}`, defaultPeriod: '5D',
-    getScope: () => scope, getBenchmarks: () => benchmarks,
+    getScope: () => scope, getBenchmarks: () => benchmarks, comparisonReadout,
     onPeriodSummary: value => summaries.push(value),
     onPaintComplete: value => {
         completions.push(value);
@@ -124,8 +134,8 @@ async function succeed(index, value) {
 }
 async function fail(index) {requests[index].resolve({ok: false, status: 503}); await flush();}
 function selected() {return buttons.find(b => b.classList.contains('active'))?.textContent;}
-async function initial() {
-    handle.refresh('5D'); await succeed(0, data(100, 110)); await frame(); await frame();
+async function initial(value = data(100, 110)) {
+    handle.refresh('5D'); await succeed(0, value); await frame(); await frame();
 }
 """
 
@@ -299,6 +309,95 @@ def test_chart_behavior(case):
     run_node(CHART_HARNESS, case)
 
 
+@pytest.mark.parametrize("failure_before_frame", [True, False], ids=["fast", "after-frame"])
+def test_failed_new_timeframe_keeps_requested_mode_on_last_valid_data(failure_before_frame):
+    run_node(CHART_HARNESS, f"const fastFailure = {str(failure_before_frame).lower()};\n" + r"""
+        (async () => {
+            await initial();
+            handle.refresh('1M'); await succeed(1, data(200, 220));
+            modeBar.handlers.click({target:modes[1]});
+            handle.refresh('3M');
+            if (!fastFailure) await frame();
+            await fail(2);
+            await frame(); await frame();
+            modeBar.handlers.click({target:modes[1]});
+            await frame(); await frame();
+            assert.equal(selected(), '5D');
+            assert.equal(modes[1].classList.contains('active'), true);
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_failed_new_timeframe_keeps_requested_mode_before_any_chart_draw():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            handle.refresh('5D'); await succeed(0, data(100, 110));
+            modeBar.handlers.click({target:modes[1]});
+            handle.refresh('1M'); await fail(1);
+            await frame(); await frame();
+            modeBar.handlers.click({target:modes[1]}); await frame();
+            assert.equal(modes[1].classList.contains('active'), true);
+            assert.deepEqual(handle.chart.data.datasets[0].data, []);
+            assert.equal(marks.includes('chart:paint'), false);
+            handle.refresh('1M'); await succeed(2, data(200, 220));
+            await frame(); await frame();
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_fast_comparison_failure_survives_pending_mode_draw_and_recovers():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            await initial();
+            benchmarks = ['SPY']; handle.refresh('5D');
+            modeBar.handlers.click({target:modes[1]});
+            await fail(1); await frame(); await frame();
+            assert.equal(modes[1].classList.contains('active'), true);
+            let spy = handle.chart.data.datasets.find(d => d.label === 'SPY');
+            assert.equal(spy?.compareError, 'refresh failed');
+            assert.equal(comparisonReadout.hidden, false);
+            assert.equal(comparisonReadout.children[1].children[2].textContent, 'SPY unavailable');
+
+            benchmarks = ['QQQ']; handle.reload(); await fail(2);
+            assert.equal(handle.chart.data.datasets.some(d => d.label === 'SPY'), false);
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'QQQ')?.compareError, 'refresh failed');
+            modeBar.handlers.click({target:modes[0]}); await frame(); await frame();
+            modeBar.handlers.click({target:modes[1]}); await frame(); await frame();
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'QQQ')?.compareError, 'refresh failed');
+
+            handle.reload();
+            await succeed(3, {...data(100,110), benchmarks:[{symbol:'QQQ', values:[100,110], error:null}]});
+            await frame(); await frame();
+            const qqq = handle.chart.data.datasets.find(d => d.label === 'QQQ');
+            assert.equal(qqq.compareError, null);
+            assert.deepEqual(qqq.data, [100,110]);
+            assert.equal(comparisonReadout.children[1].children[2].textContent, 'QQQ');
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_benchmark_errors_survive_repaint_without_mutating_reply():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            const reply = {...data(100,110), benchmarks:[
+                {symbol:'SPY', values:null, error:'provider unavailable'}]};
+            const before = JSON.stringify(reply);
+            benchmarks = ['SPY']; await initial(reply);
+            modeBar.handlers.click({target:modes[1]}); await frame(); await frame();
+            benchmarks = ['SPY','QQQ']; handle.reload(); await fail(1);
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'SPY').compareError, 'provider unavailable');
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'QQQ').compareError, 'refresh failed');
+            modeBar.handlers.click({target:modes[0]}); await frame(); await frame();
+            modeBar.handlers.click({target:modes[1]}); await frame(); await frame();
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'SPY').compareError, 'provider unavailable');
+            assert.equal(handle.chart.data.datasets.find(d => d.label === 'QQQ').compareError, 'refresh failed');
+            assert.equal(JSON.stringify(reply), before);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
 PORTFOLIO_HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -420,6 +519,88 @@ function changes(type) {return events.filter(e => e.type === type);}
          "fresh-after-write", "startup-superseded", "valid-empty-recovery"])
 def test_portfolio_startup_behavior(case):
     run_node(PORTFOLIO_HARNESS, case)
+
+
+@pytest.mark.parametrize("outcome", ["success", "http", "empty"])
+def test_newer_startup_list_can_finish_while_the_original_read_hangs(outcome):
+    run_node(PORTFOLIO_HARNESS, f"const outcome = {outcome!r};\n" + r"""
+        (async () => {
+            let ready = false;
+            portfolioReady.then(() => ready = true);
+            window.dispatch('storage', {key:'portfolioRevision'});
+            assert.equal(requests.length, 2);
+            if (outcome === 'success') await succeed(1, [{id:2,name:'New'}]);
+            else if (outcome === 'http') await fail(1);
+            else await succeed(1, []);
+            assert.equal(ready, true, 'newest settled list must unblock startup');
+            if (outcome !== 'success') {
+                assert.equal(currentPortfolioId(), null);
+                assert.equal(status.hidden, false);
+                retry.dispatch('click');
+                assert.equal(requests.length, 3);
+                await succeed(2, [{id:2,name:'New'}]);
+            }
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(changes('portfoliochange').length, outcome === 'success' ? 0 : 1);
+            const lists = changes('portfoliolistchange').length;
+            await succeed(0, [{id:1,name:'Old'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(changes('portfoliolistchange').length, lists);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+@pytest.mark.parametrize("keys", [
+    ["portfolioRevision"], ["activePortfolioId"],
+    ["portfolioRevision", "activePortfolioId"],
+], ids=["revision", "selection", "both"])
+def test_cross_tab_revision_starts_fresh_read_during_recovery(keys):
+    run_node(PORTFOLIO_HARNESS, f"const keys = {json.dumps(keys)};\n" + r"""
+        (async () => {
+            await fail(0); retry.dispatch('click');
+            saved.set('activePortfolioId', '2');
+            for (const key of keys) window.dispatch('storage', {key});
+            assert.equal(requests.length, 2 + keys.length, 'storage changes must not join a pre-write read');
+            const newest = requests.length - 1;
+            await succeed(newest, [{id:1,name:'Old'}, {id:2,name:'New'}]);
+            for (let i = 1; i < newest; i++) await succeed(i, [{id:1,name:'Old'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(saved.get('activePortfolioId'), '2');
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail), [{id:2, previous:null}]);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+@pytest.mark.parametrize("outcome", ["http", "network", "empty"], ids=["http", "network", "empty"])
+@pytest.mark.parametrize("trigger", ["manual", "online"])
+@pytest.mark.parametrize("old_first", [True, False], ids=["old-first", "new-first"])
+def test_superseded_hung_recovery_does_not_block_new_retry(outcome, trigger, old_first):
+    run_node(PORTFOLIO_HARNESS, f"const outcome = {outcome!r}, trigger = {trigger!r}, oldFirst = {str(old_first).lower()};\n" + r"""
+        (async () => {
+            await fail(0); retry.dispatch('click');
+            const fresh = refreshPortfolioList().catch(() => null);
+            assert.equal(requests.length, 3);
+            if (outcome === 'http') await fail(2);
+            else if (outcome === 'network') { requests[2].reject(new Error('offline')); await flush(); }
+            else await succeed(2, []);
+            await fresh; await flush();
+            assert.equal(retry.disabled, false, 'a newer finished read must release Retry');
+            if (trigger === 'manual') retry.dispatch('click');
+            else window.dispatch('online');
+            assert.equal(requests.length, 4, 'retry must not join the older hung read');
+            if (oldFirst) {
+                await succeed(1, [{id:1,name:'Old'}]);
+                assert.equal(retry.disabled, true, 'an old completion must not release the new retry');
+                window.dispatch('online');
+                assert.equal(requests.length, 4);
+            }
+            await succeed(3, [{id:2,name:'Recovered'}]);
+            assert.equal(currentPortfolioId(), 2);
+            if (!oldFirst) await succeed(1, [{id:1,name:'Old'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(retry.disabled, false);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
 
 
 def test_reused_formatters_preserve_values_and_errors():
@@ -705,6 +886,37 @@ with tempfile.TemporaryDirectory(prefix='portfolio-recovery-') as tmp:
                 assert normal.evaluate('window.recoveryChanges') == [
                     {'id':None,'previous':old_id}, {'id':old_id,'previous':None}]
                 assert not errors, (path, errors)
+                if path == '/':
+                    # Real Chart.js and the real picker: fail the comparison
+                    # before its automatically queued Performance draw.
+                    result = normal.evaluate('''async () => {
+                        const oldRAF = window.requestAnimationFrame;
+                        const oldFetch = window.fetch;
+                        const frames = [], requests = [];
+                        window.requestAnimationFrame = callback => {frames.push(callback); return frames.length;};
+                        window.fetch = (url, ...args) => String(url).startsWith('/api/portfolio/history')
+                            ? new Promise(resolve => requests.push({url, resolve})) : oldFetch(url, ...args);
+                        const flush = async () => {for (let i = 0; i < 20; i++) await Promise.resolve();};
+                        const frame = async () => {
+                            const callbacks = frames.splice(0);
+                            callbacks.forEach(callback => callback(performance.now()));
+                            await flush();
+                        };
+                        try {
+                            comparePicker.addSymbol('SPY'); await flush();
+                            if (requests.length !== 1) throw new Error('Expected one comparison request');
+                            requests[0].resolve(new Response('{}', {status:503}));
+                            await flush(); await frame(); await frame();
+                            const chart = Chart.getChart(document.getElementById('portfolioChart'));
+                            const spy = chart.data.datasets.find(dataset => dataset.label === 'SPY');
+                            return {mode:document.querySelector('[data-chart-mode="performance"]').classList.contains('active'),
+                                error:spy && spy.compareError,
+                                readout:document.querySelector('#portfolio-comparison-readout').textContent};
+                        } finally {window.requestAnimationFrame = oldRAF; window.fetch = oldFetch;}
+                    }''')
+                    assert result['mode'] is True, result
+                    assert result['error'] == 'refresh failed', result
+                    assert 'SPY unavailable' in result['readout'], result
                 context.close()
             browser.close()
     finally:
