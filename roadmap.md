@@ -30,7 +30,7 @@ Import exists (`parse_import_text`), but there's no export. One new route (`GET 
 ---
 
 ### 3. Transaction Fees
-Currently no fee tracking. Add a nullable native-currency `fee` column to the `transactions` table. Fees increase buy costs and reduce sell proceeds in ledger, portfolio, and realized-gain calculations. The DB migration pattern already exists (see fx_rate migration in `db.py`). Detailed plan in `feature.md`.
+Currently no fee tracking. Add a nullable native-currency `fee` column to the `transactions` table. Fees increase buy costs and reduce sell proceeds in ledger, portfolio, and realized-gain calculations. The DB migration pattern already exists (see fx_rate migration in `db.py`).
 
 **Files:** `db.py` (schema + migration), `app.py` (validator + accounting routes), `static/js/ledger.js` (form + display), `templates/ledger.html` (input + column), `project-brief.md`, tests
 **Depends on:** Nothing
@@ -379,7 +379,6 @@ allocation, and closed sales to it. Market pages remain shared; the
 watchlist stayed shared until #26 made it per-person.
 Selection persists per browser and updates its other tabs immediately. Deleting
 a portfolio requires typed confirmation and cannot remove the last portfolio.
-Detailed tests-first implementation plan: `feature.md`.
 
 **Effort:** 5 days
 **Files:** `db.py`, `app.py`, `static/js/common.js`, `static/js/main.js`, `static/js/ledger.js`, `static/js/preferences.js`, `static/js/stock.js` if needed, `templates/index.html`, `templates/ledger.html`, `templates/preferences.html`, `static/style.css`, `project-brief.md`, portfolio tests and existing fixture/route tests
@@ -686,7 +685,7 @@ user-entered classification (`classification_overrides` table + GET/PUT/DELETE
 `/api/fund-classification/<symbol>`) entered on the stock detail page. Yahoo has
 no fund country/region data, so a fund's country is `Unknown` (or `n/a` for
 pure commodity/crypto funds) until the user assigns it. Cap keeps its current
-excluded behavior. Detailed plan in `feature.md`.
+excluded behavior.
 
 **Effort:** 4–6 days
 **Files:** `db.py`, `market_data.py`, `app.py`, `templates/index.html`,
@@ -772,7 +771,7 @@ return is computable. The ledger's daily columns remain daily.
 ---
 
 ### 13. Time-Weighted Return (TWR) Performance Chart
-The dashboard's value chart is money-weighted (cost-basis %), so deposits dilute a real gain. Add a toggleable second view: a growth-of-$100 index computed by per-bar chaining with flows removed (every BUY = injection, SELL = withdrawal — there is no cash account). Reuses `portfolio_history`'s existing tx-absorption walk (flows fold where shares already fold); the reply gains `index_values` + `twrr_pct`. Full plan in `feature.md`. The rebase-to-100 + multi-dataset machinery built here is exactly what #7 (Benchmark Line) needs — doing this first makes #7 mostly plumbing.
+The dashboard's value chart is money-weighted (cost-basis %), so deposits dilute a real gain. Add a toggleable second view: a growth-of-$100 index computed by per-bar chaining with flows removed (every BUY = injection, SELL = withdrawal — there is no cash account). Reuses `portfolio_history`'s existing tx-absorption walk (flows fold where shares already fold); the reply gains `index_values` + `twrr_pct`. The rebase-to-100 + multi-dataset machinery built here is exactly what #7 (Benchmark Line) needs — doing this first makes #7 mostly plumbing.
 
 **Files:** `app.py` (history route + pure helper), `static/js/common.js` (chart factory toggle), `static/js/main.js`, `templates/index.html`
 **Depends on:** Nothing
@@ -896,7 +895,7 @@ rounded corners) regenerated from `assets/logo/portfoliarr-icon.png` for API
 ## Tier 3 — Nice-to-Have (1–3 days each)
 
 ### 10. PWA Manifest — SCRAPPED (2026-09-12)
-Attempted and reverted (commit `d4cd772`). Chrome only installs PWAs from a trusted-HTTPS secure context — unreachable for a LAN-only app without per-device CA installs or third-party infrastructure (Tailscale/Cloudflare/domain). Full postmortem in `feature.md`; do not re-attempt without first solving the trusted-cert problem.
+Attempted and reverted (commit `d4cd772`). Chrome only installs PWAs from a trusted-HTTPS secure context — unreachable for a LAN-only app without per-device CA installs or third-party infrastructure (Tailscale/Cloudflare/domain). The commit history holds the postmortem; do not re-attempt without first solving the trusted-cert problem.
 
 ---
 

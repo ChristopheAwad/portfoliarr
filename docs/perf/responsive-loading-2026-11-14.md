@@ -91,8 +91,8 @@ beside the production files in `static/fonts/` and `static/vendor/`.
 - Twenty synthetic-only screenshots were visually inspected under
   `docs/perf/screenshots-2026-11-13/`, retaining the audit's start-date label.
   The PR embeds representative evidence before merge.
-- Merge and merged-image publication are recorded in the PR history and the
-  release workflow run linked above.
+- Merge and merged-image publication are recorded in the PR history and
+  [workflow run 43635588548](https://github.com/ChristopheAwad/portfoliarr/actions/runs/43635588548).
 
 The standard CI requirements do not install Playwright. Browser-only checks can
 skip there; their local execution above is required evidence, not a CI claim.
