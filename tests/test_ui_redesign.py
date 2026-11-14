@@ -118,14 +118,12 @@ def test_phone_tray_is_a_plain_overflow_scroll():
 
 def test_dashboard_ships_redesigned_fonts(client):
     """The identity pass lives or dies on the typefaces actually reaching
-    the browser. base.html loads them from Google Fonts' css2 endpoint —
-    the URL must name BOTH families (Instrument+Sans is URL-encoded with
-    a plus, since css2 rejects raw spaces)."""
+    the browser. The shared local stylesheet declares both families."""
     html = client.get("/").get_data(as_text=True)
-    assert "Fraunces" in html, "Fraunces (display face) missing from base.html"
-    assert "Instrument+Sans" in html, (
-        "Instrument Sans (UI face) missing from base.html"
-    )
+    assert 'href="/static/style.css"' in html
+    stylesheet = client.get("/static/style.css").get_data(as_text=True)
+    assert "Fraunces" in stylesheet
+    assert "Instrument Sans" in stylesheet
 
 
 def test_tabbed_pages_ship_well_formed_body_tag(client):
