@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-<!-- The stock detail page (/stock/<symbol>). Everything shared (head, CDN,
+<!-- The stock detail page (/stock/<symbol>). Everything shared (head, assets,
      navbar, search) lives in base.html. This page mirrors the dashboard's
      look — a big header card with the price + change pills, a timeframe
      chart — minus the total-return pill, because a security has no ledger
@@ -389,16 +389,14 @@
 {% endblock %}
 
 {% block head_extra %}
-    <!-- Chart.js from a public CDN. The page script (bottom of <body>)
-         needs the global "Chart" class, so it loads here first. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-    <!-- Annotation plugin — draws the prev-close reference line on 1D
-         charts. Loaded after Chart.js so the global class exists. -->
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+    <!-- Chart.js and its annotation plugin load only on chart pages and
+         run in order before the shared and stock scripts. -->
+    <script defer src="{{ url_for('static', filename='vendor/chart.umd.4.6.1.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='vendor/chartjs-plugin-annotation.3.1.0.min.js') }}"></script>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/stock.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/stock.js') }}"></script>
 {% endblock %}
 
 <!-- Bottom tab bar — the stock page isn't Dashboard or Ledger, so neither

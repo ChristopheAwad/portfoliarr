@@ -1,3 +1,204 @@
+# Performance first pass: responsive charts, startup, and ledger
+
+Status: in progress. Owner approved the reviewed five-item plan on 2026-11-14.
+Roadmap: #64. Base: `origin/main` / HEAD `c784bfd`.
+Branch: `audit-app-performance-loading-times`, an existing linked worktree.
+The name differs from the normal feature/fix pattern. Adopt it without renaming
+or switching the main checkout, which holds unrelated security work.
+
+The owner requested OpenAI Terra Max implementation subagents and confirmed
+`openai/gpt-6.1-terra`, maximum reasoning. Four agents have separate ownership.
+Independent plan review is complete with no remaining blockers or nits after
+fixing chart-state races, recovery semantics, and honest measurement checks.
+
+## Approved scope and ownership
+
+1. Browser agent: `static/js/common.js`, `static/js/main.js`, the chart-ready
+   mark and null-selection response guard in `static/js/stock.js`,
+   `tests/test_loading_performance_behavior.py`,
+   and directly affected chart/portfolio contracts.
+   - Nonanimated period/view/recovery drawing; retain layout-aware frame resize.
+   - Always store the newest previous-close value, but skip unchanged or
+     irrelevant redraws. Preserve donut animation and tooltip appearance.
+   - Share pending history reads by scope, period, and benchmarks. Invalidation
+     prevents joining old scope/revision reads; identity-safe cleanup preserves
+     replacement requests and current stale-response guards.
+   - Commit datasets, last reply, current period, selected button, and readout
+     together inside the accepted draw frame. A superseded frame commits none.
+     Check data at draw completion and again at the next frame opportunity.
+     Never claim physical display timing. Valid empty replies complete their
+     draw but do not emit finite-series-ready metrics.
+   - Start eight distinct parallel preloads for the other periods after the
+     first successful current-scope visible draw, including a later selection
+     or retry when the default fails. The full period set includes 5D.
+   - Reuse number formatters without changing formatting/exception semantics.
+   - Share equivalent initial/recovery portfolio-list reads; post-write
+     Preferences reads must be fresh. On failed initial null-to-valid recovery,
+     emit one `portfoliochange` with `{id, previous: null}` and the normal
+     `portfoliolistchange`; use the existing four page consumers. Normal initial
+     success emits no extra scope event. Empty lists show an explicit no-
+     portfolios state with Retry. Preserve 401/login behavior.
+2. Ledger agent: `static/js/ledger.js`, `tests/test_ledger_lazy_behavior.py`,
+   and directly affected ledger/group/privacy/quick-sell contracts.
+   - Build only expanded groups' details, insert on expansion, remove on
+     collapse, and preserve ordering, actions, masks, column order, and expanded
+     selection across refreshes. Use summary rows for failed-poll preservation
+     and restore open caret state after a rebuild.
+   - Lazy caches follow latest request, currency, and portfolio. Old replies
+     cannot restore stale rows; expansion waits for matching currency data.
+   - Closed Sales always updates its header total, builds details only when
+     open, and clears cached rows/header/classes on failure or portfolio reset.
+3. Assets agent: `templates/base.html`, `templates/_auth_head.html`, all four
+   page templates, `static/style.css`, new `static/vendor/` and `static/fonts/`,
+   `scripts/measure_perf.py`, asset/harness tests and fixture source records.
+   - Copy pinned Chart.js 4.6.1 and annotation 3.1.0 with MIT licenses and hashes
+     into production static paths. Keep chart libraries page-specific.
+   - Serve matching Fraunces v38 normal variable weight 400-700 / opsz 9-144
+     subsets vietnamese/latin-ext/latin, and Instrument Sans v4 normal variable
+     weight 400-700 / width 100% subsets latin-ext/latin. Preserve exact unicode
+     ranges, `font-display: swap`, fallback stacks and typography. Record all
+     upstream URLs, hashes, and the two pinned SIL OFL licenses.
+   - Theme bootstrap precedes stylesheets. Apply ordered defer to Chart/plugin,
+     perf/common, and page scripts on all authenticated pages together.
+   - Shared hidden status IDs: `portfolio-load-status`, `portfolio-load-message`,
+     and native keyboard-accessible `portfolio-load-retry` button. Browser agent
+     owns state/wiring; assets agent owns markup/styles.
+   - Harness serves actual production asset paths, separates missing-chart and
+     empty-success cases, and requires real finite-data draw readiness for its
+     seeded success runs. Wrap Playwright route callbacks explicitly so a
+     Request cannot bind to the `missing_chart` argument.
+4. Volume agent: `market_data.py`, `tests/test_volume_leaders.py`.
+   - One composite owner Future under the existing lock; wait/provider work
+     outside it. Preserve 33 candidates, eight workers, five-minute TTL,
+     partial/total-failure behavior, output and same-sector tie behavior.
+   - Independent return copies; complete every waiter on error; identity-check
+     cache publication and cleanup after clearing/replacement. Old owners can
+     finish old waiters but cannot overwrite the replacement cache.
+5. Lead: integration, handoff/roadmap, checkpoints, required verification,
+   performance evidence, GUI screenshots, PR/review, merge and image publication.
+
+Preserve existing market tabs, financial calculations, ownership, storage and
+all eight parallel period preloads. Provider budgets/deadlines/thread changes,
+metadata caching, payload/import changes and Android work are later audit work.
+No schema, route, dependency upgrade, plugin removal or visual redesign.
+
+## Tests and acceptance
+
+Write failing behavior tests first. Cover same-key/different-key pending reads,
+failed/replaced requests, invalidation, a successful 1M reply superseded before
+its frame by pending/failed 3M, empty versus failed drawing, 5D failure then 1D
+success and correct eight other preloads, newest prev-close after switching
+5D to 1D, formatter parity, initial success without duplicate boot, retry and
+empty-list recovery on all four pages, and forced post-write list freshness.
+
+Ledger tests cover zero collapsed details, multiple expanded groups, repeated
+expansion, polling, sort/column/privacy/currency changes, stale success/failure
+ordering, punctuation tickers, edit/delete/group delete/quick sell, zero/closed/
+short/unquoted positions, latest/empty/degraded/failed Closed Sales and keyboard
+toggle. Volume tests use bounded synchronization for cold/expired sharing,
+success/partial/total/unexpected failure, defensive copies, TTL boundary,
+cache-clear old-before/new-before completion, metrics and unrelated quote work.
+
+Use the main checkout venv. Lead runs the full suite once after integration:
+
+```bash
+/home/Chris/Documents/code/portfoliarr/.venv/bin/python -c 'import pathlib,tempfile,db,pytest; db.DB_PATH=pathlib.Path(tempfile.mkdtemp(dir="/tmp/opencode"))/"tests.db"; raise SystemExit(pytest.main(["-q"]))'
+```
+
+Agents run affected files only, with DB_PATH redirected before app import. New
+shared-JS tests execute Node; ledger tests use installed system Playwright and
+Chromium. Both must execute locally. CI browser skips are reported explicitly.
+No package/venv/browser installs. Run `node --check` on changed JS. There is no
+configured frontend build/lint/type command. Docker is unavailable locally;
+the existing merged-main workflow builds, smoke-tests and publishes the image.
+
+Standard all-screen comparison, 1,002 verified rows across ten tickers:
+
+```bash
+/usr/bin/python3 scripts/measure_perf.py --python /home/Chris/Documents/code/portfoliarr/.venv/bin/python --stub-ms 150 --runs 2 --settle 0.3 --ledger-rows 1000 --offline-assets --out /tmp/opencode/portfoliarr-audit-20261113/after-desktop
+```
+
+Focused exact-fixture acceptance:
+
+```bash
+/usr/bin/python3 /tmp/opencode/portfoliarr-audit-20261113/verify_first_pass.py --out /tmp/opencode/portfoliarr-audit-20261113/after-focused.json
+```
+
+The focused script uses a disposable inherited-socket server, real setup/session,
+then verified direct synthetic inserts only in its own DB. Fixtures are exactly
+1,000 and 5,000 CAD BUY rows across eight `.TO` groups, and 1,000 mixed BUY/SELL
+rows across 200 groups with 200 sales. Check 390x844 at normal and 4x CPU. Time
+real qty/value/ticker sorts synchronously and report next-frame opportunities
+separately. Assert zero collapsed transaction/sale details after load/sorts,
+exact expanded counts and zero after closing. Target all 5,000-row/eight-group
+sort samples below 100 ms at 4x CPU. The many-group stress case has no invented
+100 ms requirement. Target cached 1Y draw below 100 ms at normal CPU, matching
+its successful preload data at afterRender, with selected button on the next
+frame and zero new history requests. Baseline mode allows only explicitly known
+legacy count/timing failures; incomplete/error runs always remain failed.
+
+Also verify two cold Volume consumers perform 33 provider reads, pending-period
+selection sends one HTTP read, initial 503 recovers without reload, and blocked
+external hosts do not stop local fonts/chart/app. Final GUI covers all four
+screens/auth forms, relevant actions/errors, themes, phone/desktop, keyboard/
+focus, screenshots, failed requests and server logs. Delayed-font checks observe
+API/fallback text while bytes are held, without waiting for the load event.
+
+## Gates, release and current evidence
+
+- Plan review: pass, independent Terra Max reviewer, no outstanding findings.
+- Implementation and focused checks: pass. Four agents wrote failing tests
+  before their fixes; all changes are integrated through `523707c`.
+- Full suite: **1614 passed in 114.97 s**, lead-run on the combined code in an
+  isolated network namespace with loopback enabled and a disposable DB.
+  No local browser/Node skips. JavaScript syntax and `git diff --check` pass.
+- Focused performance acceptance: pass, all 52 checks. Exactly 5,000 rows/eight
+  groups at 4x CPU sorted in 9.2-15.4 ms versus 1786.8-2095.0 ms before.
+  Collapsed descendants fell 115,200 -> 200; expanded/collapsed row counts and
+  mixed-sale fixture checks pass. Cached 1Y drawing completed in 21.6 ms versus
+  about 1046 ms before, matching its preload data with zero new history reads.
+- Standard offline harness: both desktop 1280x800 and phone 390x844, two visits
+  per screen, all four screens with 1,002 verified synthetic rows. No page or
+  console errors and zero external browser requests. Both real charts render;
+  Ledger/Preferences load no Chart library. Stub timings are not live Yahoo
+  latency or cache measurements.
+- Lead cache probe: eight identical history reads plus a warm read still make
+  one provider call; two cold Volume reads now make 33 info reads, versus 66
+  before, and the following warm read adds none.
+- Final GUI/PR review/merge: pending. Required final GUI is scheduled after
+  code review and will inspect screenshots, action outcomes and logs.
+- PR workflow: none configured for these changes; absence is not a passing run.
+- Docker publish: required merged-main workflow, pending. Watch with
+  `gh run watch <id> --exit-status`, verify merged-SHA and latest publication,
+  then promptly provide `docker compose pull && docker compose up -d` steps.
+- Medium risk: async display ordering, lazy action rows, and asset delivery.
+  Revert the eventual squash commit through normal PR checks if those regress.
+  No migration/data restore is needed; a revert does not undo saved trades.
+- Before merge fetch and integrate changed upstream, check final committed/pushed
+  head and required gates. Preserve the active worktree branch; record its
+  shipped squash SHA here rather than deleting it from under this session.
+- Full reviewed plan, audit, exact-font URLs, baseline reports, measurement
+  scripts and review notes are under
+  `/tmp/opencode/portfoliarr-audit-20261113/` on this host.
+
+Integration boundary fixes stay within scoped recovery: a loaded selection that
+becomes empty emits one null `portfoliochange`, clears old Dashboard/Ledger/Stock
+content, and suppresses null-scope chart requests. Late Stock position responses
+are epoch-guarded. Ledger boot also handles an empty/failed list that settled
+before its deferred script subscribed. These regressions were reproduced first
+and checked in Node/Chromium; no position calculations or API behavior changed.
+
+Checked code: `523707c3b5a7cb41ebb4ebd3de4837937bf9cbcb`. The subsequent
+documentation-only evidence checkpoint will be consistency-checked. PR URL and
+reviewed base/head SHAs will be added after creation/review.
+
+---
+
+## Historical shipped handoffs
+
+The sections below predate #64. Git history confirms #106 and #107-#109 shipped;
+their old pending-status prose is historical, not active work.
+
 # Performance release 2: slower loading and duplicate work
 
 Status: shipped 2026-11-10 (PR #106). Approved by the user 2026-11-10 after an independent

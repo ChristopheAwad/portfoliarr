@@ -65,12 +65,13 @@ function setMarketPanelValues(panel, text) {
 // below 1 in absolute terms (JPY/CAD ≈ 0.009) needs four decimals to be
 // readable; everything else keeps two. Deliberately NOT formatPrice — that
 // shared helper stays two-decimal for portfolio/ledger/stock money.
+const marketLevelFormatters = {
+    2: new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    4: new Intl.NumberFormat("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
+};
 function formatMarketLevel(value) {
     const digits = Math.abs(value) < 1 ? 4 : 2;
-    return new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-    }).format(value);
+    return marketLevelFormatters[digits].format(value);
 }
 
 // One text node with a className, built through createElement + textContent
@@ -932,6 +933,20 @@ const comparePicker = setupComparePicker({
     },
 });
 
+const ALL_PERIODS = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+let chartPreloadsStarted = false;
+
+function portfolioChartPainted({ period, hasData }) {
+    if (hasData) perfMark("dashboard:chart");
+    if (chartPreloadsStarted) return;
+    chartPreloadsStarted = true;
+    // Keep all eight reads parallel, including 5D if another period was the
+    // first to draw after an initial failure or a quick user selection.
+    for (const other of ALL_PERIODS) {
+        if (other !== period) refreshPortfolioChart(other, { silent: true });
+    }
+}
+
 const portfolioChartHandle = setupTimeframeChart({
     canvas: portfolioCanvas,
     buttonBar: chartButtonsEl,
@@ -944,6 +959,7 @@ const portfolioChartHandle = setupTimeframeChart({
     comparisonPrimaryLabel: "Portfolio",
     // The chart card's period return readout — the selected timeframe's TWR.
     onPeriodSummary: paintPeriodReturn,
+    onPaintComplete: portfolioChartPainted,
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",
@@ -956,10 +972,8 @@ const portfolioChartHandle = setupTimeframeChart({
 // nothing else needs it — button clicks are wired inside the factory.
 function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD, opts) {
     // If Chart.js never loaded, the handle is null — nothing to paint.
-    // Return the promise so callers can chain .then() (used by the
-    // pre-fetch loop below to wait for the default chart before firing
-    // off the remaining timeframes). opts forwards {silent: true} for
-    // pre-fetches that should warm the cache without repainting.
+    // Return the draw-completion promise. opts forwards {silent: true}
+    // for preloads that should warm the cache without repainting.
     if (portfolioChartHandle) return portfolioChartHandle.refresh(period, opts);
 }
 
@@ -1716,21 +1730,8 @@ if (portfolioMasked()) {
 // again only when a timeframe button is clicked — unlike the quote-driven
 // sections, price history doesn't change on a 60s cadence, so it would be
 // wasteful (and Yahoo rate-limit-hammering) to poll it too.
-const chartReady = portfolioReady.then(() => refreshPortfolioChart());
-
-// Pre-fetch all other timeframes in the background so switching is instant.
-// Fire-and-forget — no UI feedback needed. The frontend cache stores each
-// response for its TTL (120s live, 600s settled), so by the time the user
-// clicks a button, the data is already there. All 8 fire in parallel, and
-// they start only AFTER the default 5D chart has rendered — avoids
-// hammering Yahoo before the user sees their chart. Optional chain guards
-// against Chart.js CDN failure (refreshPortfolioChart returns undefined).
-const ALL_PERIODS = ["1D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
-chartReady?.then?.(() => {
-    perfMark("dashboard:chart");
-    for (const period of ALL_PERIODS) {
-        refreshPortfolioChart(period, { silent: true });
-    }
+portfolioReady.then(() => {
+    if (currentPortfolioId()) refreshPortfolioChart();
 });
 
 // 2. Poll. ONE timer drives all quote-driven cycles: the ACTIVE market
@@ -1755,6 +1756,7 @@ setupAutoRefresh(() => {
 });
 
 document.addEventListener("portfoliochange", () => {
+    const hasPortfolio = !!currentPortfolioId();
     // A masked header keeps a snapshot for instant unmask. It belongs to the
     // old portfolio and must never be restored under the new name.
     lastPortfolioPaint = null;
@@ -1766,10 +1768,10 @@ document.addEventListener("portfoliochange", () => {
     lastSummaryReady = false;
     lastSummaryFailed = false;
     lastAllocPayload = null;
-    setPortfolioUnavailable("Loading portfolio...");
+    setPortfolioUnavailable(hasPortfolio ? "Loading portfolio..." : "No portfolios available.");
     updateAllocExcluded([]);
     updateAllocUnclassified([]);
-    setAllocState("loading");
+    setAllocState(hasPortfolio ? "loading" : "unavailable");
     if (portfolioChartHandle) {
         // invalidate() bumps the scope and clears the canvas; reload()
         // refetches the CURRENTLY selected timeframe under the new scope
@@ -1777,8 +1779,9 @@ document.addEventListener("portfoliochange", () => {
         // be served). Using the boot default here would silently reset the
         // user's chosen period on every portfolio switch.
         portfolioChartHandle.invalidate();
-        portfolioChartHandle.reload();
+        if (hasPortfolio) portfolioChartHandle.reload();
     }
+    if (!hasPortfolio) return;
     refreshPortfolioSummary();
     const view = ALLOCATION_VIEWS[allocViewIndex];
     if (view.key !== null) fetchAllocDimension(view.key);

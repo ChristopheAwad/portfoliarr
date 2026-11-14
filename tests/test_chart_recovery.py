@@ -37,10 +37,12 @@ def test_successful_chart_paint_remeasures_on_a_layout_frame():
     helper_at = text.find("function resizeAndUpdateChart")
     helper_end = text.find("\n    }", helper_at)
     helper = text[helper_at:helper_end]
-    assert "requestAnimationFrame" in helper
     assert "chart.resize()" in helper
-    assert "chart.update()" in helper
+    assert 'chart.update("none")' in helper
     assert "resizeAndUpdateChart();" in text[text.find("function paint"):]
+    schedule_at = text.index("function schedulePaint(")
+    schedule_end = text.index("// Reconcile the chart", schedule_at)
+    assert "requestAnimationFrame" in text[schedule_at:schedule_end]
 
 
 def test_chart_retries_active_period_on_reconnect_and_foreground():

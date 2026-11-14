@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-<!-- The ledger page. Everything shared (head, CDN, navbar, search) lives
+<!-- The ledger page. Everything shared (head, assets, navbar, search) lives
      in base.html; only this page's own layout is here. The script include
      sits in the `scripts` block, which base.html renders AFTER common.js —
      the shared helpers must exist before this page's code runs.
@@ -296,13 +296,10 @@
                         </tr>
                     </thead>
                     <tbody id="ledger-body">
-                        <!-- ledger.js fills this: one <tr
-                             class="ledger-group"> per ticker (collapsed
-                             summary — click to expand) followed by that
-                             ticker's hidden <tr class="ledger-row
-                             tx-detail"> transaction rows, each with
-                             edit/delete buttons, or a single empty-state
-                             row. -->
+                        <!-- ledger.js fills one collapsed summary row per
+                             ticker, or a single empty-state row. Expanding a
+                             ticker creates its transaction detail rows and
+                             their edit/delete buttons. -->
                     </tbody>
                 </table>
                 </div>
@@ -389,7 +386,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/ledger.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/ledger.js') }}"></script>
 {% endblock %}
 
 {% block bottom_tabs %}
