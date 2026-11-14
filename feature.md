@@ -184,6 +184,14 @@ API/fallback text while bytes are held, without waiting for the load event.
 - Post-fix cached-chart acceptance: pass, 13.3 ms with matching 1Y data and zero
   additional history reads. The unchanged lazy-ledger/provider measurements
   above remain valid. Raw result: `after-review-chart.json` in the audit folder.
+- Targeted follow-up found a remaining related case on `0fe7886`: requested
+  Performance still waited while a newer timeframe stayed pending. Report:
+  PR comment `issuecomment-6883125858`. Fixed in `877175a` with failing tests
+  first for pending requests, before-first-draw and scope invalidation.
+  **150 affected tests passed in 8.59 s**, including real Chromium/Chart.js,
+  newer accepted paints and old-scope rejection. Final cached 1Y draw repeated
+  at 12.9 ms with no additional HTTP reads. Raw result:
+  `after-review-chart-final.json`. Final structured follow-up review pending.
 - Final GUI/merge: pending. Required final GUI is scheduled after code review
   passes and will inspect screenshots, action outcomes and logs.
 - PR workflow: none configured for these changes; absence is not a passing run.
@@ -212,6 +220,7 @@ documentation-only evidence checkpoint and license whitespace normalization
 passed consistency/hash checks. The four review fixes are not covered by this
 checked full-suite code. Their affected-check code is
 `391721b`; the reviewed follow-up head will be recorded after verification.
+The remaining mode scheduling checks cover runtime commit `877175a`.
 
 Review-fix affected command, with a redirected disposable database:
 
@@ -220,6 +229,12 @@ Review-fix affected command, with a redirected disposable database:
 ```
 
 ---
+
+Final pending-mode affected command, with the same disposable DB redirect:
+
+```bash
+/home/Chris/Documents/code/portfoliarr/.venv/bin/python -c 'import pathlib,tempfile,db,pytest; db.DB_PATH=pathlib.Path(tempfile.mkdtemp(dir="/tmp/opencode"))/"tests.db"; raise SystemExit(pytest.main(["-q","--tb=short","tests/test_loading_performance_behavior.py","tests/test_chart_refresh.py","tests/test_chart_recovery.py","tests/test_chart_tooltip.py","tests/test_period_return_ui.py","tests/test_stock_period_return.py","tests/test_compare_ui.py","tests/test_compare_reconcile_behavior.py"]))'
+```
 
 ## Historical shipped handoffs
 
