@@ -728,6 +728,31 @@ gate passes.
 
 ---
 
+### 64. Responsive Charts, Startup, and Lazy Ledger
+Apply the first five fixes from the full-app performance audit. Draw cached
+chart changes without the default one-second animation, share pending browser
+history reads, and gate the eight other parallel period preloads on a successful
+visible draw. Serve pinned chart libraries and the current fonts locally with
+an ordered deferred script chain. Build transaction and Closed Sales detail
+rows only when expanded, reuse number formatters, share a pending Volume Leaders
+scan, and recover from a failed initial portfolio-list request. Preserve all
+financial calculations, chart/tooltip design, market tabs and Volume Leaders
+semantics. The reviewed implementation plan and acceptance checks are in
+`feature.md`.
+
+**Tier:** 2
+**Effort:** 4-6 days
+**Files:** `static/js/common.js`, `static/js/main.js`, `static/js/ledger.js`,
+`static/js/stock.js`, `static/style.css`, `templates/base.html`,
+`templates/_auth_head.html`, `templates/index.html`, `templates/stock.html`,
+`templates/ledger.html`, `templates/preferences.html`, `static/vendor/`,
+`static/fonts/`, `market_data.py`, `scripts/measure_perf.py`, related tests,
+`docs/perf/`, `feature.md`
+**Depends on:** #61 instrumentation and #63 history sharing/measurement harness
+**Status:** in progress
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout
@@ -966,7 +991,9 @@ Tier 2 (all independent of each other):
   51. Android Home-Screen Widget ───────┤
   59. Android Watchlist Widget (#51) ───┤
   61. Performance Measurement ──────────┤
-  62. Fund Allocation Look-through ─────┘
+  62. Fund Allocation Look-through ─────┤
+  63. Loading/Duplicate Work (#61) ──────┤
+  64. Responsive Charts/Startup/Ledger ──┘── depends on #61 and #63 (shipped)
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -1045,6 +1072,8 @@ For maximum compounding value:
 51. **Android Home-Screen Widget** → the portfolio total on the launcher
 59. **Android Watchlist Widget** → the watchlist's prices and day changes on the launcher (#51's scoped-token pattern, one level wider)
 61. **Performance Measurement** → numbers for route, Yahoo, cache, and browser timing so the next optimization is proven, not guessed
+63. **Loading Performance and Duplicate Work** → shared history work and trustworthy measurements (shipped)
+64. **Responsive Charts, Startup, and Lazy Ledger** → the approved first audit pass, built on #61 and #63
 47. **Database Backup and Restore** → a copy of the whole ledger you can put back
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance
