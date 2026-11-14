@@ -737,8 +737,8 @@ an ordered deferred script chain. Build transaction and Closed Sales detail
 rows only when expanded, reuse number formatters, share a pending Volume Leaders
 scan, and recover from a failed initial portfolio-list request. Preserve all
 financial calculations, chart/tooltip design, market tabs and Volume Leaders
-semantics. The reviewed implementation plan and acceptance checks are in
-`feature.md`.
+semantics. The reviewed measurements and acceptance checks are in
+`docs/perf/responsive-loading-2026-11-14.md`.
 
 **Tier:** 2
 **Effort:** 4-6 days
@@ -747,7 +747,7 @@ semantics. The reviewed implementation plan and acceptance checks are in
 `templates/_auth_head.html`, `templates/index.html`, `templates/stock.html`,
 `templates/ledger.html`, `templates/preferences.html`, `static/vendor/`,
 `static/fonts/`, `market_data.py`, `scripts/measure_perf.py`, related tests,
-`docs/perf/`, `feature.md`
+`docs/perf/`
 **Depends on:** #61 instrumentation and #63 history sharing/measurement harness
 **Status:** shipped 2026-11-14 (PR #110)
 

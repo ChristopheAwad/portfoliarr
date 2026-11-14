@@ -91,7 +91,8 @@ beside the production files in `static/fonts/` and `static/vendor/`.
 - Twenty synthetic-only screenshots were visually inspected under
   `docs/perf/screenshots-2026-11-13/`, retaining the audit's start-date label.
   The PR embeds representative evidence before merge.
-- Merge and merged-image publication are recorded in `feature.md` and the PR.
+- Merge and merged-image publication are recorded in the PR history and the
+  release workflow run linked above.
 
 The standard CI requirements do not install Playwright. Browser-only checks can
 skip there; their local execution above is required evidence, not a CI claim.
@@ -116,7 +117,9 @@ The lead's temporary driver creates and verifies its own disposable rows and
 uses CDP CPU throttling. `--baseline` records only known pre-fix failures;
 unexpected failures still fail the process. The standard import harness's
 `--ledger-rows 5000` creates 5,002 rows/10 tickers and must not be substituted
-for this exact eight-group fixture. The approved procedure is in `feature.md`.
+for this exact eight-group fixture. The approved eight-group/4x procedure is
+summarised in the `## Interaction results` and `## Automated verification`
+sections above and in the merged PR description.
 
 Raw reports and scripts on the audit host are under
 `/tmp/opencode/portfoliarr-audit-20261113/`, including `before-focused.json`,
