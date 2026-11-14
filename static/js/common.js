@@ -2709,11 +2709,7 @@ function setupTimeframeChart(
                 // The initial queued draw can be superseded before any data
                 // reaches the canvas. Keep the chosen view usable for retry.
                 if (requestedMode !== mode) {
-                    mode = requestedMode;
-                    if (modeBar) {
-                        modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
-                            b.classList.toggle("active", b.dataset.chartMode === mode));
-                    }
+                    applyRequestedMode();
                 }
             } else {
                 failedComparisonSymbols = [...((getBenchmarks && getBenchmarks()) || [])];
@@ -2740,24 +2736,38 @@ function setupTimeframeChart(
     // Keep every visible state change inside the accepted draw frame. The
     // second frame is the browser's next paint opportunity, not evidence
     // that pixels have physically appeared on a display.
+    function applyRequestedMode() {
+        mode = requestedMode;
+        if (modeBar) {
+            modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
+                b.classList.toggle("active", b.dataset.chartMode === mode));
+        }
+    }
+
     function schedulePaint(data, period, isCurrent, { reuseReply = false } = {}) {
-        const ticket = { isCurrent, generation: ++paintGeneration };
+        const ticket = { isCurrent, generation: ++paintGeneration,
+            scope: getScope(), scopeGeneration };
         pendingPaint = ticket;
         return new Promise((resolve, reject) => {
             requestAnimationFrame(() => {
                 if (pendingPaint !== ticket || !isCurrent()) {
-                    if (pendingPaint === ticket) pendingPaint = null;
+                    if (pendingPaint === ticket) {
+                        pendingPaint = null;
+                        // A newer timeframe may still be waiting on the
+                        // network. Do not make a view toggle wait for it.
+                        if (ticket.scopeGeneration === scopeGeneration &&
+                            ticket.scope === getScope() && requestedMode !== mode) {
+                            if (lastReply) repaintRequestedMode();
+                            else applyRequestedMode();
+                        }
+                    }
                     resolve(null);
                     return;
                 }
                 pendingPaint = null;
                 try {
                     if (!reuseReply) failedComparisonSymbols = null;
-                    mode = requestedMode;
-                    if (modeBar) {
-                        modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
-                            b.classList.toggle("active", b.dataset.chartMode === mode));
-                    }
+                    applyRequestedMode();
                     paint(data, period);
                     syncTimeframeButtons(period);
                     const drawable = () => {
@@ -3105,9 +3115,7 @@ function setupTimeframeChart(
             // Nothing fetched yet (first load failed) → just the buttons
             // are switched; the next successful refresh paints the view.
             if (!lastReply && !pendingPaint) {
-                mode = requestedMode;
-                modeBar.querySelectorAll("[data-chart-mode]").forEach((b) =>
-                    b.classList.toggle("active", b.dataset.chartMode === mode));
+                applyRequestedMode();
             } else if (!pendingPaint || !pendingPaint.isCurrent()) {
                 repaintRequestedMode();
             }
@@ -3128,6 +3136,9 @@ function setupTimeframeChart(
             clearMeasurement();
             chart.data.labels = [];
             chart.data.datasets.forEach((dataset) => { dataset.data = []; });
+            // With no old data left to show, keep the selected view in sync
+            // while the new portfolio's history is still pending.
+            applyRequestedMode();
             chart.update("none");
             if (comparisonReadout) comparisonReadout.replaceChildren();
             emitPeriodSummary(requestedPeriod, null);

@@ -309,6 +309,90 @@ def test_chart_behavior(case):
     run_node(CHART_HARNESS, case)
 
 
+def test_pending_new_timeframe_does_not_block_requested_mode():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            await initial();
+            handle.refresh('1M'); await succeed(1, data(200, 220));
+            modeBar.handlers.click({target:modes[1]});
+            handle.refresh('3M');
+            await frame(); await frame();
+            assert.equal(requests.length, 3, 'the new timeframe is still pending');
+            assert.equal(selected(), '5D');
+            assert.equal(modes[1].classList.contains('active'), true);
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+            assert.equal(summaries.at(-1).period, '5D');
+            modeBar.handlers.click({target:modes[1]});
+            await frame();
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+            await succeed(2, data(300, 330)); await frame(); await frame();
+            assert.equal(selected(), '3M');
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_pending_new_timeframe_keeps_requested_mode_before_first_draw():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            handle.refresh('5D'); await succeed(0, data(100, 110));
+            modeBar.handlers.click({target:modes[1]});
+            handle.refresh('1M');
+            await frame(); await frame();
+            assert.equal(requests.length, 2, 'the new timeframe is still pending');
+            assert.equal(modes[1].classList.contains('active'), true);
+            assert.deepEqual(handle.chart.data.datasets[0].data, []);
+            assert.equal(marks.includes('chart:paint'), false);
+            await succeed(1, data(200, 220)); await frame(); await frame();
+            assert.equal(selected(), '1M');
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_scope_invalidation_keeps_requested_mode_without_old_data():
+    run_node(CHART_HARNESS, r"""
+        (async () => {
+            await initial();
+            handle.refresh('1M'); await succeed(1, data(200, 220));
+            modeBar.handlers.click({target:modes[1]});
+            scope = 2; handle.invalidate();
+            handle.refresh('3M');
+            await frame(); await frame();
+            assert.equal(modes[1].classList.contains('active'), true);
+            assert.deepEqual(handle.chart.data.datasets[0].data, []);
+            await succeed(2, data(300, 330)); await frame(); await frame();
+            assert.equal(selected(), '3M');
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+@pytest.mark.parametrize("after_fallback", [False, True], ids=["before-fallback", "after-fallback"])
+def test_mode_fallback_never_supersedes_newer_draw_or_repaints_old_scope(after_fallback):
+    run_node(CHART_HARNESS, f"const afterFallback = {str(after_fallback).lower()};\n" + r"""
+        (async () => {
+            await initial();
+            handle.refresh('1M'); await succeed(1, data(200, 220));
+            modeBar.handlers.click({target:modes[1]});
+            handle.refresh('3M');
+            if (afterFallback) await frame();
+            await succeed(2, data(300, 330));
+            await frame(); await frame();
+            assert.equal(selected(), '3M');
+            assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+
+            modeBar.handlers.click({target:modes[0]}); await frame(); await frame();
+            handle.refresh('6M'); await succeed(3, data(400, 440));
+            modeBar.handlers.click({target:modes[1]});
+            const updates = handle.chart.updates.length;
+            scope = 2; await frame(); await frame();
+            assert.equal(handle.chart.updates.length, updates, 'a changed scope must not repaint old data');
+            assert.deepEqual(handle.chart.data.datasets[0].data, [300, 330]);
+        })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
 @pytest.mark.parametrize("failure_before_frame", [True, False], ids=["fast", "after-frame"])
 def test_failed_new_timeframe_keeps_requested_mode_on_last_valid_data(failure_before_frame):
     run_node(CHART_HARNESS, f"const fastFailure = {str(failure_before_frame).lower()};\n" + r"""
@@ -887,6 +971,52 @@ with tempfile.TemporaryDirectory(prefix='portfolio-recovery-') as tmp:
                     {'id':None,'previous':old_id}, {'id':old_id,'previous':None}]
                 assert not errors, (path, errors)
                 if path == '/':
+                    # A slow newer timeframe must not block the actual
+                    # Chart.js Performance view of the last valid reply.
+                    pending_mode = normal.evaluate('''async () => {
+                        const oldRAF = window.requestAnimationFrame, oldFetch = window.fetch;
+                        const oldNow = Date.now, frames = [], requests = [];
+                        const chart = Chart.getChart(document.getElementById('portfolioChart'));
+                        const originalLabels = chart.data.labels.length;
+                        window.requestAnimationFrame = callback => {frames.push(callback); return frames.length;};
+                        window.fetch = (url, ...args) => String(url).startsWith('/api/portfolio/history')
+                            ? new Promise(resolve => requests.push({url, resolve})) : oldFetch(url, ...args);
+                        Date.now = () => oldNow() + 700000;
+                        const flush = async () => {for (let i = 0; i < 25; i++) await Promise.resolve();};
+                        const frame = async () => {
+                            frames.splice(0).forEach(callback => callback(performance.now()));
+                            await flush();
+                        };
+                        try {
+                            portfolioChartHandle.refresh('1M'); await flush();
+                            if (requests.length !== 1) throw new Error('Expected 1M request');
+                            requests[0].resolve(new Response(JSON.stringify({labels:['2026-01-01','2026-01-02'],
+                                values:[200,220], index_values:[100,105], costs:[200,200], twrr_pct:5}),
+                                {status:200, headers:{'Content-Type':'application/json'}}));
+                            await flush();
+                            document.querySelector('[data-chart-mode="performance"]').click();
+                            portfolioChartHandle.refresh('3M'); await flush();
+                            if (requests.length !== 2) throw new Error('Expected pending 3M request');
+                            await frame(); await frame();
+                            const state = {
+                                performance:document.querySelector('[data-chart-mode="performance"]').classList.contains('active'),
+                                period:document.querySelector('.chart-timeframe-selectors .time-btn.active').textContent.trim(),
+                                label:chart.data.datasets[0].label,
+                                labels:chart.data.labels.length, originalLabels,
+                                first:chart.data.datasets[0].data[0]
+                            };
+                            document.querySelector('[data-chart-mode="value"]').click();
+                            await frame(); await frame();
+                            return state;
+                        } finally {
+                            window.requestAnimationFrame = oldRAF; window.fetch = oldFetch; Date.now = oldNow;
+                        }
+                    }''')
+                    assert pending_mode['performance'] is True, pending_mode
+                    assert pending_mode['period'] == '5D', pending_mode
+                    assert pending_mode['label'] == 'Growth of $100 (TWR)', pending_mode
+                    assert pending_mode['labels'] == pending_mode['originalLabels'], pending_mode
+                    assert pending_mode['first'] == 100, pending_mode
                     # Real Chart.js and the real picker: fail the comparison
                     # before its automatically queued Performance draw.
                     result = normal.evaluate('''async () => {
