@@ -1,6 +1,7 @@
 # Responsive loading verification
 
-Roadmap #64. Baseline code: `c784bfd`. Checked code: `523707c`.
+Roadmap #64. Baseline code: `c784bfd`. Full-suite checked code: `523707c`.
+Review-fix affected-check code: `391721b`.
 
 These measurements use disposable synthetic portfolios and controlled providers
 on the audit host. They do not measure the deployed server, LAN, live Yahoo, or
@@ -11,7 +12,7 @@ separate files. The lead ran the combined verification.
 
 | Check | Before | After |
 |---|---:|---:|
-| Cached 1Y chart render, normal CPU | about 1046 ms | 21.6 ms |
+| Cached 1Y chart render, normal CPU | about 1046 ms | 13.3 ms after review fixes |
 | New history requests for that cached switch | 0 | 0 |
 | 5,000 collapsed transactions, ledger descendants | 115,200 | 200 |
 | Same fixture qty sort, 4x CPU | 1786.8 ms | 15.4 ms |
@@ -62,6 +63,9 @@ beside the production files in `static/fonts/` and `static/vendor/`.
 ## Automated verification
 
 - Full suite: **1614 passed in 114.97 seconds**, no skips on the audit host.
+- After four review-race fixes and related readiness regressions, **221 affected
+  tests passed in 26.78 seconds**. The cached chart acceptance was repeated on
+  those fixes and remained under 100 ms with no additional history requests.
 - The full run used the main checkout venv, a redirected disposable DB and a
   network namespace with loopback only. Browser smoke tests use local assets.
 - New behavior checks run actual JS in Node and actual pages in Chromium.
@@ -100,4 +104,5 @@ for this exact eight-group fixture. The approved procedure is in `feature.md`.
 Raw reports and scripts on the audit host are under
 `/tmp/opencode/portfoliarr-audit-20261113/`, including `before-focused.json`,
 `before-chart-final.json`, `after-focused.json`, `after-cache-probe.json`,
-`after-desktop.{md,json}`, and `after-phone.{md,json}`. All data is synthetic.
+`after-review-chart.json`, `after-desktop.{md,json}`, and `after-phone.{md,json}`.
+All data is synthetic.

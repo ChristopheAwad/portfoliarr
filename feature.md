@@ -165,8 +165,27 @@ API/fallback text while bytes are held, without waiting for the load event.
 - Lead cache probe: eight identical history reads plus a warm read still make
   one provider call; two cold Volume reads now make 33 info reads, versus 66
   before, and the following warm read adds none.
-- Final GUI/PR review/merge: pending. Required final GUI is scheduled after
-  code review and will inspect screenshots, action outcomes and logs.
+- PR: https://github.com/ChristopheAwad/portfoliarr/pull/110
+- First independent PR review: **blocked**, reviewed base
+  `c784bfd144f82b07ad5a61ec4386843604e96765`, head
+  `01622f099eac9ecaeb3ddb0a7c89b607e7a416b6`. Report posted as PR comment
+  `issuecomment-6873274477`. Four confirmed browser races are assigned back to
+  the browser agent with tests first: post-write storage revision joining old
+  recovery, superseded recovery leaving Retry disabled, a discarded chart draw
+  losing the requested mode, and fast comparison failure losing its placeholder.
+  Follow-up review and affected checks are required before merge.
+- Review fixes implemented in `391721b`: all four reported cases were reproduced
+  before their fixes. Added related first-draw mode and newer-startup-read cases.
+  A replacement list can now settle readiness even while the original hangs.
+  **221 affected tests passed in 26.78 s**, including real Chart.js/picker,
+  all-four-page recovery, comparison error/partial/recovery and ledger startup.
+  Syntax/diff checks pass. Full-suite result above predates these narrow fixes;
+  the affected run covers their final code. Follow-up independent review pending.
+- Post-fix cached-chart acceptance: pass, 13.3 ms with matching 1Y data and zero
+  additional history reads. The unchanged lazy-ledger/provider measurements
+  above remain valid. Raw result: `after-review-chart.json` in the audit folder.
+- Final GUI/merge: pending. Required final GUI is scheduled after code review
+  passes and will inspect screenshots, action outcomes and logs.
 - PR workflow: none configured for these changes; absence is not a passing run.
 - Docker publish: required merged-main workflow, pending. Watch with
   `gh run watch <id> --exit-status`, verify merged-SHA and latest publication,
@@ -189,8 +208,16 @@ before its deferred script subscribed. These regressions were reproduced first
 and checked in Node/Chromium; no position calculations or API behavior changed.
 
 Checked code: `523707c3b5a7cb41ebb4ebd3de4837937bf9cbcb`. The subsequent
-documentation-only evidence checkpoint will be consistency-checked. PR URL and
-reviewed base/head SHAs will be added after creation/review.
+documentation-only evidence checkpoint and license whitespace normalization
+passed consistency/hash checks. The four review fixes are not covered by this
+checked full-suite code. Their affected-check code is
+`391721b`; the reviewed follow-up head will be recorded after verification.
+
+Review-fix affected command, with a redirected disposable database:
+
+```bash
+/home/Chris/Documents/code/portfoliarr/.venv/bin/python -c 'import pathlib,tempfile,db,pytest; db.DB_PATH=pathlib.Path(tempfile.mkdtemp(dir="/tmp/opencode"))/"tests.db"; raise SystemExit(pytest.main(["-q","--tb=short","tests/test_loading_performance_behavior.py","tests/test_chart_refresh.py","tests/test_chart_recovery.py","tests/test_chart_tooltip.py","tests/test_period_return_ui.py","tests/test_stock_period_return.py","tests/test_compare_ui.py","tests/test_compare_reconcile_behavior.py","tests/test_portfolios_ui.py","tests/test_portfolios.py","tests/test_web_refresh_wiring.py","tests/test_stock_position.py","tests/test_allocation_behavior.py","tests/test_ledger_lazy_behavior.py"]))'
+```
 
 ---
 
