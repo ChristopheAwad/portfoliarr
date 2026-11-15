@@ -2175,6 +2175,14 @@ function setupTimeframeChart(
             // otherwise Chart.js locks in its own width:height ratio.
             responsive: true,
             maintainAspectRatio: false,
+            // Chart.js's default draw is a 1 s sweep. A 500 ms sweep still
+            // reads as motion on first load and timeframe/view changes
+            // without making the chart feel slow. Reduced-motion users get
+            // no animation at all. The typeof guard keeps the factory safe
+            // in test runtimes that provide a minimal `window`.
+            animation: typeof window.matchMedia === "function"
+                && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? false : { duration: 500 },
             // A tick label is centered on its tick. The newest year sits
             // almost at the plot's right edge on MAX, so half a 4-digit
             // label would paint past the canvas on a phone. This padding
@@ -2731,8 +2739,10 @@ function setupTimeframeChart(
     function resizeAndUpdateChart() {
         // A restored mobile tab can report stale or zero geometry until its
         // first layout frame. schedulePaint calls this on that frame.
+        // A plain update() runs the short draw animation, so the first
+        // paint and timeframe/view changes sweep in instead of snapping.
         chart.resize();
-        chart.update("none");
+        chart.update();
     }
 
     // Keep every visible state change inside the accepted draw frame. The
