@@ -38,7 +38,8 @@ def test_successful_chart_paint_remeasures_on_a_layout_frame():
     helper_end = text.find("\n    }", helper_at)
     helper = text[helper_at:helper_end]
     assert "chart.resize()" in helper
-    assert 'chart.update("none")' in helper
+    assert "chart.update()" in helper
+    assert 'chart.update("none")' not in helper
     assert "resizeAndUpdateChart();" in text[text.find("function paint"):]
     schedule_at = text.index("function schedulePaint(")
     schedule_end = text.index("// Reconcile the chart", schedule_at)
@@ -64,3 +65,14 @@ def test_chart_box_releases_width_and_canvas_fills_it():
     assert "width: 100% !important" in canvas
     assert "height: 100% !important" in canvas
     assert "display: block" in canvas
+
+
+def test_chart_draw_animation_is_short_and_reduced_motion_aware():
+    """The draw sweep is 500 ms, not Chart.js's 1 s default, and off for
+    people who ask for reduced motion."""
+    text = common_js()
+    animation_at = text.find("animation: typeof window.matchMedia")
+    assert animation_at != -1
+    block = text[animation_at:text.find("duration: 500", animation_at)]
+    assert "prefers-reduced-motion: reduce" in block
+    assert "? false : { duration: 500 }" in text

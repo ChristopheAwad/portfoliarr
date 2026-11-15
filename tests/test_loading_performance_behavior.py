@@ -110,7 +110,8 @@ class FakeChart {
     update(mode) {
         const scale = {id: 'y', min: 100, max: 200};
         this.plugins.find(p => p.id === 'prevCloseLine').afterDataLimits(this, {scale});
-        this.updates.push({mode, min: scale.min, values: [...this.data.datasets[0].data]});
+        this.updates.push({mode: mode ?? 'default', min: scale.min,
+            values: [...this.data.datasets[0].data]});
     }
     draw() {}
     setActiveElements() {}
@@ -152,7 +153,8 @@ async function initial(value = data(100, 110)) {
         await frame();
         assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
         assert.equal(handle.chart.resizes, 1);
-        assert.equal(handle.chart.updates.at(-1).mode, 'none');
+        assert.equal(handle.chart.updates.at(-1).mode, 'default',
+            'the first paint runs the draw animation');
         assert.equal(settled, false);
         await frame();
         assert.equal(settled, true);
@@ -187,7 +189,8 @@ async function initial(value = data(100, 110)) {
         const count = requests.length;
         handle.refresh('5D'); await frame(); await frame();
         assert.equal(requests.length, count, 'cached switch must not fetch');
-        assert.equal(handle.chart.updates.at(-1).mode, 'none');
+        assert.equal(handle.chart.updates.at(-1).mode, 'default',
+            'a cached switch still runs the draw animation');
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """,
     r"""
@@ -240,7 +243,8 @@ async function initial(value = data(100, 110)) {
         await frame(); await frame();
         assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
         assert.equal(modes[1].classList.contains('active'), true);
-        assert.equal(handle.chart.updates.at(-1).mode, 'none');
+        assert.equal(handle.chart.updates.at(-1).mode, 'default',
+            'a view switch still runs the draw animation');
         assert.equal(requests.length, 1, 'mode switch must not fetch');
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """,
