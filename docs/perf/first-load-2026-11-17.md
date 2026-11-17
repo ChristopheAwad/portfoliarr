@@ -86,7 +86,25 @@ exist only in the screenshot pages.
 - The main checkout's unchanged `.venv` was reused. Tests redirected the
   database before importing the application. No separate frontend build,
   lint, or type-check command exists.
-- Final post-review GUI actions and independent PR review are pending.
+- Independent [PR #113](https://github.com/ChristopheAwad/portfoliarr/pull/113)
+  review passed with no blocking findings or nits. Reviewed base:
+  `0ca8f8f6f8f972beea938b0199f70d636e24f6aa`. Reviewed and GUI-checked runtime
+  head: `024bbe3a4d0b9226002b41577a446d093d024bb7`. The working tree was
+  clean during the final GUI run. Subsequent gate-record changes are docs-only.
+- Final post-review GUI checks passed at 1280x800 and 390x844. Keyboard market
+  navigation kept focus and reused the preloaded tab without another request.
+  Keyboard privacy masking/unmasking restored the exact amount. Switching to
+  the empty portfolio displayed `0.00 CAD`, and switching back restored the
+  original total. All six market tabs loaded, with one initial summary/default
+  chart request. No browser errors, failed requests, HTTP errors, or unexpected
+  server errors occurred. Raw final action results are at
+  `/tmp/opencode/portfolio-startup-final-gui.json` on the audit host; rerun with
+  `/usr/bin/python3 /tmp/opencode/portfolio_startup_probe.py --final-gui`.
+- Before merge, a fresh fetch confirmed that the base had not changed. Local
+  `main` was safely fast-forwarded to the same fetched base. The existing
+  linked-worktree branch, `investigate-slow-portfolio-gains-loading`, was
+  adopted without renaming; its name differs from the normal `fix/` pattern.
+  The user approved this fix and its priority tradeoff. No approvals remain.
 - No pull-request CI workflow or protected required check is configured.
   The existing main-only Docker workflow must test, build, smoke-test, and
   publish the merged commit before the image is ready to use.
