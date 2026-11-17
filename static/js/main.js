@@ -1708,17 +1708,22 @@ volumeLeadersEl.addEventListener("click", (event) => {
 // the browser reaches it, and only now are all the functions above defined.
 // ---------------------------------------------------------------------------
 
-// 1. Wire the market tabs (click + keyboard) and fetch every quote-driven
-//    section immediately — no waiting for the first interval. (The ledger
-//    lives on /ledger with its own timer.) The market overview ships EMPTY
-//    from the template — the CSS :empty shimmer stands in until real data
-//    lands — and preloadMarketOverview starts every category request
-//    together. The watchlist starts empty and refreshWatchlist paints it.
+// 1. Start the visible market category and watchlist immediately. Once the
+//    portfolio list identifies the selected portfolio, request its summary
+//    and visible chart BEFORE preloading hidden markets and Volume Leaders.
+//    Six market requests started first can occupy every HTTP/1 connection
+//    and leave the portfolio figures queued behind unrelated Yahoo work.
+//    Do not await the summary or chart: slow/failed portfolio data must not
+//    block the other sections. Market preloads share the active tab's flight.
 setupMarketTabs();
-preloadMarketOverview();
+refreshMarketOverview(activeMarketCategory);
 refreshWatchlist();
-refreshVolumeLeaders();
-portfolioReady.then(() => refreshPortfolioSummary());
+portfolioReady.then(() => {
+    refreshPortfolioSummary();
+    if (currentPortfolioId()) refreshPortfolioChart();
+    preloadMarketOverview();
+    refreshVolumeLeaders();
+});
 // If the persisted privacy state is masked, paint the **** now — the
 // refresh above is guarded and will NOT paint over the mask, so without
 // this the header would sit on its empty skeletons until the user clicks
@@ -1726,14 +1731,6 @@ portfolioReady.then(() => refreshPortfolioSummary());
 if (portfolioMasked()) {
     applyPortfolioPrivacy();
 }
-// The portfolio chart is fetched once at load (its default 5D view) and
-// again only when a timeframe button is clicked — unlike the quote-driven
-// sections, price history doesn't change on a 60s cadence, so it would be
-// wasteful (and Yahoo rate-limit-hammering) to poll it too.
-portfolioReady.then(() => {
-    if (currentPortfolioId()) refreshPortfolioChart();
-});
-
 // 2. Poll. ONE timer drives all quote-driven cycles: the ACTIVE market
 //    category, watchlist, volume leaders, portfolio summary, and the
 //    active allocation dimension all change at the same rate.
