@@ -582,6 +582,9 @@ a.logo { text-decoration: none; color: var(--text-primary); }
     border-radius: var(--radius-md);
     border: 1px solid transparent;
     background-color: var(--bg-inset);
+    /* Follow the palette's ink. Without this the browser's default black
+       text stays on the dark --bg-inset background in dark mode. */
+    color: var(--text-primary);
     font-size: 14px;
     outline: none;
     transition: background-color 150ms ease, border-color 150ms ease,

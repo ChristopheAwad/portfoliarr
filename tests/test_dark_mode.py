@@ -156,6 +156,22 @@ def test_dark_date_input_uses_native_dark_controls():
     ), "dark date inputs don't request the browser's dark control scheme"
 
 
+def test_search_input_text_uses_token():
+    """The navbar search field must set its own text color.
+
+    Without an explicit color the browser's default black text stays on
+    the dark --bg-inset background, which is nearly invisible in dark
+    mode. It must follow --text-primary like every other input.
+    """
+    css_path = PROJECT_ROOT / "static" / "style.css"
+    css = css_path.read_text()
+    search_match = re.search(r'\.search-container\s+input\s*\{([^}]+)\}', css)
+    assert search_match, "no .search-container input rule found"
+    body = search_match.group(1)
+    assert "color: var(--text-primary)" in body, \
+        "search input text color must use --text-primary for dark mode"
+
+
 # ── 5. Hardcoded color cleanup ───────────────────────────────────────
 
 def test_navbar_uses_token_not_hardcoded_white():
