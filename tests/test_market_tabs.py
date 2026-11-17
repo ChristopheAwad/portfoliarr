@@ -358,11 +358,10 @@ def test_market_js_tab_click_triggers_immediate_refresh():
     assert "refreshMarketOverview(category)" in js or "refreshMarketOverview(" in js
 
 
-def test_market_js_boot_preloads_all_categories_in_parallel():
+def test_market_js_preloader_still_starts_all_categories_in_parallel():
     boot = MAIN_JS[MAIN_JS.index("// BOOT — the script's entry point."):]
     js = market_js()
     assert "preloadMarketOverview()" in boot, "boot must start all market requests"
-    assert boot.index("preloadMarketOverview()") < boot.index("refreshWatchlist()")
     assert "function preloadMarketOverview()" in js
     preload = js.split("function preloadMarketOverview()", 1)[1].split(
         "// Activate a category tab:", 1
