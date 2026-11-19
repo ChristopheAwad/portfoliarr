@@ -95,7 +95,7 @@ docker compose pull && docker compose up -d
 
 On the first app open after you sign in, Portfoliarr offers to unlock with your fingerprint or phone PIN instead. If you say yes, every cold start asks for it and opens your portfolio with no typing; if you cancel, your password works exactly as before, and the app offers to stop asking or to forget the phone. There is no WebAuthn/passkey support: that needs HTTPS and a real domain name, which a plain-HTTP LAN server does not have.
 
-The app updates itself from GitHub Releases. When a new build is published, the next cold start offers to download, verify, and install it; Android keeps the final Install tap. Shipping a version means bumping `VERSION` and `VERSION_CODE` together on `main`.
+The app updates itself from GitHub Releases. The first APK signed with the new production key needs a one-time uninstall and reinstall. See the [Android release instructions](android/README.md#first-release-with-the-private-key). Later updates can install in place and still need Android's final Install tap. Shipping requires a version bump and a manual publish from `main`.
 
 ## Scope
 
