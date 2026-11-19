@@ -29,11 +29,9 @@ To change the URL later, clear the app's storage in Android settings and enter i
 ```
 Output: `app/build/outputs/apk/debug/app-debug.apk`
 
-**Release APK:**
-```
-./gradlew assembleRelease
-```
-Output: `app/build/outputs/apk/release/app-release-unsigned.apk`
+Debug builds use the local Android debug key. An APK built on another machine may require a clean install. Do not distribute debug APKs as releases.
+
+**Release APK:** Run `./gradlew :app:assembleRelease` in an environment configured with `ANDROID_RELEASE_KEYSTORE_PATH`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD`. Output: `app/build/outputs/apk/release/app-release.apk`. Release packaging requires signing inputs; it cannot fall back to a debug key.
 
 ## Updates
 
@@ -46,9 +44,17 @@ A release is visible to the app only when all of these hold:
 - A line `SHA-256: <64 hex chars>` in the release body.
 - The release is final, not a draft and not a prerelease.
 
-To ship a new version, bump root `VERSION` and `VERSION_CODE` in `android/gradle.properties` together on `main`. The `Publish Android release` workflow publishes the release, and phones on an update-aware build offer it on their next cold start. Android refuses a lower `versionCode`, so a downgrade needs an uninstall.
+## First release with the private key
 
-To test the update on a device, the phone must already run a build with the checker. Publish a higher-code build from a throwaway branch, test the in-app flow, then delete that release, tag, and branch. The header of `.github/workflows/release-android.yml` documents the exact contract.
+Android cannot install the first production-signed APK over an older build signed with the retired key. Before uninstalling, note your server URL and make sure you know your login. Uninstall the old app, then download and install the production APK from the official [Portfoliarr releases page](https://github.com/ChristopheAwad/portfoliarr/releases). Enter the server URL, sign in, and reconnect your widgets. If you use the local fingerprint or PIN lock, enable it again. The server keeps your portfolio data. Later releases with the same production key install in place.
+
+## Publishing a release
+
+1. Generate a private production signing key with `keytool` outside the checkout. Keep an encrypted offline backup and verify you can open it. Never store the keystore or its passwords in Git.
+2. Create a protected GitHub environment named `android-production` that permits deployments only from `main`. Set its `ANDROID_RELEASE_KEYSTORE_B64`, `ANDROID_RELEASE_STORE_PASSWORD`, `ANDROID_RELEASE_KEY_ALIAS`, and `ANDROID_RELEASE_KEY_PASSWORD` secrets. The first secret holds the entire keystore file, base64-encoded. Base64 does not encrypt it.
+3. Get the SHA-256 fingerprint of the key's **public certificate** using `keytool -list -v -keystore <keystore-path> -alias <alias>`. Confirm the fingerprint independently and commit it in `android/release-cert.sha256` as one line of 64 hex digits without colons. The publisher checks the APK against this public fingerprint.
+4. Verify a candidate on a test device before publication. Test a clean install as well as the expected refusal to update an old-key install. Do not use the public Releases page for temporary test APKs. For the next production release, verify that the same signer can update the app in place.
+5. When ready to ship, bump root `VERSION` and `VERSION_CODE` in `android/gradle.properties` together. After the bump reaches `main`, use **Actions → Publish Android release → Run workflow** on `main`. A merge alone does not publish an APK.
 
 ## How It Works
 
@@ -59,4 +65,4 @@ To test the update on a device, the phone must already run a build with the chec
 
 ## Rollback
 
-Delete this folder. The existing web app is completely unaffected.
+If a release stops the app from starting or working, build the last known good code with a higher `versionCode` and the same production key. Verify it restores normal sign-in, lock, and widget behavior on the device before publishing. Reverting the code does not downgrade an installed APK. If you lose the key, restore it from the offline backup. Without the backup, another signing change requires a new manual reinstall. Do not re-enable the retired key.

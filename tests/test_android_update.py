@@ -54,82 +54,268 @@ def code(path):
 
 WORKFLOW = ".github/workflows/release-android.yml"
 
+# Public fingerprint of the old tracked android/app/debug.keystore. It must
+# never sign a production release, no matter what release-cert.sha256 says.
+DEBUG_CERT_SHA256 = (
+    "83f98e8588eeb10de17aeb848e01ee35"
+    "c3d3f1dda4594d9f7b403d8724871ab9"
+)
 
-def test_release_workflow_exists_and_triggers_on_main():
+
+def yaml_code(text):
+    """Strip full-line YAML/shell comments so absence pins code, not prose.
+
+    Inline text is preserved: `Signer #1` is code, not a comment.
+    """
+    return "\n".join(
+        "" if line.lstrip().startswith("#") else line
+        for line in text.splitlines()
+    )
+
+
+def run_blocks(text):
+    """Return every indented `run: |` body in a workflow."""
+    lines = text.splitlines()
+    blocks = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^(\s*)run:\s*\|", lines[index])
+        if not match:
+            index += 1
+            continue
+        indent = len(match.group(1))
+        body = []
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() and (len(line) - len(line.lstrip())) <= indent:
+                break
+            body.append(line)
+            index += 1
+        blocks.append("\n".join(body))
+    return blocks
+
+
+def test_release_workflow_is_manual_main_only():
     wf = source(WORKFLOW)
-    assert "branches" in wf and "main" in wf, "release workflow must run on main"
-    assert '"android/**"' in wf or "'android/**'" in wf, \
-        "release workflow must trigger on android/**"
-    assert '"VERSION"' in wf or "'VERSION'" in wf, \
-        "release workflow must trigger on VERSION"
-    assert "workflow_dispatch" in wf, "release workflow needs a manual trigger"
+    on_block = wf.split("\non:", 1)[1].split("\npermissions:", 1)[0]
+    assert "workflow_dispatch:" in on_block, \
+        "release workflow needs a manual trigger"
+    assert not re.search(r"^\s*(push|pull_request|schedule):", on_block, re.M), \
+        "merging to main must never publish; only workflow_dispatch may start this"
+    assert "github.ref == 'refs/heads/main'" in wf, \
+        "workflow_dispatch on another branch must not build a release"
+    assert "github.ref_type == 'branch'" in wf, \
+        "a tag or other ref must not be treated as main"
 
 
-def test_release_workflow_has_contents_write():
+def test_release_workflow_uses_protected_environment_and_serializes():
     wf = source(WORKFLOW)
-    assert re.search(r"permissions:\s*\n\s*contents:\s*write", wf), \
-        "release workflow needs permissions: contents: write to publish"
+    assert wf.count("environment: android-production") >= 2, \
+        "both the signing build and the publisher need the protected environment"
+    assert re.search(
+        r"^concurrency:\s*\n\s+group:\s*android-production-release\s*\n"
+        r"\s+cancel-in-progress:\s*false",
+        wf, re.M,
+    ), "publication must queue, never cancel or race another release run"
+
+
+def test_release_workflow_scopes_release_write_to_the_publisher():
+    wf = source(WORKFLOW)
+    assert re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", wf, re.M), \
+        "the default token must be read-only"
+    assert not re.search(r"^permissions:\s*\n\s+contents:\s*write\s*$", wf, re.M), \
+        "contents: write must not be a workflow-wide permission"
+    jobs = wf.split("\njobs:", 1)[1]
+    build = jobs.split("\n  publish:", 1)[0]
+    publish = jobs.split("\n  publish:", 1)[1]
+    assert re.search(r"^    permissions:\s*\n      contents:\s*read\s*$", build, re.M), \
+        "the build job holds secrets and must stay read-only"
+    assert re.search(r"^    permissions:\s*\n      contents:\s*write\s*$", publish, re.M), \
+        "only the publisher may write releases"
 
 
 def test_release_workflow_builds_tag_from_version_and_code():
-    wf = source(WORKFLOW)
-    assert "VERSION_CODE" in wf, "tag must include the Android version code"
-    assert re.search(r"android-\$", wf) or "android-" in wf, \
+    body = yaml_code(source(WORKFLOW))
+    assert "VERSION_CODE" in body, "tag must include the Android version code"
+    assert 'tag="android-${version}-${version_code}"' in body, \
         "tag must carry the android- prefix UpdateGate parses"
-    assert "gh release create" in wf, "workflow must create the release"
+    assert 'asset="portfoliarr-${version}-${version_code}.apk"' in body, \
+        "asset name must mirror the tag contract"
+    assert "gh release create" in body, "workflow must create the release"
+    assert '--target "$EXPECTED_SHA"' in body, \
+        "the release tag must point at the exact commit this run built"
 
 
-def test_release_workflow_is_idempotent():
-    wf = source(WORKFLOW)
-    assert "gh release view" in wf, \
-        "workflow must skip when the tag already exists (gh release view)"
-    view_pos = wf.index("gh release view")
-    create_pos = wf.index("gh release create")
-    assert view_pos < create_pos, \
-        "the existence check must run BEFORE creating anything"
+def test_release_workflow_validates_version_strictly():
+    body = yaml_code(source(WORKFLOW))
+    assert r"^[0-9]+\.[0-9]+(\.[0-9]+)?$" in body, \
+        "VERSION must be a clean dotted number"
+    assert r"^VERSION_CODE=([1-9][0-9]{0,9})$" in body, \
+        "VERSION_CODE must be one positive integer with no leading zero"
+    assert "2100000000" in body, \
+        "VERSION_CODE must stay inside Android's maximum"
+    assert "code_count" in body, \
+        "duplicate or missing VERSION_CODE lines must fail closed"
+    assert "positive integer" in body, \
+        "the failure must explain why the version was rejected"
+
+
+def test_release_workflow_rejects_lower_or_equal_codes():
+    body = yaml_code(source(WORKFLOW))
+    assert "max_code" in body, "the workflow must find the highest published code"
+    assert '[ "$VERSION_CODE" -le "$max_code" ]' in body, \
+        "a lower or equal VERSION_CODE must be rejected"
+    assert "must be greater than published" in body, \
+        "the failure must name the ordering rule"
+
+
+def test_release_workflow_is_idempotent_and_fails_closed():
+    body = yaml_code(source(WORKFLOW))
+    assert "gh api --include" in body, \
+        "the workflow must inspect the HTTP status instead of guessing"
+    assert "unclear" in body, \
+        "a response that is neither 200 nor 404 must fail the run"
+    assert "gh release view" not in body, \
+        "gh release view cannot tell a missing release from an API failure"
+    assert "publish=false" in body and "publish=true" in body, \
+        "the exact existing release must be an explicit no-op"
+    assert '(.body | test("(?m)^SHA-256: [0-9a-fA-F]{64}$"))' in body, \
+        "an existing release is exact only when it carries the SHA-256 note"
+    assert "steps.state.outputs.publish == 'true'" in body, \
+        "every build step must be guarded by the fail-closed decision"
+    create = body.index("gh release create")
+    assert body.index("releases/tags/${TAG}") < create, \
+        "the release check must run before creating anything"
+    assert body.index("git/ref/tags/${TAG}") < create, \
+        "an orphan tag must be detected before creating anything"
 
 
 def test_release_workflow_authenticates_gh():
     wf = source(WORKFLOW)
-    assert "GH_TOKEN" in wf, \
-        "gh needs GH_TOKEN in GitHub Actions or every gh call fails"
-
-
-def test_release_build_is_skipped_when_already_published():
-    wf = source(WORKFLOW)
-    assert "steps.exists.outputs.already" in wf, \
-        "the build must be guarded by the existence check; exit 0 in a step " \
-        "only ends that step and the build would run anyway"
-    guard_pos = wf.index("steps.exists.outputs.already")
-    build_pos = wf.index("assembleDebug")
-    assert guard_pos < build_pos, \
-        "the skip decision must be made before the build starts"
+    assert wf.count("GH_TOKEN") >= 2, "both the build and publisher call gh"
+    assert "secrets.GITHUB_TOKEN" in wf, \
+        "gh needs a token in GitHub Actions or every call fails"
+    assert not re.search(r"^env:\s*\n\s+GH_TOKEN:", wf, re.M), \
+        "the token must not be exposed to every step in the workflow"
 
 
 def test_release_workflow_publishes_a_final_release():
-    lines = []
-    for line in source(WORKFLOW).splitlines():
-        # YAML comments use #, not //: strip them so the explanatory comment
-        # naming the forbidden flags cannot satisfy this pin by itself.
-        stripped = line.split("#", 1)[0]
-        # ...but never strip inside single quotes (the license hashes).
-        if stripped.count("'") % 2 == 1:
-            stripped = line
-        lines.append(stripped)
-    body = "\n".join(lines)
+    body = yaml_code(source(WORKFLOW))
     assert "--draft" not in body, \
         "a draft release is invisible to releases/latest — the app would never see it"
     assert "--prerelease" not in body, \
         "a prerelease is never 'latest' — the app would never see it"
 
 
-def test_release_workflow_uploads_apk_and_sha_notes():
+def test_release_workflow_builds_signed_release_without_caching_keys():
+    body = yaml_code(source(WORKFLOW))
+    assert "assembleRelease" in body, "the release must build the release variant"
+    assert "assembleDebug" not in body, "a debug APK must never be published"
+    assert "debug.keystore" not in body, "release signing must never use debug keys"
+    for name in (
+        "ANDROID_RELEASE_KEYSTORE_B64",
+        "ANDROID_RELEASE_KEYSTORE_PATH",
+        "ANDROID_RELEASE_STORE_PASSWORD",
+        "ANDROID_RELEASE_KEY_ALIAS",
+        "ANDROID_RELEASE_KEY_PASSWORD",
+    ):
+        assert name in body, f"the signing contract needs {name}"
+    assert "base64 --decode" in body, "the keystore must be decoded at run time"
+    assert body.index("android/release-cert.sha256") < body.index("base64 --decode"), \
+        "certificate metadata must be checked before production secrets are used"
+    assert "install -d -m 700" in body and "chmod 600" in body, \
+        "the decoded keystore must live in a restricted directory"
+    assert "--no-configuration-cache" in body, \
+        "the configuration cache must stay off for signing state"
+    assert "--no-build-cache" in body, "signed outputs must not come from a cache"
+    assert "--no-daemon" in body, "no Gradle daemon may outlive the signing step"
+    assert "cache-disabled: true" in body, \
+        "the Gradle action must not cache signing inputs"
+    assert "if: always()" in body, "cleanup must run after failure or cancellation"
+    assert 'rm -rf "$RUNNER_TEMP/android-release-signing"' in body, \
+        "the decoded keystore must be removed"
+
+
+def test_release_workflow_keeps_signing_secrets_out_of_the_publisher():
     wf = source(WORKFLOW)
-    assert "assembleDebug" in wf, "the release must build the APK first"
-    assert re.search(r"portfoliarr-.*\.apk", wf), \
-        "the uploaded asset must be named portfoliarr-<VERSION>-<CODE>.apk"
-    assert "sha256sum" in wf, "the workflow must hash the APK"
-    assert "SHA-256:" in wf, "the release notes must carry the SHA-256: line"
+    publish = wf.split("\njobs:", 1)[1].split("\n  publish:", 1)[1]
+    for name in (
+        "ANDROID_RELEASE_KEYSTORE_B64",
+        "ANDROID_RELEASE_KEYSTORE_PATH",
+        "ANDROID_RELEASE_STORE_PASSWORD",
+        "ANDROID_RELEASE_KEY_ALIAS",
+        "ANDROID_RELEASE_KEY_PASSWORD",
+    ):
+        assert name not in publish, \
+            f"the release-write job must not receive signing input {name}"
+
+
+def test_release_workflow_verifies_signer_certificate_and_package():
+    body = yaml_code(source(WORKFLOW))
+    assert "apksigner" in body
+    assert "verify --verbose --print-certs" in body, \
+        "the APK signature and certificate must be inspected"
+    assert "Number of signers:" in body, "the APK must have exactly one signer"
+    assert "Signer #1 certificate SHA-256 digest:" in body
+    assert "android/release-cert.sha256" in body, \
+        "the expected owner-confirmed certificate lives in the repository"
+    assert "git ls-files --error-unmatch" in body, \
+        "a missing release certificate must fail closed"
+    assert body.count(DEBUG_CERT_SHA256) == 2, \
+        "pin the same exposed-debug digest everywhere it is checked"
+    assert '[ "$signer_sha" = "$CERT_SHA256" ]' in body, \
+        "the APK certificate must match the checked-in metadata"
+    assert '[ "$signer_sha" != "$DEBUG_CERT_SHA256" ]' in body, \
+        "the debug certificate must be rejected even if it matches the cert file"
+    assert "application-debuggable" in body, "a debuggable APK must be rejected"
+    assert "com.portfoliarr.app" in body, "the package name must be checked"
+    assert "versionCode='${VERSION_CODE}' versionName='${VERSION}'" in body, \
+        "the built APK must report the exact VERSION and VERSION_CODE"
+    assert "aapt" in body, "package and version metadata must come from the APK"
+
+
+def test_release_workflow_hashes_and_publishes_the_verified_file():
+    body = yaml_code(source(WORKFLOW))
+    assert "sha256sum" in body, "the workflow must hash the APK"
+    assert "SHA-256:" in body, "the release notes must carry the SHA-256: line"
+    assert "actions/upload-artifact@v4" in body
+    assert "actions/download-artifact@v4" in body
+    assert "path: release-dist" in body, \
+        "only the verified release files may enter the artifact"
+    assert "if-no-files-found: error" in body, \
+        "a missing artifact must fail instead of publishing nothing"
+    assert 'verified_sha="$(sha256sum "$apk"' in body, \
+        "the APK that was verified must be the one hashed"
+    assert 'publish_sha="$(sha256sum "$dist/$ASSET"' in body, \
+        "the published copy must be hashed again"
+    assert '[ "$verified_sha" = "$publish_sha" ]' in body, \
+        "the published file must be byte-identical to the verified file"
+    assert '[ "$actual_sha" = "$EXPECTED_SHA256" ]' in body, \
+        "the publisher must re-check the verified hash"
+
+
+def test_release_workflow_validates_the_exact_commit_and_ref():
+    wf = source(WORKFLOW)
+    assert "ref: ${{ github.sha }}" in wf, \
+        "the build must check out the dispatch commit, not a moving ref"
+    assert "persist-credentials: false" in wf, \
+        "the build token must not be stored in git config"
+    body = yaml_code(wf)
+    assert '[ "$BUILD_SHA" = "$EXPECTED_SHA" ]' in body, \
+        "the publisher must publish the commit the builder verified"
+    assert '--repo "$REPO"' in body, \
+        "the publisher has no checkout, so gh must be told which repository"
+    assert '--target "$EXPECTED_SHA"' in body, \
+        "the tag must be created at the verified commit"
+
+
+def test_release_workflow_never_interpolates_expressions_into_shell():
+    blocks = run_blocks(source(WORKFLOW))
+    assert blocks, "expected shell run blocks in the release workflow"
+    for block in blocks:
+        assert "${{" not in block, \
+            "put Actions expressions in env: and read environment variables in shell"
 
 
 # ── Manifest and FileProvider ────────────────────────────────────────────

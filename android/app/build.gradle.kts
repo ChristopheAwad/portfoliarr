@@ -9,6 +9,21 @@ require(sharedVersion.matches(Regex("""[0-9]+\.[0-9]+(?:\.[0-9]+)?"""))) {
     "Invalid app version in root VERSION"
 }
 
+// Debug builds may fall back to version code 1 for local JVM/debug work.
+// Release packaging explicitly rejects that fallback (see validateReleaseSigning):
+// a release must supply VERSION_CODE.
+val versionCodeProperty = project.findProperty("VERSION_CODE")?.toString()
+val versionCodeValue = versionCodeProperty?.toIntOrNull()
+val hasValidVersionCode = versionCodeValue != null && versionCodeValue in 1..2_100_000_000
+
+fun envValue(name: String): String? = System.getenv(name)?.takeIf { it.isNotEmpty() }
+
+val releaseKeystorePath = envValue("ANDROID_RELEASE_KEYSTORE_PATH")
+val releaseKeystoreFile = releaseKeystorePath?.let { file(it) }
+val releaseStorePassword = envValue("ANDROID_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = envValue("ANDROID_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = envValue("ANDROID_RELEASE_KEY_PASSWORD")
+
 android {
     namespace = "com.portfoliarr.app"
     compileSdk = 34
@@ -18,36 +33,32 @@ android {
         minSdk = 24
         targetSdk = 34
         // versionCode is Android-specific; versionName is shared with Flask.
-        versionCode = project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 1
+        versionCode = versionCodeValue ?: 1
         versionName = sharedVersion
     }
 
-    // Shared debug keystore checked into the repo — both local and CI builds
-    // use this same certificate so APK updates install over previous versions.
-    // WITHOUT this, each machine's ~/.android/debug.keystore produces a
-    // different certificate, and Android refuses the update ("app not installed").
+    // Debug builds use AGP's default signing config, which points at this
+    // machine's ~/.android/debug.keystore. That key is local-only: it is never
+    // committed, and it is never used for release builds.
     signingConfigs {
-        // getByName, NOT create: AGP automatically pre-registers a signing
-        // config named "debug" when the plugin applies, so create("debug")
-        // fails with "Cannot add a SigningConfig with name 'debug' as a
-        // SigningConfig with that name already exists" — a configuration-
-        // phase error that kills every build before it compiles. We just
-        // reconfigure the built-in one to point at the shared keystore.
-        getByName("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        // Release signing is a distinct config supplied only by the
+        // environment. No keystore, password, alias, or fallback key is
+        // committed to the repository. validateReleaseSigning fails packaging
+        // when any of these inputs is absent, partial, or invalid.
+        create("release") {
+            storeFile = releaseKeystoreFile
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
         }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("debug")
-        }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Never fall back to debug signing and never emit an unsigned
+            // release. A missing or incomplete signing config fails below.
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -79,4 +90,69 @@ dependencies {
     // carry no android.* imports precisely so these run here, on a plain
     // JVM, instead of needing a device.
     testImplementation(libs.junit)
+}
+
+// Release packaging must fail closed. Validation runs as a task and again at
+// the start of every release APK, bundle, and install task, rejecting absent,
+// partial, or obviously invalid inputs. It intentionally never opens the
+// keystore: password and alias validity are left to AGP/signing so no key
+// material is read here.
+val releasePackagingTasks = setOf(
+    "assembleRelease",
+    "bundleRelease",
+    "installRelease",
+    "packageRelease",
+    "packageReleaseBundle",
+    "packageReleaseUniversalApk",
+    "signReleaseBundle",
+)
+
+val validateReleaseInputs = Action<Task> {
+    val problems = mutableListOf<String>()
+
+    fun requireEnv(name: String, value: String?) {
+        if (value.isNullOrBlank()) {
+            problems += "$name is missing or empty"
+        }
+    }
+
+    requireEnv("ANDROID_RELEASE_KEYSTORE_PATH", releaseKeystorePath)
+    requireEnv("ANDROID_RELEASE_STORE_PASSWORD", releaseStorePassword)
+    requireEnv("ANDROID_RELEASE_KEY_ALIAS", releaseKeyAlias)
+    requireEnv("ANDROID_RELEASE_KEY_PASSWORD", releaseKeyPassword)
+
+    if (releaseKeystoreFile != null) {
+        if (!releaseKeystoreFile.isFile) {
+            problems += "ANDROID_RELEASE_KEYSTORE_PATH is not a regular file"
+        } else if (releaseKeystoreFile.length() == 0L) {
+            problems += "ANDROID_RELEASE_KEYSTORE_PATH is empty"
+        } else if (!releaseKeystoreFile.canRead()) {
+            problems += "ANDROID_RELEASE_KEYSTORE_PATH is not readable"
+        }
+    }
+
+    if (versionCodeProperty.isNullOrBlank()) {
+        problems += "VERSION_CODE is not set; release builds must not fall back to a default"
+    } else if (!hasValidVersionCode) {
+        problems += "VERSION_CODE must be between 1 and 2100000000"
+    }
+
+    if (problems.isNotEmpty()) {
+        throw GradleException(
+            "Release signing is not configured safely:\n - " +
+                problems.joinToString("\n - ")
+        )
+    }
+}
+
+val validateReleaseSigning = tasks.register("validateReleaseSigning") {
+    group = "verification"
+    description = "Fails unless production release signing and version inputs are complete."
+    doFirst(validateReleaseInputs)
+}
+
+// Validate inside the packaging tasks too: a plain task dependency could be
+// removed with --exclude-task, and that must not produce an unsigned release.
+tasks.matching { it.name in releasePackagingTasks }.configureEach {
+    doFirst(validateReleaseInputs)
 }

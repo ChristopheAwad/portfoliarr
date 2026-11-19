@@ -13,6 +13,16 @@ android/.gradle/
 android/build/
 android/app/build/
 
+# Local Android signing material (never commit keys or signing properties)
+android/*.keystore
+android/*.jks
+android/app/*.keystore
+android/app/*.jks
+android/keystore.properties
+android/signing.properties
+/keystore.properties
+/signing.properties
+
 # Environment variables & secrets
 .env
 
