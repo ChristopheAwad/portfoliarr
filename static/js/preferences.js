@@ -211,13 +211,17 @@
 
 // ---------------------------------------------------------------------------
 // PEOPLE — user accounts for this server (the People card above the
-// About card). Same shapes as managePortfolios on purpose: one fetch
-// helper per form, one error element per form, and typed-confirmation
-// prompts for anything destructive. The SERVER re-checks every rule
-// (self-delete, last user, confirming name); the JS simply never shows
-// the controls that would be refused — you only see Delete on OTHER
-// people's rows, because deleting your own signed-in account is always
-// refused.
+// password and About cards). Same shapes as managePortfolios on purpose:
+// one fetch helper per form, one error element per form, and
+// typed-confirmation prompts for anything destructive. The SERVER
+// re-checks every rule (owner role, self-delete, last user, confirming
+// name); the JS simply never shows the controls that would be refused —
+// you only see Delete on OTHER people's rows, because deleting your own
+// signed-in account is always refused.
+//
+// The template renders this card for the OWNER only. For everyone else
+// there is no card here, so this IIFE returns before any /api/users
+// request — regular accounts never touch the People endpoints.
 //
 // 401s never reach our handlers: common.js's fetch hook bounces the
 // browser to /auth/login the moment the session is gone.
@@ -232,16 +236,12 @@
     const list = document.getElementById("people-list");
     const form = document.getElementById("people-create");
     const peopleError = document.getElementById("people-error");
-    const passwordForm = document.getElementById("password-change");
-    const passwordError = document.getElementById("password-error");
+    const signupToggle = document.getElementById("allow-signup");
+    if (!list || !form || !peopleError) return;
 
     function reportPeople(message) {
         peopleError.textContent = message;
         peopleError.hidden = !message;
-    }
-    function reportPassword(message) {
-        passwordError.textContent = message;
-        passwordError.hidden = !message;
     }
 
     async function request(path, options, onFail) {
@@ -300,6 +300,7 @@
     // A failed toggle reports in the note line and reverts the checkbox
     // so the picture never lies about the server's state.
     function loadSignupSetting() {
+        if (!signupToggle) return;
         request("/api/auth/signup-toggle", { method: "GET" },
             reportPeople).then((response) => {
             if (response && response.ok) {
@@ -310,8 +311,7 @@
         });
     }
 
-    const signupToggle = document.getElementById("allow-signup");
-    signupToggle.addEventListener("change", async () => {
+    if (signupToggle) signupToggle.addEventListener("change", async () => {
         const on = signupToggle.checked;
         const response = await request("/api/auth/signup-toggle", {
             method: "POST",
@@ -385,29 +385,56 @@
         }
     });
 
-    passwordForm.addEventListener("submit", async (event) => {
+    loadPeople();
+})();
+
+// ---------------------------------------------------------------------------
+// OWN PASSWORD — every signed-in account changes its OWN password here.
+// This runs independently of the People card, so a regular account keeps
+// the password flow (and its error line) without the owner-only People
+// markup or requests.
+// ---------------------------------------------------------------------------
+(function manageOwnPassword() {
+    const form = document.getElementById("password-change");
+    const errorEl = document.getElementById("password-error");
+    if (!form || !errorEl) return;
+
+    function reportPassword(message) {
+        errorEl.textContent = message;
+        errorEl.hidden = !message;
+    }
+
+    form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const current = passwordForm.elements.current_password.value;
-        const next = passwordForm.elements.new_password.value;
-        const confirm = passwordForm.elements.confirm_password.value;
+        const current = form.elements.current_password.value;
+        const next = form.elements.new_password.value;
+        const confirm = form.elements.confirm_password.value;
         if (next !== confirm) {
             reportPassword("The two new passwords do not match.");
             return;
         }
-        const response = await request("/api/auth/password", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ current_password: current,
-                                   new_password: next }),
-        }, reportPassword);
-        if (response && response.status === 204) {
-            passwordForm.reset();
-            reportPassword("");
-            showToast("Password changed", "success");
+        try {
+            const response = await fetch("/api/auth/password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ current_password: current,
+                                       new_password: next }),
+            });
+            if (response.status === 204) {
+                form.reset();
+                reportPassword("");
+                showToast("Password changed", "success");
+                return;
+            }
+            if (response.status !== 401) {
+                const payload = await response.json().catch(() => null);
+                reportPassword(payload?.error
+                    || `Could not change password (HTTP ${response.status})`);
+            }
+        } catch {
+            reportPassword("Could not reach the server.");
         }
     });
-
-    loadPeople();
 })();
 
 // ---------------------------------------------------------------------------

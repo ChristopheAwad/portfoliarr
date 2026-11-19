@@ -26,7 +26,7 @@ import db
 import app as app_module
 from app import app
 from conftest import (CLIENT_USER_ID, main_portfolio_id, make_quote,
-                      seed_user)
+                      seed_user, sign_in)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -156,11 +156,14 @@ def test_delete_portfolio_cascades_tokens(client, fake_market):
 
 
 def test_delete_user_cascades_tokens(client, fake_market):
-    token = create_token(client).get_json()["token"]
-    seed_user("bob")
-    assert db.delete_user(CLIENT_USER_ID, "tester") == "deleted"
+    bob_id = seed_user("bob")
+    bob = app.test_client()
+    sign_in(bob, bob_id)
+    token = create_token(bob, db.get_portfolios(bob_id)[0]["id"]).get_json()[
+        "token"]
+    assert db.delete_user(bob_id, "bob") == "deleted"
     assert db.get_widget_token(token_hash(token)) is None
-    assert client.get("/api/widget/summary", headers=auth(token)).status_code == 401
+    assert bob.get("/api/widget/summary", headers=auth(token)).status_code == 401
 
 
 # ── /api/widget/summary auth surface ─────────────────────────────────────

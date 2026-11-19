@@ -85,17 +85,27 @@ CLIENT_USER_ID = 1
 TESTER_PASSWORD = "test-password-1234"
 
 
+def sign_in(web_client, user_id):
+    """Forge a VALID session for an existing account, pv included."""
+    user = db.get_user(user_id)
+    assert user is not None, f"no user {user_id}"
+    with web_client.session_transaction() as session:
+        session["user_id"] = user_id
+        session["pv"] = user["password_version"]
+
+
 @pytest.fixture
 def client(fresh_db):
     """A Flask test client wired to the throwaway database, signed in as
-    the seeded tester user.
+    the server's OWNER ("tester").
 
     The session cookie is FORGED (session_transaction writes the signed
-    cookie directly) instead of running the /auth/login form every test:
-    a login costs one ~scrypt check per test and adds ~seconds to the
-    suite for no extra coverage — the login route itself has dedicated
-    tests in test_auth.py. Watching, scope-level and gate behavior stay
-    under test exactly as they would with a real login.
+    cookie directly, with the real password_version) instead of running
+    the /auth/login form every test: a login costs one ~scrypt check per
+    test and adds ~seconds to the suite for no extra coverage — the login
+    route itself has dedicated tests in test_auth.py. Watching,
+    scope-level, owner-gate, and session-version behavior stay under test
+    exactly as they would with a real login.
 
     The TEST CLIENT — the concept:
       Flask ships a fake browser. client.get("/api/watchlist") calls the
@@ -104,9 +114,13 @@ def client(fresh_db):
       server. Responses are real Response objects: .status_code, .get_json().
     """
     test_client = app.test_client()
-    user_id = seed_user("tester", TESTER_PASSWORD)
+    created = db.create_first_user(
+        "tester", generate_password_hash(TESTER_PASSWORD))
+    assert created is not None
+    user_id, password_version = created
     with test_client.session_transaction() as session:
         session["user_id"] = user_id
+        session["pv"] = password_version
     return test_client
 
 

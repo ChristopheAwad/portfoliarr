@@ -880,21 +880,30 @@ const classificationAsOfEl = document.getElementById("classification-as-of");
 const classificationErrorEl = document.getElementById("classification-error");
 const classificationStatusEl = document.getElementById("classification-status");
 
+// The template renders the mutation controls for the OWNER only and
+// stamps the same decision here. Every signed-in person still reads the
+// shared classification below; a regular account just gets read-only
+// values and no Save/Clear/Add-row requests.
+const canManageClassification =
+    classificationCard?.dataset.canManage === "true";
+
 // The last GET reply: {dimension: {weights, as_of, updated_at}}.
 let classificationData = {};
 
 function showClassificationError(text) {
+    if (!classificationErrorEl) return;
     classificationErrorEl.textContent = text;
     classificationErrorEl.hidden = false;
 }
 
 function clearClassificationError() {
+    if (!classificationErrorEl) return;
     classificationErrorEl.textContent = "";
     classificationErrorEl.hidden = true;
 }
 
 function setClassificationStatus(text) {
-    classificationStatusEl.textContent = text;
+    if (classificationStatusEl) classificationStatusEl.textContent = text;
 }
 
 function addClassificationRow(label = "", percent = "") {
@@ -918,6 +927,19 @@ function addClassificationRow(label = "", percent = "") {
     percentInput.setAttribute("aria-label", "Weight percent");
     percentInput.value = percent;
 
+    if (!canManageClassification) {
+        // Read-only still focusable (readonly inputs take focus and can be
+        // copied), unlike disabled controls. The spacer keeps the CSS grid
+        // columns aligned where the owner's remove button would sit.
+        labelInput.readOnly = true;
+        percentInput.readOnly = true;
+        const spacer = document.createElement("span");
+        spacer.setAttribute("aria-hidden", "true");
+        row.append(labelInput, percentInput, spacer);
+        classificationRowsEl.append(row);
+        return;
+    }
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "classification-remove";
@@ -931,7 +953,7 @@ function addClassificationRow(label = "", percent = "") {
 
 // Paint the rows for the CURRENTLY selected dimension from classificationData.
 function paintClassificationRows() {
-    if (!classificationRowsEl) return;
+    if (!classificationRowsEl || !classificationDimEl) return;
     classificationRowsEl.replaceChildren();
     const dimension = classificationDimEl.value;
     const entry = classificationData[dimension];
@@ -939,10 +961,19 @@ function paintClassificationRows() {
         for (const [label, fraction] of Object.entries(entry.weights)) {
             addClassificationRow(label, String(fraction * 100));
         }
-        classificationAsOfEl.value = entry.as_of || "";
+        if (classificationAsOfEl) {
+            classificationAsOfEl.value = entry.as_of || "";
+        }
     } else {
-        classificationAsOfEl.value = "";
-        addClassificationRow();
+        if (classificationAsOfEl) classificationAsOfEl.value = "";
+        if (canManageClassification) {
+            addClassificationRow();
+        } else {
+            const empty = document.createElement("p");
+            empty.className = "classification-note";
+            empty.textContent = "No allocation data entered yet.";
+            classificationRowsEl.append(empty);
+        }
     }
 }
 
@@ -983,7 +1014,9 @@ async function saveClassification() {
         return;
     }
     const payload = { dimension: classificationDimEl.value, weights };
-    if (classificationAsOfEl.value) payload.as_of = classificationAsOfEl.value;
+    if (classificationAsOfEl?.value) {
+        payload.as_of = classificationAsOfEl.value;
+    }
     try {
         const response = await fetch(
             `/api/fund-classification/${encodeURIComponent(symbol)}`, {
@@ -1027,20 +1060,23 @@ async function clearClassification() {
 }
 
 if (classificationCard) {
-    document.getElementById("classification-toggle").addEventListener(
-        "click", () => {
-            const body = document.getElementById("classification-body");
-            const toggle = document.getElementById("classification-toggle");
+    const toggle = document.getElementById("classification-toggle");
+    const body = document.getElementById("classification-body");
+    if (toggle && body) {
+        toggle.addEventListener("click", () => {
             body.hidden = !body.hidden;
             toggle.setAttribute("aria-expanded", String(!body.hidden));
         });
-    document.getElementById("classification-add-row").addEventListener(
+    }
+    // These controls exist in the owner's markup only. The guards keep a
+    // regular account (read-only card) from wiring handlers to nothing.
+    document.getElementById("classification-add-row")?.addEventListener(
         "click", () => addClassificationRow());
-    document.getElementById("classification-save").addEventListener(
+    document.getElementById("classification-save")?.addEventListener(
         "click", saveClassification);
-    document.getElementById("classification-clear").addEventListener(
+    document.getElementById("classification-clear")?.addEventListener(
         "click", clearClassification);
-    classificationDimEl.addEventListener("change", paintClassificationRows);
+    classificationDimEl?.addEventListener("change", paintClassificationRows);
 }
 
 // ---------------------------------------------------------------------------

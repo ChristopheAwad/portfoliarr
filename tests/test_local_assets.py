@@ -10,6 +10,7 @@ import pytest
 import db
 from app import app
 from conftest import seed_user
+from werkzeug.security import generate_password_hash
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,7 +98,7 @@ def test_signed_out_auth_pages_use_local_fonts_and_keep_forms(fresh_db):
     web = app.test_client()
     setup = web.get("/auth/setup")
     assert setup.status_code == 200
-    seed_user("tester")
+    db.create_first_user("tester", generate_password_hash("pw-1234"))
     login = web.get("/auth/login")
     assert login.status_code == 200
     db.set_setting("allow_signup", "true")

@@ -38,7 +38,7 @@ from flask import Flask, g, has_request_context, jsonify, redirect, \
 # HTTPException is the base class of Flask/werkzeug's OWN errors (404,
 # 405...). The top-level error handler below must let these pass through
 # untouched — it exists to catch genuine bugs, not Flask's normal replies.
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 # Password hashing is AUTH policy, so it lives in the route layer — db.py
 # stores whatever hash string it is handed and verifies nothing.
 # generate_password_hash: scrypt by default in Werkzeug 3, salted and
@@ -435,22 +435,17 @@ def require_authentication():
     db.get_user cannot find — g.user, and the gate decides again.
     """
     user_id = session.get("user_id")
-    g.user = db.get_user(user_id) if user_id is not None else None
-    if g.user is not None:
-        expected_pv = g.user.get("password_version", 1)
-        session_pv = session.get("pv")
-        if session_pv is None:
-            # Old cookie from before versions: accept once, stamp it.
-            try:
-                session["pv"] = expected_pv
-            except Exception:
-                pass
-            return
-        if session_pv != expected_pv:
-            session.clear()
-            g.user = None
-        else:
-            return
+    session_pv = session.get("pv")
+    # Both values must be integers. A missing/invalid/stale pair is not
+    # upgraded or trusted: it is cleared, so an old cookie must log in
+    # again. The role always comes from the database row below.
+    valid = (type(user_id) is int and type(session_pv) is int)
+    g.user = db.get_user(user_id) if valid else None
+    if g.user is not None and session_pv == g.user.get("password_version"):
+        return
+    g.user = None
+    if user_id is not None or session_pv is not None:
+        session.clear()
 
     endpoint = request.endpoint
     setup_mode = db.count_users() == 0
@@ -562,23 +557,32 @@ def _safe_next(next_value):
     return "/"
 
 
-def _stamp_session(user_id):
-    """Install a fresh signed-in session for one user id.
+def _require_owner():
+    """Return a JSON error response when the caller is not the owner.
 
-    session.clear() FIRST: an attacker-supplied cookie's other keys never
-    survive a privilege change. permanent=True extends the cookie's own
-    expiry (30 days, set in PERMANENT_SESSION_LIFETIME) instead of dying
-    with the browser session — the Android WebView and desktop tabs keep
-    their login across restarts.
+    The role is read from g.user, which the gate filled from SQLite — never
+    from the cookie. Call this BEFORE parsing a body or looking anything up.
+    """
+    if g.user is None:
+        return jsonify({"error": "authentication required"}), 401
+    if g.user.get("role") != "owner":
+        return jsonify({"error": "owner access required"}), 403
+    return None
+
+
+def _stamp_session(user_id, password_version):
+    """Install a fresh signed-in session from an ALREADY-VERIFIED row.
+
+    The caller passes the password_version it just read/committed, so this
+    never re-reads the database (a reread could stamp a version different
+    from the one the login actually verified). session.clear() FIRST: an
+    attacker-supplied cookie's other keys never survive a privilege change.
+    permanent=True extends the cookie's own expiry (30 days).
     """
     session.clear()
     session.permanent = True
     session["user_id"] = user_id
-    try:
-        user = db.get_user(user_id)
-        session["pv"] = user.get("password_version", 1) if user else 1
-    except Exception:
-        session["pv"] = 1
+    session["pv"] = password_version
 
 
 @app.route("/auth/setup", methods=["GET", "POST"])
@@ -589,12 +593,13 @@ def auth_setup():
     someone exists, the gate redirects a GET to login, and this route
     adds its own re-check so a directly-forged POST is answered 409.
 
-    Success does THREE things in order: creates the account WITHOUT a
-    seeded Main portfolio (seed_main=False), CLAIMS every owner-less row
-    a legacy migration left behind (the claim seeds Main itself when
-    nothing legitimately owned exists), and stamps the session in — the
-    person who installs the server is signed in at the dashboard
-    immediately.
+    Success does THREE things in ONE transaction (db.create_first_user):
+    rechecks the empty users table, creates the single OWNER, and claims
+    every owner-less legacy row (seeding Main itself when nothing
+    legitimately owned exists). The committed (id, password_version) is
+    stamped into the session — the person who installs the server is
+    signed in at the dashboard immediately. A competing setup POST gets
+    409, and any persistence failure rolls back to a generic 500.
     """
     if db.count_users() != 0:
         if request.method == "POST":
@@ -614,21 +619,24 @@ def auth_setup():
             error = "Passwords do not match."
         else:
             try:
-                user_id = db.create_user(
-                    username, generate_password_hash(password),
-                    seed_main=False)
-            except sqlite3.IntegrityError:
-                # A unique-named race (two setup tabs) — route defence in
-                # depth; essentially unreachable through this page.
-                error = "That username is taken."
-            else:
-                db.claim_unowned_data(user_id)
-                _stamp_session(user_id)
-                app.logger.info(
-                    "event=user_created request_id=%s user_id=%d username=%r",
-                    g.request_id, user_id, username,
-                )
-                return redirect(_safe_next(url_for("index")))
+                created = db.create_first_user(
+                    username, generate_password_hash(password))
+            except Exception:
+                app.logger.error(
+                    "event=setup_failed request_id=%s", g.request_id,
+                    exc_info=True)
+                return jsonify({"error": "internal server error"}), 500
+            if created is None:
+                # Another setup request committed between our check and
+                # this one's BEGIN IMMEDIATE.
+                return jsonify({"error": "setup already complete"}), 409
+            user_id, password_version = created
+            _stamp_session(user_id, password_version)
+            app.logger.info(
+                "event=user_created request_id=%s user_id=%d username=%r",
+                g.request_id, user_id, username,
+            )
+            return redirect(_safe_next(url_for("index")))
     return render_template("setup.html", error=error), (400 if error else 200)
 
 
@@ -673,7 +681,7 @@ def auth_login():
             error = "Wrong username or password."
         else:
             _login_ok(ip)
-            _stamp_session(user["id"])
+            _stamp_session(user["id"], user.get("password_version", 1))
             app.logger.info(
                 "event=login_success request_id=%s user_id=%d username=%r",
                 g.request_id, user["id"], username,
@@ -697,10 +705,10 @@ SIGNUP_KEY = "allow_signup"
 
 
 def signup_allowed():
-    """True only when a signed-in owner explicitly opted in. Anything but
-    the stored string "true" is off — absence, None, or a tampered value
-    all read as disabled."""
-    return db.get_setting(SIGNUP_KEY) == "true"
+    """The EFFECTIVE state: an owner exists AND opted in. Anything but the
+    stored string "true" is off — absence, None, or a tampered value all
+    read as disabled, and an ownerless recovery state is always off."""
+    return db.signup_enabled()
 
 
 @app.route("/auth/signup", methods=["GET", "POST"])
@@ -710,7 +718,7 @@ def auth_signup():
     toggle is on. The page re-checks what the gate cannot know — the
     exempt-list inclusion only lets signed-out requests REACH the
     decision. Success creates the person WITH their Main portfolio
-    (db.create_user's default seed; there is no legacy data to claim)
+    (there is no legacy data to claim)
     and signs the new session in, exactly like setup does.
     """
     if db.count_users() == 0:
@@ -735,12 +743,17 @@ def auth_signup():
             error = "Passwords do not match."
         else:
             try:
-                user_id = db.create_user(
+                created = db.create_signup_user_if_allowed(
                     username, generate_password_hash(password))
             except sqlite3.IntegrityError:
                 error = "That username is taken."
             else:
-                _stamp_session(user_id)
+                if created is None:
+                    # The owner just turned sign-up off (or the owner row
+                    # vanished) before this write transaction began.
+                    return jsonify({"error": "sign-up is disabled"}), 409
+                user_id, password_version = created
+                _stamp_session(user_id, password_version)
                 app.logger.info(
                     "event=user_created source=signup request_id=%s "
                     "user_id=%d username=%r", g.request_id, user_id,
@@ -753,13 +766,17 @@ def auth_signup():
 
 @app.route("/api/auth/signup-toggle", methods=["GET", "POST"])
 def signup_toggle_api():
-    """Read/flip the open sign-up switch. Any signed-in user may (the
-    People card's trust level: the owner states the policy, everyone at
-    the server shares it). GET answers the current boolean; POST demands
-    a strict boolean "allow" and stores the get_setting string form.
-    Toggle events are logged so the audit trail keeps up."""
+    """Read/flip the open sign-up switch.
+
+    GET is a shared read (every signed-in account may see the effective
+    state). POST is OWNER ONLY, checked before the body is parsed. The
+    switch is stored in app_settings (SQLite) and survives restarts.
+    """
     if request.method == "GET":
         return jsonify({"allow": signup_allowed()})
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     body = request.get_json(silent=True)
     if not (isinstance(body, dict) and isinstance(body.get("allow"), bool)):
         return jsonify(
@@ -786,15 +803,22 @@ def auth_logout():
 @app.route("/api/users", methods=["GET"])
 def list_users_api():
     """People list for the Preferences card — id + username ONLY (never
-    a password hash, enforced at the db boundary by get_users itself)."""
+    a password hash, enforced at the db boundary by get_users itself).
+    OWNER ONLY, including HEAD (Flask serves HEAD through GET)."""
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     return jsonify(db.get_users())
 
 
 @app.route("/api/users", methods=["POST"])
 def create_user_api():
-    """Create another person (Preferences People card). No open
-    registration: the endpoint requires a signed-in session, which is
-    exactly the trust model of a home server."""
+    """Create another regular person (Preferences People card). OWNER ONLY,
+    checked before the body is parsed: regular accounts read the People
+    list, but only the owner adds or removes people."""
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     body = request.get_json(silent=True)
     if not (isinstance(body, dict)
             and isinstance(body.get("username"), str)
@@ -824,15 +848,17 @@ def create_user_api():
 @app.route("/api/users/<int:user_id>", methods=["DELETE"])
 def delete_user_api(user_id):
     """Delete ANOTHER person and all their data (one transaction). The
-    three rules are route-enforced here, db-enforced there:
+    rules enforced here and in db.delete_user:
 
+      * OWNER ONLY, checked before the body is parsed;
       * self-delete is 400 — the session its own boot relies on must not
         vanish under it (the db layer can't know the session);
       * typed-username confirmation, EXACT match, like portfolio delete;
-      * the last user is refused by db.delete_user (unreachable here,
-        because a non-self delete implies a second user exists — but the
-        layer's guarantee stands on its own for direct db callers).
+      * the owner and the last user are refused (each 409).
     """
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     if user_id == g.user["id"]:
         return jsonify(
             {"error": "you cannot delete the account you are signed in as"}
@@ -848,6 +874,8 @@ def delete_user_api(user_id):
         return jsonify({"error": "user not found"}), 404
     if outcome == "mismatch":
         return jsonify({"error": "typed username does not match"}), 409
+    if outcome == "owner":
+        return jsonify({"error": "cannot delete the owner account"}), 409
     if outcome == "last":
         return jsonify({"error": "cannot delete the last user"}), 409
     app.logger.info(
@@ -885,13 +913,15 @@ def change_own_password_api():
     if not PASSWORD_MIN <= len(new_password) <= PASSWORD_MAX:
         return jsonify(
             {"error": "password must contain 8 to 128 characters"}), 400
-    db.set_password(g.user["id"], generate_password_hash(new_password))
-    db.bump_password_version(g.user["id"])
-    try:
-        session["pv"] = db.get_user(g.user["id"]).get(
-            "password_version", 1)
-    except Exception:
-        pass
+    outcome = db.set_password_and_bump(
+        g.user["id"], generate_password_hash(new_password),
+        g.user["password_version"])
+    if outcome != "ok":
+        # Another change or a deletion won the race: this cookie is
+        # no longer authoritative, so answer like a stale session.
+        session.clear()
+        return jsonify({"error": "session expired"}), 401
+    _stamp_session(g.user["id"], g.user["password_version"] + 1)
     app.logger.info(
         "event=password_changed request_id=%s user_id=%d",
         g.request_id, g.user["id"],
@@ -1134,7 +1164,15 @@ def perf_client():
     anything. No query strings, symbols, or financial data are ever
     logged from here (paths are not logged at all; only the count).
     """
-    raw = request.get_data(cache=False)
+    request.max_content_length = (
+        CLIENT_PERF_MAX_BYTES
+        if request.content_length is not None
+        else CLIENT_PERF_MAX_BYTES + 1
+    )
+    try:
+        raw = request.get_data(cache=False)
+    except RequestEntityTooLarge:
+        return jsonify({"error": "payload too large"}), 413
     if len(raw) > CLIENT_PERF_MAX_BYTES:
         return jsonify({"error": "payload too large"}), 413
     try:
@@ -3298,7 +3336,12 @@ def get_fund_classification(symbol):
 
 @app.route("/api/fund-classification/<symbol>", methods=["PUT"])
 def put_fund_classification(symbol):
-    """Insert or replace one dimension's override for one symbol."""
+    """Insert or replace one dimension's override for one symbol.
+    OWNER ONLY: this table is install-wide reference data, so changing it
+    is an installation-level action. Checked before the body is parsed."""
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     canonical = _canonical_classification_symbol(symbol)
     if canonical is None:
         return jsonify({"error": "invalid symbol"}), 400
@@ -3344,7 +3387,11 @@ def put_fund_classification(symbol):
 
 @app.route("/api/fund-classification/<symbol>", methods=["DELETE"])
 def delete_fund_classification(symbol):
-    """Delete one dimension's override, or all of them when none is named."""
+    """Delete one dimension's override, or all of them when none is named.
+    OWNER ONLY, checked before any lookup. GET stays shared."""
+    denied = _require_owner()
+    if denied is not None:
+        return denied
     canonical = _canonical_classification_symbol(symbol)
     if canonical is None:
         return jsonify({"error": "invalid symbol"}), 400
@@ -5189,8 +5236,10 @@ def perform_password_reset(username, new_password):
         return False, "No account with that name on this server."
     if not PASSWORD_MIN <= len(new_password or "") <= PASSWORD_MAX:
         return False, "Passwords are 8 to 128 characters."
-    db.set_password(user["id"], generate_password_hash(new_password))
-    db.bump_password_version(user["id"])
+    outcome = db.set_password_and_bump(
+        user["id"], generate_password_hash(new_password))
+    if outcome == "missing":
+        return False, "No account with that name on this server."
     app.logger.info(
         "event=password_reset user_id=%d username=%r",
         user["id"], user["username"],
@@ -5208,6 +5257,42 @@ def run_reset_password_command(username):
     ok, message = perform_password_reset(username, first)
     print(message, file=sys.stdout if ok else sys.stderr)
     return 0 if ok else 1
+
+
+def run_assign_owner_command(username):
+    """Local-only recovery: promote ONE existing account to owner.
+
+    Exit 0 assigned, 1 refused (owner exists or no such account), and 2
+    invalid arguments. Never transfers ownership and never enables sign-up.
+    """
+    target = (username or "").strip()
+    if not 1 <= len(target) <= USERNAME_MAX:
+        print("Usage: python app.py assign-owner <username>",
+              file=sys.stderr)
+        return 2
+    outcome = db.assign_owner(target)
+    if outcome == "assigned":
+        print(f"Owner assigned to {target}.")
+        return 0
+    if outcome == "owner-exists":
+        print("This server already has an owner; ownership is not "
+              "transferred.", file=sys.stderr)
+        return 1
+    print("No account with that name on this server.", file=sys.stderr)
+    return 1
+
+
+def run_rotate_session_secret_command():
+    """Local-only recovery: replace the session signing key.
+
+    Run this with the service STOPPED. The running process reads the secret
+    at startup, so a restart is REQUIRED before the new key takes effect.
+    All old cookies then require a new login.
+    """
+    db.rotate_session_secret()
+    print("Session secret rotated. Restart the server for it to take "
+          "effect; all existing sessions must sign in again.")
+    return 0
 
 
 def perform_fx_backfill(user_id):
@@ -5294,7 +5379,10 @@ def main(argv=None):
     argv = list(argv if argv is not None else sys.argv)
     if len(argv) <= 1:
         if real:
-            app.run(debug=True, host="0.0.0.0")
+            # Development launch is LOCAL ONLY. Debug is on only when the
+            # environment says exactly "1"; production uses Gunicorn.
+            app.run(debug=os.getenv("PORTFOLIARR_DEBUG") == "1",
+                    host="127.0.0.1")
         return 0
     return _dispatch(argv)
 
@@ -5306,8 +5394,22 @@ def _dispatch(argv):
         return run_reset_password_command(args[1])
     if command == "backfill-fx" and len(args) == 2:
         return run_backfill_fx_command(args[1])
+    if command == "assign-owner":
+        if len(args) != 2:
+            print("usage: python app.py assign-owner <username>",
+                  file=sys.stderr)
+            return 2
+        return run_assign_owner_command(args[1])
+    if command == "rotate-session-secret":
+        if len(args) != 1:
+            print("usage: python app.py rotate-session-secret",
+                  file=sys.stderr)
+            return 2
+        return run_rotate_session_secret_command()
     print("usage: python app.py reset-password <username>", file=sys.stderr)
     print("usage: python app.py backfill-fx <username|--all>", file=sys.stderr)
+    print("usage: python app.py assign-owner <username>", file=sys.stderr)
+    print("usage: python app.py rotate-session-secret", file=sys.stderr)
     return 1
 
 
