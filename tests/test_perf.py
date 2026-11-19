@@ -1,6 +1,7 @@
 """Focused contracts for performance measurement: perf.py, the perf
 routes, the Server-Timing header, and the market-data cache recording."""
 
+import io
 import json
 import logging
 import re
@@ -298,6 +299,91 @@ def test_beacon_rejects_invalid_json_and_oversize(client):
                         ).encode(),
         content_type="application/json")
     assert oversize.status_code == 413
+
+
+class _CountingInputStream(io.BytesIO):
+    """An in-process WSGI input stream that records bytes pulled from it."""
+
+    def __init__(self, data):
+        super().__init__(data)
+        self.bytes_read = 0
+
+    def read(self, size=-1):
+        chunk = super().read(size)
+        self.bytes_read += len(chunk)
+        return chunk
+
+    def readinto(self, buffer):
+        count = super().readinto(buffer)
+        self.bytes_read += count or 0
+        return count
+
+
+def _beacon_body(size):
+    prefix = b'{"page":"dashboard","pad":"'
+    suffix = b'"}'
+    return prefix + b"a" * (size - len(prefix) - len(suffix)) + suffix
+
+
+def test_beacon_declared_oversize_is_rejected_without_reading(client, caplog):
+    limit = app_module.CLIENT_PERF_MAX_BYTES
+    stream = _CountingInputStream(b" " * (limit * 4))
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/api/perf/client",
+            input_stream=stream,
+            content_type="application/json",
+        )
+    assert response.status_code == 413
+    assert response.get_json() == {"error": "payload too large"}
+    assert stream.bytes_read == 0
+    assert messages(caplog, "client_perf") == []
+    assert [row for row in perf.snapshot()["metrics"]
+            if row["name"].startswith("client.")] == []
+
+
+def test_beacon_unknown_length_stream_stops_at_the_limit(client):
+    limit = app_module.CLIENT_PERF_MAX_BYTES
+    stream = _CountingInputStream(b" " * (limit * 8))
+    response = client.post(
+        "/api/perf/client",
+        input_stream=stream,
+        content_type="application/json",
+        environ_overrides={"CONTENT_LENGTH": None,
+                           "wsgi.input_terminated": True},
+    )
+    assert response.status_code == 413
+    assert stream.bytes_read == limit + 1
+
+
+@pytest.mark.parametrize("size,status", [
+    (app_module.CLIENT_PERF_MAX_BYTES, 204),
+    (app_module.CLIENT_PERF_MAX_BYTES + 1, 413),
+])
+def test_beacon_unknown_length_limit_is_inclusive(client, size, status):
+    stream = _CountingInputStream(_beacon_body(size))
+    response = client.post(
+        "/api/perf/client",
+        input_stream=stream,
+        content_type="application/json",
+        environ_overrides={"CONTENT_LENGTH": None,
+                           "wsgi.input_terminated": True},
+    )
+    assert response.status_code == status
+    assert stream.bytes_read == size
+
+
+def test_beacon_unknown_length_without_terminated_stream_reads_nothing(client):
+    stream = _CountingInputStream(
+        _beacon_body(app_module.CLIENT_PERF_MAX_BYTES))
+    response = client.post(
+        "/api/perf/client",
+        input_stream=stream,
+        content_type="application/json",
+        environ_overrides={"CONTENT_LENGTH": None},
+    )
+    assert response.status_code == 400
+    assert stream.bytes_read == 0
 
 
 def test_beacon_drops_invalid_items_and_unknown_pages(client, caplog):

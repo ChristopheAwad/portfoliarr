@@ -66,7 +66,7 @@ pip install -r requirements.txt   # versions are pinned
 python app.py                     # dev server on http://localhost:5000
 ```
 
-Flask serves the UI on port 5000 with the interactive debugger. Confirm it is up: `curl http://localhost:5000/api/indices`.
+The development server listens on `127.0.0.1:5000`. To turn on the debugger for local development, set `PORTFOLIARR_DEBUG=1`.
 
 ## Tests
 
@@ -88,6 +88,10 @@ docker compose pull && docker compose up -d
 - The `portfoliarr-data` volume keeps the SQLite ledger across updates
 - Server timezone is pinned to `America/Toronto`
 - Gunicorn runs one process with eight threads (caches and SQLite require it)
+
+This deployment uses plain HTTP. Use it on a trusted private LAN, do not forward the port to the internet, and finish first-run setup before allowing other devices to connect.
+
+The account security upgrade signs everyone out once and turns off legacy open signup. The installation owner manages accounts and shared fund classifications. See the [upgrade and recovery runbook](docs/operations/audit-rollout.md) for backups, owner recovery, and password resets.
 
 ## Android app
 

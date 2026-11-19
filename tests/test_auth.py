@@ -8,15 +8,17 @@
 # for Yahoo wherever a route body would fetch quotes.
 
 import logging
+import sqlite3
 import sys
 
 import pytest
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import app as app_module
 from app import app, perform_password_reset, run_reset_password_command
 import db
-from conftest import make_legacy_db, make_quote, seed_user, TESTER_PASSWORD
+from conftest import (make_legacy_db, make_quote, seed_user, sign_in,
+                      TESTER_PASSWORD)
 
 
 def browser():
@@ -70,8 +72,7 @@ def test_deleted_user_session_is_rejected_not_leaked(client):
     500 and never their data."""
     third_id = seed_user("third")
     third_browser = app.test_client()
-    with third_browser.session_transaction() as session:
-        session["user_id"] = third_id
+    sign_in(third_browser, third_id)
     assert third_browser.get("/api/watchlist").status_code == 200
     assert client.delete(f"/api/users/{third_id}",
                          json={"username": "third"}).status_code == 204
@@ -412,11 +413,13 @@ def test_main_dispatch_reset_and_usage(fresh_db, monkeypatch, capsys):
 
 def test_main_no_arguments_means_the_dev_server(monkeypatch):
     booted = []
+    monkeypatch.delenv("PORTFOLIARR_DEBUG", raising=False)
     monkeypatch.setattr(sys, "argv", ["app.py"])
     monkeypatch.setattr(app_module.app, "run",
                         lambda **options: booted.append(options))
     assert app_module.main(None) == 0
-    assert len(booted) == 1 and booted[0]["host"] == "0.0.0.0"
+    assert len(booted) == 1 and booted[0]["host"] == "127.0.0.1"
+    assert booted[0]["debug"] is False
     # A LIST argument never boots the server: tests exercise main() freely.
     assert app_module.main(["app.py"]) == 0
     assert len(booted) == 1
@@ -458,7 +461,7 @@ def test_signup_toggle_rejects_bad_bodies(client):
 
 
 def test_signup_page_locked_by_default(fresh_db):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     web_client = browser()
     response = web_client.get("/auth/signup")
     assert response.status_code == 302
@@ -468,7 +471,7 @@ def test_signup_page_locked_by_default(fresh_db):
 
 
 def test_signup_page_unlocked(fresh_db):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     db.set_setting("allow_signup", "true")
     web_client = browser()
     page = web_client.get("/auth/signup")
@@ -480,7 +483,7 @@ def test_signup_page_unlocked(fresh_db):
 
 
 def test_signup_success_creates_main_and_signs_in(fresh_db):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     db.set_setting("allow_signup", "true")
     web_client = browser()
     response = web_client.post("/auth/signup", data={
@@ -494,7 +497,7 @@ def test_signup_success_creates_main_and_signs_in(fresh_db):
 
 
 def test_signup_validation_ladder(fresh_db):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     db.set_setting("allow_signup", "true")
     web_client = browser()
     cases = [
@@ -515,7 +518,7 @@ def test_signup_validation_ladder(fresh_db):
 
 
 def test_signup_refused_when_disabled(fresh_db):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     web_client = browser()
     assert web_client.post("/auth/signup", data={
         "username": "neu", "password": "pw-key-9",
@@ -535,7 +538,7 @@ def test_signed_in_visitor_redirected_from_signup(client):
 
 
 def test_signup_events_logged_without_secrets(fresh_db, caplog):
-    seed_user("tester", TESTER_PASSWORD)
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
     db.set_setting("allow_signup", "true")
     web_client = browser()
     with caplog.at_level(logging.INFO):
@@ -547,3 +550,233 @@ def test_signup_events_logged_without_secrets(fresh_db, caplog):
     assert any("event=user_created " in line and "username='neu'" in line
                and "source=signup" in line for line in lines)
     assert "pw-key-9" not in "".join(lines)
+
+
+# ── Owner-only management surface ─────────────────────────────────────
+
+def regular_browser(username="kid"):
+    uid = seed_user(username, TESTER_PASSWORD)
+    web_client = browser()
+    sign_in(web_client, uid)
+    return web_client, uid
+
+
+def test_owner_only_endpoints_reject_regular_users_before_body(client):
+    regular, regular_id = regular_browser()
+    owner_id = db.get_user_by_username("tester")["id"]
+    calls = [
+        ("get", "/api/users", None),
+        ("head", "/api/users", None),
+        ("post", "/api/users", {"username": "x", "password": "y"}),
+        ("delete", f"/api/users/{owner_id}", {"username": "tester"}),
+        ("post", "/api/auth/signup-toggle", {"allow": True}),
+        ("put", "/api/fund-classification/VEQT.TO",
+         {"dimension": "country", "weights": {"Canada": 1}}),
+        ("delete", "/api/fund-classification/VEQT.TO", None),
+    ]
+    for method, url, body in calls:
+        response = (getattr(regular, method)(url) if body is None
+                    else getattr(regular, method)(url, json=body))
+        assert response.status_code == 403, (method, url)
+        if method != "head":
+            assert response.get_json()["error"] == "owner access required"
+
+    # Shared reads and the account's own private data stay available.
+    assert regular.get("/api/auth/signup-toggle").get_json() == {"allow": False}
+    assert regular.get("/api/fund-classification/VEQT.TO").status_code == 200
+    assert regular.get("/api/portfolios").status_code == 200
+    assert regular.get("/api/watchlist").status_code == 200
+    assert regular.post("/api/auth/password", json={
+        "current_password": TESTER_PASSWORD,
+        "new_password": "regular-own-key-1"}).status_code == 204
+
+
+def test_owner_can_still_manage_people_and_policy(client):
+    assert client.get("/api/users").status_code == 200
+    assert client.post("/api/auth/signup-toggle",
+                       json={"allow": True}).status_code == 204
+    kid = client.post("/api/users", json={
+        "username": "kid", "password": "kid-key-1"})
+    assert kid.status_code == 201
+    assert client.delete(f"/api/users/{kid.json['id']}",
+                         json={"username": "kid"}).status_code == 204
+
+
+def test_owner_account_cannot_be_deleted_via_api(client):
+    kid, _ = regular_browser()
+    owner_id = db.get_user_by_username("tester")["id"]
+    response = kid.delete(f"/api/users/{owner_id}", json={"username": "tester"})
+    assert response.status_code == 403
+
+
+def test_signed_out_owner_endpoints_are_401_not_403(fresh_db):
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
+    anon = browser()
+    assert anon.get("/api/users").status_code == 401
+    assert anon.post("/api/users", json={}).status_code == 401
+    assert anon.post("/api/auth/signup-toggle",
+                     json={"allow": True}).status_code == 401
+    assert anon.put("/api/fund-classification/VEQT.TO",
+                    json={}).status_code == 401
+
+
+# ── Session version and role authority ────────────────────────────────
+
+def _owner_id():
+    return db.get_user_by_username("tester")["id"]
+
+
+def test_missing_pv_session_is_rejected_and_cleared(client):
+    web_client = browser()
+    with web_client.session_transaction() as session:
+        session["user_id"] = _owner_id()
+    assert web_client.get("/api/watchlist").status_code == 401
+    with web_client.session_transaction() as session:
+        assert "user_id" not in session
+        assert "pv" not in session
+
+
+def test_non_integer_session_values_are_rejected(client):
+    for user_id, pv in (("1", 1), (1, "1"), (True, 1), (1, True)):
+        web_client = browser()
+        with web_client.session_transaction() as session:
+            session["user_id"] = user_id
+            session["pv"] = pv
+        assert web_client.get("/api/watchlist").status_code == 401, (
+            user_id, pv)
+
+
+def test_stale_pv_is_rejected_and_cleared(client):
+    web_client = browser()
+    with web_client.session_transaction() as session:
+        session["user_id"] = _owner_id()
+        session["pv"] = 999
+    assert web_client.get("/api/watchlist").status_code == 401
+    with web_client.session_transaction() as session:
+        assert "user_id" not in session
+
+
+def test_cookie_role_cannot_escalate(client):
+    regular, _ = regular_browser()
+    with regular.session_transaction() as session:
+        session["role"] = "owner"
+    assert regular.get("/api/users").status_code == 403
+
+
+def test_login_stamps_the_verified_rows_pv(fresh_db):
+    db.create_first_user("tester", generate_password_hash(TESTER_PASSWORD))
+    web_client = browser()
+    assert login(web_client, "tester", TESTER_PASSWORD).status_code == 302
+    with web_client.session_transaction() as session:
+        assert session["pv"] == db.get_user_by_username(
+            "tester")["password_version"]
+
+
+# ── Setup transaction and failure paths ───────────────────────────────
+
+def test_setup_concurrent_race_answers_409(fresh_db, monkeypatch):
+    monkeypatch.setattr(db, "create_first_user",
+                        lambda username, password_hash: None)
+    response = browser().post("/auth/setup", data={
+        "username": "owner", "password": "owner-pass-1",
+        "confirm_password": "owner-pass-1"})
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "setup already complete"}
+    assert db.count_users() == 0
+
+
+def test_setup_persistence_failure_is_generic_500_and_rolls_back(
+        fresh_db, monkeypatch):
+    def explode(username, password_hash):
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(db, "create_first_user", explode)
+    response = browser().post("/auth/setup", data={
+        "username": "owner", "password": "owner-pass-1",
+        "confirm_password": "owner-pass-1"})
+    assert response.status_code == 500
+    assert response.get_json() == {"error": "internal server error"}
+    assert db.count_users() == 0
+
+
+# ── Local recovery commands ───────────────────────────────────────────
+
+def test_assign_owner_cli_contract(fresh_db, capsys):
+    kid = seed_user("kid", TESTER_PASSWORD)
+    assert app_module.main(["app.py", "assign-owner", "ghost"]) == 1
+    assert "No account" in capsys.readouterr().err
+    assert app_module.main(["app.py", "assign-owner", "  KID "]) == 0
+    assert "Owner assigned to" in capsys.readouterr().out
+    assert db.get_user(kid)["role"] == "owner"
+    assert db.signup_enabled() is False
+
+    seed_user("later", TESTER_PASSWORD)
+    assert app_module.main(["app.py", "assign-owner", "later"]) == 1
+    assert "already has an owner" in capsys.readouterr().err
+    assert app_module.main(["app.py", "assign-owner"]) == 2
+    assert "usage:" in capsys.readouterr().err.lower()
+    assert app_module.main(["app.py", "assign-owner", "   "]) == 2
+    assert "usage:" in capsys.readouterr().err.lower()
+
+
+def test_rotate_session_secret_cli_requires_restart_message(
+        fresh_db, capsys):
+    before = db.get_setting("secret_key")
+    assert app_module.main(["app.py", "rotate-session-secret"]) == 0
+    after = db.get_setting("secret_key")
+    assert after and after != before
+    output = capsys.readouterr().out
+    assert "Restart the server" in output
+    assert after not in output
+    assert app_module.main(
+        ["app.py", "rotate-session-secret", "extra"]) == 2
+
+
+def test_dev_server_host_and_debug_follow_the_environment(monkeypatch):
+    booted = []
+    monkeypatch.setattr(sys, "argv", ["app.py"])
+    monkeypatch.setattr(app_module.app, "run",
+                        lambda **options: booted.append(options))
+    monkeypatch.setenv("PORTFOLIARR_DEBUG", "1")
+    assert app_module.main(None) == 0
+    assert booted[-1] == {"debug": True, "host": "127.0.0.1"}
+
+    for value in ("true", "TRUE", "yes", "0", ""):
+        monkeypatch.setenv("PORTFOLIARR_DEBUG", value)
+        assert app_module.main(None) == 0
+        assert booted[-1] == {"debug": False, "host": "127.0.0.1"}
+
+
+def test_password_change_stale_cas_answers_401(client, monkeypatch):
+    monkeypatch.setattr(db, "set_password_and_bump",
+                        lambda *args, **kwargs: "stale")
+    response = client.post("/api/auth/password", json={
+        "current_password": TESTER_PASSWORD,
+        "new_password": "brand-new-key-1"})
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "session expired"}
+    assert client.get("/api/watchlist").status_code == 401
+
+
+def test_setup_stamps_the_committed_tuple(fresh_db, monkeypatch):
+    monkeypatch.setattr(db, "create_first_user",
+                        lambda username, password_hash: (42, 7))
+    web_client = browser()
+    assert web_client.post("/auth/setup", data={
+        "username": "owner", "password": "owner-pass-1",
+        "confirm_password": "owner-pass-1"}).status_code == 302
+    with web_client.session_transaction() as session:
+        assert (session["user_id"], session["pv"]) == (42, 7)
+
+
+def test_signup_stamps_the_committed_tuple(fresh_db, monkeypatch):
+    db.create_first_user("owner", generate_password_hash(TESTER_PASSWORD))
+    db.set_setting("allow_signup", "true")
+    monkeypatch.setattr(db, "create_signup_user_if_allowed",
+                        lambda username, password_hash: (42, 7))
+    web_client = browser()
+    assert web_client.post("/auth/signup", data={
+        "username": "neu", "password": "pw-key-9",
+        "confirm_password": "pw-key-9"}).status_code == 302
+    with web_client.session_transaction() as session:
+        assert (session["user_id"], session["pv"]) == (42, 7)

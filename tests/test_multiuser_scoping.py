@@ -12,15 +12,14 @@
 
 from app import app
 import db
-from conftest import make_quote, seed_user
+from conftest import make_quote, seed_user, sign_in
 
 
 def second_browser(username="bert"):
     """Another person's browser, signed in as their own account."""
     web_client = app.test_client()
     uid = seed_user(username)
-    with web_client.session_transaction() as session:
-        session["user_id"] = uid
+    sign_in(web_client, uid)
     return web_client, uid
 
 
@@ -105,8 +104,7 @@ def test_omitted_portfolio_id_resolves_within_the_caller(client, fake_market):
 def test_watchlist_is_per_user(client, fake_market):
     bert_browser = app.test_client()
     bert_id = seed_user("bert")
-    with bert_browser.session_transaction() as session:
-        session["user_id"] = bert_id
+    sign_in(bert_browser, bert_id)
 
     fake_market.quotes["AAPL"] = make_quote("AAPL", 10, 9)
     fake_market.names["AAPL"] = "Apple"
@@ -141,8 +139,7 @@ def test_watchlist_is_per_user(client, fake_market):
 def test_stock_page_watched_stamp_follows_the_session(client):
     bert_browser = app.test_client()
     bert_id = seed_user("bert")
-    with bert_browser.session_transaction() as session:
-        session["user_id"] = bert_id
+    sign_in(bert_browser, bert_id)
     db.add_symbol("AAPL", 1)
 
     watched = client.get("/stock/AAPL").get_data(as_text=True)

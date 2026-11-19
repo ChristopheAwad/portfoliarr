@@ -35,6 +35,7 @@ from pathlib import Path
 
 # sqlite3 is part of Python's standard library — no pip install needed.
 # It talks to a self-contained database file on disk.
+import secrets
 import sqlite3
 
 # json encodes the manual classification weights (#62): a small dict stored
@@ -150,7 +151,9 @@ def init():
                     CHECK (length(username) BETWEEN 1 AND 30
                            AND username = trim(username)),
                 password_hash TEXT NOT NULL,
-                password_version INTEGER NOT NULL DEFAULT 1
+                password_version INTEGER NOT NULL DEFAULT 1,
+                role          TEXT NOT NULL DEFAULT 'user'
+                    CHECK (role IN ('owner', 'user'))
             )
             """
         )
@@ -163,6 +166,41 @@ def init():
                 "ALTER TABLE users ADD COLUMN password_version INTEGER"
                 " NOT NULL DEFAULT 1"
             )
+        # Role was added after the first multi-user release. Only this
+        # migration branch may promote ID 1: an existing role column with
+        # no owner is ambiguous history and needs local recovery.
+        role_added = "role" not in user_columns
+        if role_added:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL"
+                " DEFAULT 'user' CHECK (role IN ('owner', 'user'))"
+            )
+            conn.execute("UPDATE users SET role = 'owner' WHERE id = 1")
+            # Legacy servers let any signed-in person flip open sign-up.
+            # On upgrade only the owner may do so, so stale opt-ins reset.
+            conn.execute("DELETE FROM app_settings WHERE key = 'allow_signup'")
+        # Normalize anything a hand-edited database could hold. A single
+        # existing owner survives even when it is not ID 1; MULTIPLE owners
+        # are ambiguous, so every one of them becomes a regular user.
+        conn.execute(
+            "UPDATE users SET role = 'user'"
+            " WHERE role IS NULL OR role NOT IN ('owner', 'user')"
+        )
+        owner_count = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'owner'"
+        ).fetchone()[0]
+        if owner_count > 1:
+            conn.execute("UPDATE users SET role = 'user' WHERE role = 'owner'")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_single_owner"
+            " ON users(role) WHERE role = 'owner'"
+        )
+        if conn.execute(
+            "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1"
+        ).fetchone() is None:
+            # Ownerless is a recovery state: default sign-up OFF, and keep
+            # it off after assign-owner (which never enables it).
+            conn.execute("DELETE FROM app_settings WHERE key = 'allow_signup'")
 
         # The watchlist: one user's symbols to watch, not a global list.
         # (user_id, symbol) is the identity, so two users can watch the
@@ -421,6 +459,87 @@ def init():
             """
         )
 
+        # Both settings are prepared INSIDE this migration transaction: a
+        # user id must never be reused after its row is deleted, and the
+        # session secret cutover must happen exactly once.
+        _ensure_user_id_high_water(conn)
+        _ensure_session_secret(conn)
+
+
+def _setting_int(conn, key, default=0):
+    """Read one app_settings integer, tolerating a missing/garbled value."""
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return default
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return default
+
+
+def _ensure_user_id_high_water(conn):
+    """Initialize or raise the user-id high-water mark; never lower it."""
+    stored = _setting_int(conn, "user_id_high_water")
+    max_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM users").fetchone()[0]
+    value = max(stored, int(max_id))
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('user_id_high_water', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(value),),
+    )
+
+
+def _ensure_session_secret(conn):
+    """Create a secret on a fresh install or rotate a legacy one ONCE.
+
+    The sentinel row is the durable proof that the cutover already ran:
+    without it an old install's persisted secret is replaced (old cookies
+    must log in again); with it, restarts keep the same secret. A missing
+    secret is bootstrapped even when the sentinel exists.
+    """
+    sentinel = conn.execute(
+        "SELECT 1 FROM app_settings"
+        " WHERE key = 'security_session_cutover_v1'"
+    ).fetchone()
+    secret = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'secret_key'"
+    ).fetchone()
+    if sentinel is None:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('secret_key', ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (secrets.token_hex(32),),
+        )
+        conn.execute(
+            "INSERT INTO app_settings (key, value)"
+            " VALUES ('security_session_cutover_v1', '1')"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+    elif secret is None:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('secret_key', ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (secrets.token_hex(32),),
+        )
+
+
+def rotate_session_secret():
+    """Replace the signing key for a stopped-service recovery."""
+    with _connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('secret_key', ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (secrets.token_hex(32),),
+        )
+        conn.execute(
+            "INSERT INTO app_settings (key, value)"
+            " VALUES ('security_session_cutover_v1', '1')"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+
 
 # ---------------------------------------------------------------------------
 # SERVER SETTINGS — one key/value row today: the session secret. Settings
@@ -547,20 +666,10 @@ def get_user(user_id):
     with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT id, username, password_hash, password_version"
+            "SELECT id, username, password_hash, password_version, role"
             " FROM users WHERE id = ?",
             (user_id,)).fetchone()
     return dict(row) if row else None
-
-
-def bump_password_version(user_id):
-    """Increase the session version so old cookies stop working."""
-    with _connection() as conn:
-        conn.execute(
-            "UPDATE users SET password_version = password_version + 1"
-            " WHERE id = ?",
-            (user_id,),
-        )
 
 
 def get_user_by_username(username):
@@ -570,8 +679,8 @@ def get_user_by_username(username):
     with _connection() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT id, username, password_hash, password_version FROM users"
-            " WHERE username = ?", (username,)).fetchone()
+            "SELECT id, username, password_hash, password_version, role"
+            " FROM users WHERE username = ?", (username,)).fetchone()
     return dict(row) if row else None
 
 
@@ -580,28 +689,84 @@ def count_users():
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
 
+def owner_exists():
+    with _connection() as conn:
+        return conn.execute(
+            "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1"
+        ).fetchone() is not None
+
+
+def _signup_enabled(conn):
+    """Owner present AND the stored switch is exactly the string 'true'."""
+    owner = conn.execute(
+        "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1").fetchone()
+    if owner is None:
+        return False
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'allow_signup'"
+    ).fetchone()
+    return row is not None and row[0] == "true"
+
+
+def signup_enabled():
+    with _connection() as conn:
+        return _signup_enabled(conn)
+
+
+def _next_user_id(conn):
+    """Reserve the next user id from a durable high-water mark.
+
+    SQLite reuses a deleted highest rowid; an auth cookie for that old id
+    must never become valid for a new person, so ids only ever increase.
+    The mark lives in app_settings and is written in the SAME transaction
+    as the user insert.
+    """
+    next_id = max(
+        _setting_int(conn, "user_id_high_water"),
+        int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM users").fetchone()[0]),
+    ) + 1
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('user_id_high_water', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(next_id),),
+    )
+    return next_id
+
+
+def _claim_unowned(conn, user_id):
+    """Adopt owner-less legacy rows and guarantee one portfolio.
+
+    Runs inside a caller's write transaction. Ledger ids and foreign keys
+    never change: only the portfolio/watchlist owner columns are stamped.
+    """
+    conn.execute(
+        "UPDATE portfolios SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    conn.execute(
+        "UPDATE watchlist SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    owned = conn.execute(
+        "SELECT 1 FROM portfolios WHERE user_id = ? LIMIT 1",
+        (user_id,)).fetchone()
+    if owned is None:
+        conn.execute(
+            "INSERT INTO portfolios (name, sort_order, user_id)"
+            " VALUES ('Main', 0, ?)", (user_id,))
+
+
 def create_user(username, password_hash, seed_main=True):
-    """Insert one account AND, by default, its first portfolio ('Main')
-    in one write.
+    """Insert one REGULAR account (and, by default, its Main portfolio).
 
-    Both statements run in one BEGIN IMMEDIATE block, so a username
-    collision rolls EVERYTHING back — an account can never exist without
-    its Main portfolio. Duplicate usernames raise IntegrityError (the
-    UNIQUE + NOCASE constraint catches case-insensitive repeats); the
-    route turns that into its 'taken' reply.
-
-    Setup calls this with seed_main=False: the legacy there has to be
-    CLAIMED first (an old install's 'Main' portfolio must be adopted, not
-    doubled), and claim_unowned_data is what seeds Main when there is
-    nothing legitimately to adopt.
+    Every insert path shares `_next_user_id`, so a deleted id is never
+    handed out again. The role is set explicitly here — setup uses
+    create_first_user for the one owner.
     """
     with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        cursor = conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (username, password_hash),
+        user_id = _next_user_id(conn)
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role)"
+            " VALUES (?, ?, ?, 'user')",
+            (user_id, username, password_hash),
         )
-        user_id = cursor.lastrowid
         if seed_main:
             conn.execute(
                 "INSERT INTO portfolios (name, sort_order, user_id)"
@@ -610,15 +775,109 @@ def create_user(username, password_hash, seed_main=True):
         return user_id
 
 
-def set_password(user_id, password_hash):
-    """Store a NEW hash (verification of the old password already happened
-    in the route). False means no such user."""
+def create_first_user(username, password_hash):
+    """Create the single owner and claim a legacy install, atomically.
+
+    Returns (id, password_version), or None when another setup already
+    won the race. The empty-users check and the insert share one
+    BEGIN IMMEDIATE transaction; any failure rolls the whole setup back.
+    """
     with _connection() as conn:
-        cursor = conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (password_hash, user_id),
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None:
+            return None
+        user_id = _next_user_id(conn)
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role)"
+            " VALUES (?, ?, ?, 'owner')",
+            (user_id, username, password_hash),
         )
-        return cursor.rowcount > 0
+        _claim_unowned(conn, user_id)
+        password_version = conn.execute(
+            "SELECT password_version FROM users WHERE id = ?", (user_id,)
+        ).fetchone()[0]
+        return user_id, password_version
+
+
+def create_signup_user_if_allowed(username, password_hash):
+    """Self-serve regular account while the OWNER has sign-up on.
+
+    The owner check, the setting check, and the insert are one write
+    transaction, so a concurrent toggle-off cannot slip a new account in.
+    Returns (id, password_version), or None when sign-up is disabled.
+    Duplicate usernames still raise IntegrityError, exactly as before.
+    """
+    with _connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not _signup_enabled(conn):
+            return None
+        user_id = _next_user_id(conn)
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role)"
+            " VALUES (?, ?, ?, 'user')",
+            (user_id, username, password_hash),
+        )
+        conn.execute(
+            "INSERT INTO portfolios (name, sort_order, user_id)"
+            " VALUES ('Main', 0, ?)", (user_id,))
+        password_version = conn.execute(
+            "SELECT password_version FROM users WHERE id = ?", (user_id,)
+        ).fetchone()[0]
+        return user_id, password_version
+
+
+def assign_owner(username):
+    """Local recovery: make one existing account the owner.
+
+    Refuses when an owner already exists — there is no transfer. Never
+    creates an account and never enables open sign-up.
+
+    Returns "assigned", "owner-exists", or "missing".
+    """
+    with _connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute(
+            "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1"
+        ).fetchone() is not None:
+            return "owner-exists"
+        row = conn.execute(
+            "SELECT id FROM users WHERE username = ?", ((username or "").strip(),)
+        ).fetchone()
+        if row is None:
+            return "missing"
+        conn.execute("UPDATE users SET role = 'owner' WHERE id = ?", (row[0],))
+        return "assigned"
+
+
+def set_password_and_bump(user_id, password_hash, expected_version=None):
+    """Store a new hash and invalidate older sessions in ONE write.
+
+    With `expected_version` this is a compare-and-swap for the web path:
+    "stale" means another change won first. Without it (the terminal
+    reset) the update still refuses an account that vanished:
+    "ok", "stale", or "missing".
+    """
+    with _connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if expected_version is None:
+            cursor = conn.execute(
+                "UPDATE users SET password_hash = ?,"
+                " password_version = password_version + 1 WHERE id = ?",
+                (password_hash, user_id),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE users SET password_hash = ?,"
+                " password_version = password_version + 1"
+                " WHERE id = ? AND password_version = ?",
+                (password_hash, user_id, expected_version),
+            )
+        if cursor.rowcount > 0:
+            return "ok"
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        return "stale" if exists is not None else "missing"
 
 
 def delete_user(user_id, confirmation):
@@ -628,20 +887,24 @@ def delete_user(user_id, confirmation):
 
         "missing"   no such user id
         "mismatch"  typed username != stored username (exact match)
+        "owner"     the single owner cannot be deleted
         "last"      refusing to delete the only account (it's the one
                     thing keeping the server reachable at all)
         "deleted"   done
 
     Deleting the account you're signed in as is the ROUTE layer's rule
-    (it knows the session); this layer only refuses the LAST user.
+    (it knows the session); this layer refuses the OWNER and the LAST user.
+    The owner check happens inside the same transaction as the cascade.
     """
     with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT username FROM users WHERE id = ?", (user_id,)
+            "SELECT username, role FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if row is None:
             return "missing"
+        if row[1] == "owner":
+            return "owner"
         if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1:
             return "last"
         if confirmation != row[0]:
@@ -666,19 +929,7 @@ def claim_unowned_data(user_id):
     """
     with _connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "UPDATE portfolios SET user_id = ? WHERE user_id IS NULL",
-            (user_id,))
-        conn.execute(
-            "UPDATE watchlist SET user_id = ? WHERE user_id IS NULL",
-            (user_id,))
-        owned = conn.execute(
-            "SELECT 1 FROM portfolios WHERE user_id = ? LIMIT 1",
-            (user_id,)).fetchone()
-        if owned is None:
-            conn.execute(
-                "INSERT INTO portfolios (name, sort_order, user_id)"
-                " VALUES ('Main', 0, ?)", (user_id,))
+        _claim_unowned(conn, user_id)
 
 
 def get_portfolios(user_id):

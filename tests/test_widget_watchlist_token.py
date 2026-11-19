@@ -27,7 +27,7 @@ import db
 import app as app_module
 from app import app
 from conftest import (CLIENT_USER_ID, main_portfolio_id, make_quote,
-                      seed_user)
+                      seed_user, sign_in)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -242,11 +242,13 @@ def test_watchlist_bearer_401_after_revoke(client, fake_market):
 
 
 def test_watchlist_token_cascades_on_user_delete(client, fake_market):
-    token = create_watchlist_token(client).get_json()["token"]
-    seed_user("bob")
-    assert db.delete_user(CLIENT_USER_ID, "tester") == "deleted"
+    bob_id = seed_user("bob")
+    bob = app.test_client()
+    sign_in(bob, bob_id)
+    token = create_watchlist_token(bob).get_json()["token"]
+    assert db.delete_user(bob_id, "bob") == "deleted"
     assert db.get_widget_token(token_hash(token)) is None
-    assert client.get(
+    assert bob.get(
         "/api/widget/watchlist", headers=auth(token)).status_code == 401
 
 

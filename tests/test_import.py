@@ -367,3 +367,18 @@ def test_commit_recommitting_duplicates_by_design(client, fake_market):
 def test_commit_rejects_bad_bodies_with_400(client):
     res = client.post("/api/transactions/import/commit")   # no JSON body
     assert res.status_code == 400
+
+
+def test_commit_accepts_import_text_over_8_kib(client, fake_market):
+    """The beacon's 8 KiB request cap must stay per-request: a real import
+    paste larger than it still commits in full."""
+    text = "\n".join([PASTE] * 300)
+    assert len(text.encode()) > app_module.CLIENT_PERF_MAX_BYTES
+    fake_market.quotes["CM"] = make_quote("CM", currency="USD")
+    fake_market.fx_on[("USDCAD", "2026-03-16")] = 1.3725
+
+    res = client.post("/api/transactions/import/commit", json={"text": text})
+
+    assert res.status_code == 200
+    assert res.get_json() == {"imported": 300, "failed": []}
+    assert len(db.get_transactions(1)) == 300

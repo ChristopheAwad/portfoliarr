@@ -38,16 +38,21 @@
                 <ul id="widget-list" class="portfolio-manage-list"></ul>
             </div>
 
-            <!-- PEOPLE — user accounts for this server. The signed-in
-                 user's id rides in data-current-uid (the People card needs
-                 it to hide the delete control on its own row; the server
-                 re-checks everything anyway). preferences.js fills the
-                 list from /api/users and posts new people; deletion and
-                 password change are typed-confirmed modals. -->
+            <!-- PEOPLE — user accounts for this server. Only the owner
+                 sees this card and its controls; every other account is
+                 answered by the server's role checks. The signed-in
+                 user's id rides in data-current-uid (the People card
+                 needs it to hide the delete control on its own row; the
+                 server re-checks everything anyway). preferences.js fills
+                 the list from /api/users and posts new people; deletion
+                 is a typed-confirmed modal. -->
+            {% if g.user and g.user.get('role') == 'owner' %}
             <div class="card preferences-card" id="people-card"
                  data-current-uid="{{ g.user.id }}">
                 <h3>People</h3>
-                <p>People share this server. Each person owns only their own portfolios and watchlist.</p>
+                <p>People share this server. Only the owner can add or
+                    remove people. Each person owns only their own
+                    portfolios and watchlist.</p>
                 <form id="people-create" class="portfolio-create">
                     <label for="people-new-username">New person</label>
                     <input id="people-new-username" name="username"
@@ -66,6 +71,16 @@
                            class="pref-check">
                 </label>
                 <ul id="people-list" class="portfolio-manage-list"></ul>
+            </div>
+            {% endif %}
+
+            <!-- PASSWORD — every account changes its OWN password here.
+                 This card is separate from People so a regular account
+                 keeps the password flow without seeing (or requesting)
+                 the owner-only People controls. -->
+            <div class="card preferences-card" id="password-card">
+                <h3>Your password</h3>
+                <p>Change the password for your own account.</p>
                 <form id="password-change" class="portfolio-create">
                     <label for="change-current">Your current password</label>
                     <input id="change-current" name="current_password"

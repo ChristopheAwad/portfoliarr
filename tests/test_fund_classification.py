@@ -259,13 +259,12 @@ def test_signed_out_requests_are_401(fresh_db):
 
 def test_overrides_are_shared_across_users(client, fresh_db):
     """Install-wide on purpose: user A's entry is visible to user B."""
-    from conftest import seed_user
+    from conftest import seed_user, sign_in
     from app import app
 
     user_b_id = seed_user("someone-else", "other-password-1234")
     other = app.test_client()
-    with other.session_transaction() as session:
-        session["user_id"] = user_b_id
+    sign_in(other, user_b_id)
 
     client.put("/api/fund-classification/VEQT.TO", json={
         "dimension": "country", "weights": {"Canada": 100}})

@@ -1421,9 +1421,10 @@ function updateAllocExcluded(excluded) {
 
 // The "unclassified" note (#62): tickers whose donut wedge is an n/a or
 // Unknown placeholder because the data is missing or does not apply. Each
-// links to the stock page, where the classifications card lets the signed-in
-// person enter the real weights. Distinct from the excluded note, which is
-// about holdings that cannot contribute at all.
+// links to the stock page, where the allocation card shows the shared
+// classification and (for the owner) lets them enter the real weights.
+// Distinct from the excluded note, which is about holdings that cannot
+// contribute at all.
 function updateAllocUnclassified(unclassified) {
     if (!allocUnclassifiedEl) return;
     if (unclassified && unclassified.length > 0) {
@@ -1435,7 +1436,7 @@ function updateAllocUnclassified(unclassified) {
             const link = document.createElement("a");
             link.href = `/stock/${encodeURIComponent(entry.ticker)}#classification-card`;
             link.textContent = entry.ticker;
-            link.title = `${entry.reason} — set it on the stock page`;
+            link.title = `${entry.reason} — open the stock page`;
             allocUnclassifiedEl.append(link);
         });
         allocUnclassifiedEl.style.display = "block";
