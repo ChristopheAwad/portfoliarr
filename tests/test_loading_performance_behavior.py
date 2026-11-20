@@ -815,6 +815,7 @@ def test_first_completed_draw_starts_the_other_eight_preloads(has_data):
         const calls = [], marks = [];
         globalThis.refreshPortfolioChart = (period, opts) => calls.push({period, opts});
         globalThis.perfMark = mark => marks.push(mark);
+        globalThis.window = {};
         vm.runInThisContext(src.slice(start, end));
     """, f"""
         portfolioChartPainted({{period:'1D', hasData:{str(has_data).lower()}}});

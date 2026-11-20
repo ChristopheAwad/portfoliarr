@@ -189,6 +189,43 @@
         setTimeout(sendBeacon, 15000);
     });
 
+    // The opt-in weekly report is independent of the live performance beacon.
+    const generation = document.body?.dataset.localTelemetryGeneration;
+    const sections = { dashboard: ["dashboard_summary", "dashboard_chart"],
+        ledger: ["ledger_rows"] }[state.page];
+    if (generation && sections && !document.hidden && !document.prerendering) {
+        const viewport = window.matchMedia("(max-width: 640px)").matches ? "narrow" : "wide";
+        const results = new Map();
+        const deadline = 30000;
+        let sent = false;
+        const timer = setTimeout(flush, Math.max(0, deadline - performance.now()));
+        function flush() {
+            if (sent) return;
+            sent = true;
+            clearTimeout(timer);
+            try {
+                const payload = { generation, page: state.page, viewport,
+                    sections: sections.map((metric) => results.get(metric) ||
+                        { metric, outcome: "unfinished" }) };
+                navigator.sendBeacon("/api/telemetry/client", new Blob(
+                    [JSON.stringify(payload)], { type: "application/json" }));
+            } catch { /* measurements must never interrupt the app */ }
+        }
+        window.telemetrySection = (metric, outcome) => {
+            if (sent || !sections.includes(metric) || results.has(metric)) return;
+            const now = performance.now();
+            if (document.hidden || now > deadline) { flush(); return; }
+            const result = { metric, outcome };
+            if (outcome === "ready") result.duration_ms = Math.floor(now);
+            results.set(metric, result);
+            if (results.size === sections.length) flush();
+        };
+        window.addEventListener("pagehide", flush, { once: true });
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) flush();
+        });
+    }
+
     // --- Opt-in overlay ------------------------------------------------
     const overlayRequested = (() => {
         try {

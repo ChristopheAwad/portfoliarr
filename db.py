@@ -56,7 +56,7 @@ import perf
 DB_PATH = Path(__file__).resolve().parent / "instance" / "portfolio.db"
 
 
-def _connect():
+def _connect(*, timeout=5.0):
     """Open a fresh connection to the database file.
 
     One short-lived connection per operation is the simplest safe pattern:
@@ -73,7 +73,7 @@ def _connect():
     """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=timeout)
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         perf.record("db.connect", (time.perf_counter() - started) * 1000)
@@ -85,7 +85,7 @@ def _connect():
 
 
 @contextmanager
-def _connection():
+def _connection(*, timeout=5.0):
     """One operation's connection: commit or roll back, then ALWAYS close.
 
     `with sqlite3.Connection` only commits or rolls back; it does not close
@@ -93,7 +93,7 @@ def _connection():
     descriptors alive during request bursts. This wrapper keeps the same
     transaction rules and releases the descriptor deterministically.
     """
-    conn = _connect()
+    conn = _connect(timeout=timeout)
     try:
         with conn:
             yield conn
@@ -547,19 +547,19 @@ def rotate_session_secret():
 # exactly like the ledger, and the route layer reads them at boot.
 # ---------------------------------------------------------------------------
 
-def get_setting(key):
+def get_setting(key, *, timeout=5.0):
     """Return one setting's value, or None when it was never stored."""
-    with _connection() as conn:
+    with _connection(timeout=timeout) as conn:
         row = conn.execute(
             "SELECT value FROM app_settings WHERE key = ?", (key,)
         ).fetchone()
     return row[0] if row else None
 
 
-def set_setting(key, value):
+def set_setting(key, value, *, timeout=5.0):
     """Insert or replace one setting. REPLACE also updates the rowid,
     which is fine — settings have no meaningful order."""
-    with _connection() as conn:
+    with _connection(timeout=timeout) as conn:
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES (?, ?)"
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value",

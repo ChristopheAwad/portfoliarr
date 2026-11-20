@@ -769,6 +769,7 @@ async function refreshPortfolioSummary() {
                 paintAllocation(tickerSlices, tickerExcluded);
             }
             if (nothingPriced) {
+                window.telemetrySection?.("dashboard_summary", "failed");
                 // While masked, keep the existing mask — don't overwrite with
                 // error text that would break the privacy look.
                 if (!masked) {
@@ -833,8 +834,10 @@ async function refreshPortfolioSummary() {
                 );
             }
             perfMark("dashboard:summary");
+            window.telemetrySection?.("dashboard_summary", "ready");
         } catch (err) {
             if (epoch !== portfolioEpoch()) return;
+            window.telemetrySection?.("dashboard_summary", "failed");
             console.error("portfolio summary refresh failed:", err);
             setPortfolioUnavailable();
             lastSummaryFailed = true;
@@ -938,6 +941,7 @@ let chartPreloadsStarted = false;
 
 function portfolioChartPainted({ period, hasData }) {
     if (hasData) perfMark("dashboard:chart");
+    window.telemetrySection?.("dashboard_chart", hasData ? "ready" : "empty");
     if (chartPreloadsStarted) return;
     chartPreloadsStarted = true;
     // Keep all eight reads parallel, including 5D if another period was the
@@ -960,6 +964,7 @@ const portfolioChartHandle = setupTimeframeChart({
     // The chart card's period return readout — the selected timeframe's TWR.
     onPeriodSummary: paintPeriodReturn,
     onPaintComplete: portfolioChartPainted,
+    onVisibleFailure: () => window.telemetrySection?.("dashboard_chart", "failed"),
     // The chart plots the CAD total in every mode — label it so the
     // currency is never guessed at.
     datasetLabel: "Portfolio Value (CAD)",
@@ -1721,7 +1726,8 @@ refreshMarketOverview(activeMarketCategory);
 refreshWatchlist();
 portfolioReady.then(() => {
     refreshPortfolioSummary();
-    if (currentPortfolioId()) refreshPortfolioChart();
+    if (!portfolioChartHandle) window.telemetrySection?.("dashboard_chart", "failed");
+    else if (currentPortfolioId()) refreshPortfolioChart();
     preloadMarketOverview();
     refreshVolumeLeaders();
 });

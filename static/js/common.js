@@ -1585,7 +1585,7 @@ function reconcileOverlays(replyBenchmarks, pickerSymbols) {
 
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
-      onPeriodSummary, onPaintComplete, modeBar, getBenchmarks, comparisonReadout,
+      onPeriodSummary, onPaintComplete, onVisibleFailure, modeBar, getBenchmarks, comparisonReadout,
       comparisonPrimaryLabel = datasetLabel, getScope = () => "global" }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
@@ -2715,6 +2715,7 @@ function setupTimeframeChart(
             // stale failure cannot blank a newer success.
             if (silent || visibleGeneration !== visibleRequestGeneration) return;
             if (lastReply === null) {
+                if (onVisibleFailure) onVisibleFailure();
                 emitPeriodSummary(period, null);
                 // The initial queued draw can be superseded before any data
                 // reaches the canvas. Keep the chosen view usable for retry.

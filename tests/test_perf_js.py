@@ -7,6 +7,10 @@
 # browser; that is the GUI gate.
 
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -76,6 +80,61 @@ def test_perf_js_beacons_once_and_never_polls():
     assert '"visibilitychange"' in src
     assert "if (state.sent) return;" in src
     assert "setInterval" not in src
+
+
+@pytest.mark.parametrize("mode", ["ready", "hide", "deadline", "initially-hidden", "off"])
+def test_weekly_beacon_lifecycle(mode):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required for the browser-script behavior test")
+    result = subprocess.run([node, "-e", r"""
+        const assert = require('node:assert/strict');
+        const vm = require('node:vm');
+        const fs = require('node:fs');
+        const [filename, mode] = process.argv.slice(1);
+        const handlers = {}, timers = new Map(), sends = [];
+        let now = 200;
+        const listen = (name, fn) => (handlers[name] ||= []).push(fn);
+        const document = {hidden: mode === 'initially-hidden', addEventListener: listen,
+            body: {dataset: mode === 'off' ? {} : {localTelemetryGeneration: 'a'.repeat(32)}}};
+        const window = {location:{pathname:'/'}, addEventListener:listen,
+            matchMedia:() => ({matches:true})};
+        const context = {window, document, navigator:{sendBeacon:(url, body) => sends.push({url, body})},
+            performance:{now:() => now}, Blob, setTimeout: (fn, ms) => (timers.set(ms, fn), ms),
+            clearTimeout:(id) => timers.delete(id)};
+        vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context);
+        const capture = () => sends.filter(event => event.url === '/api/telemetry/client');
+        if (mode === 'off' || mode === 'initially-hidden') {
+            assert.equal(window.telemetrySection, undefined);
+            handlers.pagehide.forEach(fn => fn());
+            assert.equal(capture().length, 0);
+        } else {
+            window.telemetrySection('dashboard_summary', 'ready');
+            window.telemetrySection('dashboard_summary', 'failed');
+            now = 2150;
+            if (mode === 'ready') window.telemetrySection('dashboard_chart', 'ready');
+            else if (mode === 'deadline') timers.get(29800)();
+            else {
+                document.hidden = true;
+                document.visibilityState = 'hidden';
+                handlers.visibilitychange.forEach(fn => fn());
+            }
+            window.telemetrySection('dashboard_chart', 'ready');
+            handlers.pagehide.forEach(fn => fn());
+            assert.equal(capture().length, 1);
+            assert.equal(sends.filter(e => e.url === '/api/perf/client').length, 1);
+            capture()[0].body.text().then(text => {
+                const payload = JSON.parse(text);
+                assert.equal(payload.viewport, 'narrow');
+                assert.deepEqual(payload.sections, [
+                    {metric:'dashboard_summary',outcome:'ready',duration_ms:200},
+                    mode === 'ready' ? {metric:'dashboard_chart',outcome:'ready',duration_ms:2150}
+                        : {metric:'dashboard_chart',outcome:'unfinished'},
+                ]);
+            }).catch(err => { console.error(err); process.exitCode = 1; });
+        }
+    """, str(ROOT / "static/js/perf.js"), mode], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_overlay_is_opt_in():

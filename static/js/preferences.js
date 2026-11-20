@@ -542,6 +542,16 @@
     if (!card) return;
     const readout = document.getElementById("perf-readout");
     const errorEl = document.getElementById("perf-error");
+    const refresh = document.getElementById("perf-reload");
+    const toggle = document.getElementById("telemetry-enabled");
+    const weekly = document.getElementById("telemetry-report");
+    const weeklyStatus = document.getElementById("telemetry-report-status");
+    const results = document.getElementById("telemetry-results");
+    const status = document.getElementById("telemetry-status");
+    const toggleError = document.getElementById("telemetry-error");
+    let enabled = null;
+    let revision = 0;
+    let saving = false;
 
     function report(message) {
         errorEl.textContent = message;
@@ -572,6 +582,143 @@
     function plural(count, word) {
         return `${count} ${word}${count === 1 ? "" : "s"}`;
     }
+
+    function renderWeekly(data) {
+        results.replaceChildren();
+        if (data.first_event_minute === null) {
+            weeklyStatus.textContent = "No measurements yet. Open Dashboard or Ledger to collect timings.";
+            return;
+        }
+        weeklyStatus.textContent = "These counts cover measurements this server received.";
+        for (const [key, label] of [
+            ["dashboard_chart", "Dashboard chart"], ["dashboard_summary", "Dashboard summary"],
+            ["ledger_rows", "Ledger rows"],
+        ]) {
+            const count = data.sections[key];
+            const ready = count.ready ? `${count.slow} of ${count.ready} took over 2 seconds` : "No completed loads";
+            const detail = [`${count.failed} failed`, `${count.unfinished} unfinished`];
+            if (key !== "dashboard_summary") detail.unshift(`${count.empty} without data`);
+            results.append(row(label, `${ready}. ${detail.join(", ")}.`));
+        }
+        if (data.recent_slow_chart.length) {
+            results.append(heading("Latest slow chart loads"));
+            for (const event of data.recent_slow_chart) {
+                const time = new Date(event.minute * 60000).toLocaleString(undefined,
+                    { dateStyle: "short", timeStyle: "short" });
+                results.append(row(time, `${(event.duration_ms / 1000).toFixed(2)} s, ${event.viewport} screen`));
+            }
+        }
+        results.append(heading("Saves and paste imports"));
+        const reasons = { validation: "invalid input", not_found: "not found",
+            unquotable: "quote unavailable", rejected: "request rejected", internal: "server error",
+            format: "input format", write: "could not write", no_eligible_rows: "no eligible rows" };
+        const outcomes = { success: "succeeded", partial: "partly succeeded", failed: "failed" };
+        for (const [key, label] of [
+            ["save_create", "Add trade"], ["save_edit", "Edit trade"],
+            ["import_preview", "Preview paste"], ["import_commit", "Import paste"],
+        ]) {
+            const action = data.actions[key];
+            const counts = [];
+            for (const outcome of Object.keys(outcomes)) {
+                for (const [reason, count] of Object.entries(action.outcomes[outcome] || {})) {
+                    counts.push(`${count} ${outcomes[outcome]}${reasons[reason] ? ` (${reasons[reason]})` : ""}`);
+                }
+            }
+            results.append(row(label, counts.join(", ") || "No requests"));
+        }
+    }
+
+    async function telemetryRequest(path, options) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        try {
+            const response = await fetch(`/api/telemetry/${path}`,
+                { ...options, signal: controller.signal });
+            if (!response.ok) throw new Error("Telemetry request failed");
+            return await response.json();
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    function showToggleError(message) {
+        toggleError.textContent = message;
+        toggleError.hidden = !message;
+    }
+
+    function renderSetting(value) {
+        enabled = value;
+        toggle.checked = value === true;
+        toggle.disabled = value === null;
+        weekly.hidden = value !== true;
+        if (weekly.hidden) {
+            weeklyStatus.textContent = "";
+            results.replaceChildren();
+        }
+    }
+
+    async function loadWeekly(ticket) {
+        if (!enabled) return;
+        weeklyStatus.textContent = "Loading the weekly report.";
+        try {
+            const data = await telemetryRequest("report");
+            if (ticket === revision) renderWeekly(data);
+        } catch {
+            if (ticket !== revision) return;
+            results.replaceChildren();
+            weeklyStatus.textContent = "The weekly report is unavailable. Try Refresh.";
+        }
+    }
+
+    async function loadSetting(ticket) {
+        try {
+            const data = await telemetryRequest("settings");
+            if (ticket !== revision) return false;
+            renderSetting(data.enabled);
+            return true;
+        } catch {
+            if (ticket === revision) {
+                renderSetting(null);
+                showToggleError("Could not check whether collection is on. Try Refresh.");
+            }
+            return false;
+        }
+    }
+
+    function reloadTelemetry() {
+        if (!toggle || saving) return;
+        const ticket = ++revision;
+        showToggleError("");
+        status.textContent = "";
+        loadSetting(ticket).then((ok) => { if (ok && ticket === revision) loadWeekly(ticket); });
+    }
+
+    toggle?.addEventListener("click", (event) => { if (saving) event.preventDefault(); });
+    toggle?.addEventListener("change", async () => {
+        if (saving || enabled === null) return;
+        const desired = toggle.checked;
+        const ticket = ++revision;
+        saving = true;
+        toggle.setAttribute("aria-disabled", "true");
+        refresh.setAttribute("aria-disabled", "true");
+        showToggleError("");
+        status.textContent = "Saving…";
+        try {
+            const data = await telemetryRequest("settings", { method: "PUT",
+                headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: desired }) });
+            renderSetting(data.enabled);
+            status.textContent = data.enabled ? "Collection is on. Open Dashboard or Ledger to begin."
+                : "Collection is off.";
+        } catch {
+            status.textContent = "";
+            if (await loadSetting(ticket)) showToggleError("Could not confirm the change. Check the switch and try again.");
+        } finally {
+            saving = false;
+            toggle.removeAttribute("aria-disabled");
+            refresh.removeAttribute("aria-disabled");
+        }
+        loadWeekly(ticket);
+    });
 
     function uptime(seconds) {
         if (!Number.isFinite(seconds)) return "—";
@@ -677,6 +824,11 @@
         }
     }
 
-    document.getElementById("perf-reload").addEventListener("click", load);
+    refresh.addEventListener("click", () => {
+        if (saving) return;
+        reloadTelemetry();
+        load();
+    });
+    reloadTelemetry();
     load();
 })();
