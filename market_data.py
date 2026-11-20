@@ -114,14 +114,16 @@ _inflight_profiles = {}
 # ── Fund look-through cache (#62) — the allocation donut's answer to
 #    "what is inside this ETF?".
 #
-# {symbol: {"asset_mix": {label: fraction}, "sector_mix": {label: fraction}}}
+# {symbol: {"asset_mix": {label: fraction}, "sector_mix": {label: fraction},
+#           "degraded": bool}}
 # folded from yfinance FundsData (asset_classes, sector_weightings,
 # fund_overview.categoryName). Kept SEPARATE from _profile_cache and
-# successes-only: a fund fetch that fails must NOT be cached, so the next
-# get_profile retries it instead of poisoning the base profile with a
-# permanent None. Fetched once per symbol per process lifetime on success
-# (fund composition changes slowly; a restart refreshes it). Guarded by
-# _market_lock.
+# successes-only: a whole fetch OR a single field access that raises must
+# NOT be cached, so the next get_profile retries it instead of poisoning
+# the base profile with a permanent None. A successfully empty field is a
+# real answer and caches normally. Fetched once per symbol per process
+# lifetime on success (fund composition changes slowly; a restart
+# refreshes it). Guarded by _market_lock.
 _fund_cache = {}
 _inflight_funds = {}
 
@@ -995,61 +997,109 @@ _SECTOR_KEY_LABELS = {
 }
 
 
-def _normalized_weight_map(buckets):
-    """Normalize {label: positive weight} to fractions; None when empty."""
-    total = sum(buckets.values())
-    if total <= 0:
+# Yahoo documents these values as fractions of NAV in 0–1. A sum below 1
+# is REAL missing coverage (the route shows it as Unknown), so it is never
+# scaled up. A sum a hair above 1 can only be cumulative rounding; shave
+# that tiny overage, but reject anything beyond it. `> 1.001` means more
+# than 0.1 percentage points over — too much to explain as rounding.
+_MAX_FRACTION_SUM = 1.001
+
+
+def _fold_provider_fractions(raw, label_for_key):
+    """Fold a provider weight dict into {label: fraction}, or None.
+
+    Provider weights are 0–1 fractions of NAV. Absent/None cells are
+    missing; a populated negative, non-finite, or non-numeric cell
+    invalidates the whole mix (None). The validation total includes every
+    populated weight, recognized or not, so an unknown key still counts
+    toward the raw total while staying out of the output. That omitted
+    share is real missing coverage, which the allocation route shows as
+    Unknown.
+
+    A total of (1, 1.001] is a rounding overage and is scaled back by the
+    raw total; a total below 1 is left untouched. No positive usable
+    mapped fractions -> None.
+    """
+    if not isinstance(raw, dict):
         return None
-    return {label: value / total for label, value in buckets.items()}
+    buckets = {}
+    total = 0.0
+    for key, value in raw.items():
+        if value is None:
+            continue
+        if (isinstance(value, bool)
+                or not isinstance(value, Real)
+                or not math.isfinite(value)
+                or value < 0):
+            return None
+        total += float(value)
+        if value == 0:
+            continue
+        label = label_for_key(key)
+        if label is not None:
+            buckets[label] = buckets.get(label, 0.0) + float(value)
+    if not buckets or total <= 0:
+        return None
+    if total > _MAX_FRACTION_SUM:
+        return None
+    scale = total if total > 1.0 else 1.0
+    folded = {label: value / scale for label, value in buckets.items()}
+    # Division can land a hair above 1.0 even when the mathematical sum is
+    # exactly 1; shave that floating residue so the contract (sum <= 1)
+    # holds for callers that add the values back up.
+    overflow = sum(folded.values())
+    if overflow > 1.0:
+        folded = {label: value / overflow
+                  for label, value in folded.items()}
+    return folded
 
 
 def _fold_asset_classes(raw, category_name):
     """Fold Yahoo's asset_classes dict into {label: fraction}, or None."""
-    if not isinstance(raw, dict):
+    category = (
+        category_name.lower() if isinstance(category_name, str) else ""
+    )
+    if "commodit" in category:
+        other_label = "Commodities"
+    elif "digital" in category or "crypto" in category:
+        other_label = "Crypto"
+    elif "real estate" in category:
+        other_label = "Real Estate"
+    else:
+        other_label = "Other"
+
+    def label_for_key(key):
+        for raw_key, label in _ASSET_CLASS_LABELS:
+            if key == raw_key:
+                return label
+        if key == "otherPosition":
+            # The provider's literal Other bucket. Category names only
+            # refine it when the source verifiably says what it is.
+            return other_label
         return None
-    category = (category_name or "").lower()
-    buckets = {}
-    for key, label in _ASSET_CLASS_LABELS:
-        value = _finite_number(raw.get(key))
-        if value is not None and value > 0:
-            buckets[label] = buckets.get(label, 0.0) + value
-    other = _finite_number(raw.get("otherPosition"))
-    if other is not None and other > 0:
-        if "commodit" in category:
-            label = "Commodities"
-        elif "digital" in category or "crypto" in category:
-            label = "Crypto"
-        elif "real estate" in category:
-            label = "Real Estate"
-        else:
-            label = "Other"
-        buckets[label] = buckets.get(label, 0.0) + other
-    return _normalized_weight_map(buckets)
+
+    return _fold_provider_fractions(raw, label_for_key)
 
 
 def _fold_sector_weightings(raw):
     """Fold Yahoo's sector_weightings dict into {label: fraction}, or None."""
-    if not isinstance(raw, dict):
-        return None
-    buckets = {}
-    for key, value in raw.items():
-        label = _SECTOR_KEY_LABELS.get(key)
-        if label is None:
-            continue
-        number = _finite_number(value)
-        if number is not None and number > 0:
-            buckets[label] = buckets.get(label, 0.0) + number
-    return _normalized_weight_map(buckets)
+    return _fold_provider_fractions(raw, _SECTOR_KEY_LABELS.get)
 
 
 def _get_fund_mix(symbol):
-    """Return {"asset_mix", "sector_mix"} for a fund, or raise.
+    """Return {"asset_mix", "sector_mix", "degraded"} for a fund, or raise.
 
     Fetches yfinance FundsData once per symbol (process-lifetime, successes
-    only) and folds it into two normalized {label: fraction} dicts. Raises on
-    failure: the caller (get_profile) turns that into a degraded profile so a
-    failed fund fetch NEVER loses the base info. A failed fetch is not cached,
-    so the next call retries.
+    only) and folds it into two {label: fraction} dicts. Raises when the
+    FundsData fetch itself fails: the caller (get_profile) turns that into
+    a degraded profile so a failed fund fetch NEVER loses the base info.
+    A failed fetch is not cached, so the next call retries.
+
+    Each field is read separately. If ONE field access raises (a transient
+    Yahoo failure), the other fields are still folded for THIS call and its
+    waiters, and `degraded` is True. That partial result is NOT cached, so
+    the next call retries the missing field. Successfully returned sparse
+    data (None or empty) is a complete answer and caches normally.
     """
     started = time.perf_counter()
     with _market_lock:
@@ -1074,6 +1124,7 @@ def _get_fund_mix(symbol):
 
     try:
         funds = yf.Ticker(symbol).funds_data
+        degraded = False
         try:
             overview = funds.fund_overview
             category_name = (
@@ -1082,21 +1133,26 @@ def _get_fund_mix(symbol):
             )
         except Exception:
             category_name = None
+            degraded = True
         try:
             raw_assets = funds.asset_classes
         except Exception:
             raw_assets = None
+            degraded = True
         try:
             raw_sectors = funds.sector_weightings
         except Exception:
             raw_sectors = None
+            degraded = True
 
         mix = {
             "asset_mix": _fold_asset_classes(raw_assets, category_name),
             "sector_mix": _fold_sector_weightings(raw_sectors),
+            "degraded": degraded,
         }
-        with _market_lock:
-            _fund_cache[symbol] = mix
+        if not degraded:
+            with _market_lock:
+                _fund_cache[symbol] = mix
         future.set_result(mix)
         perf.record("market.get_fund_mix",
                     (time.perf_counter() - started) * 1000, cache="miss")
@@ -1121,15 +1177,18 @@ def get_profile(symbol):
         country         e.g. "United States" (None for funds/crypto)
         quote_type      e.g. "EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"
         market_cap      shares × price (None for indices, some ETFs)
-        asset_mix       {"Stocks": 0.9975, ...} — funds only, else None (#62)
+        asset_mix       {"Stocks": 0.60, "Bonds": 0.30} — funds only (#62);
+                        positive fractions of NAV summing to <= 1 (missing
+                        coverage is honest, not scaled up), else None
         sector_mix      {"Technology": 0.40, ...} — equity funds, else None
-        fund_degraded   True when the fund look-through fetch failed this call
+        fund_degraded   True when a fund look-through fetch/field failed
 
     Missing fields → None, not an error (different security types legitimately
     lack different fields). An EMPTY info payload raises ValueError — the
     symbol is genuinely unknown, not "sparse profile". A failed fund fetch is
     swallowed into `fund_degraded=True` (the base info is never lost) and is
-    NOT cached, so the next call retries.
+    NOT cached, so the next call retries. A one-field failure keeps the other
+    successfully folded mix for this call but is also not cached.
 
     Raises on a base-info failure — same boundary rule as get_quote.
     """
@@ -1140,7 +1199,7 @@ def get_profile(symbol):
             mix = _get_fund_mix(symbol)
             profile["asset_mix"] = mix.get("asset_mix")
             profile["sector_mix"] = mix.get("sector_mix")
-            profile["fund_degraded"] = False
+            profile["fund_degraded"] = bool(mix.get("degraded"))
         except Exception:
             profile["asset_mix"] = None
             profile["sector_mix"] = None
