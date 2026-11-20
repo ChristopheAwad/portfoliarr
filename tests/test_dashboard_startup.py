@@ -59,6 +59,7 @@ globalThis.portfolioCostBasisEl = {textContent:'old'};
 globalThis.setPortfolioUnavailable = message => actions.push(message);
 globalThis.updateAllocExcluded = () => {};
 globalThis.updateAllocUnclassified = () => {};
+globalThis.updateAllocCoverage = () => {};
 globalThis.setAllocState = state => actions.push('allocation-state:' + state);
 globalThis.portfolioChartHandle = {
     invalidate() { actions.push('chart:invalidate'); },

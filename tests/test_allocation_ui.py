@@ -59,6 +59,16 @@ def test_donut_card_has_dimension_label(client):
     assert 'id="alloc-label"' in html
 
 
+def test_donut_card_has_coverage_line(client):
+    """Coverage is its own status line so a priced-but-unknown view can
+    explain what the percentages mean even when no pie is drawn."""
+    html = _read_html(client)
+    assert 'id="alloc-coverage"' in html
+    assert 'class="alloc-coverage"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+
+
 def test_excluded_note_element_exists(client):
     """The donut card must have a container for the excluded-tickers note."""
     html = _read_html(client)
@@ -94,14 +104,16 @@ def test_stock_page_has_classification_card(client):
 
 
 def test_allocation_notes_use_block_display(client):
-    """The .alloc-excluded class sets display:none as the pre-JS default, so
-    the notes must set display to "block" (setting "" would fall back to
-    none and hide them)."""
+    """The .alloc-excluded/.alloc-coverage classes set display:none as the
+    pre-JS default, so the notes must set display to "block" (setting ""
+    would fall back to none and hide them)."""
     src = _read_js("static/js/main.js")
     assert 'allocUnclassifiedEl.style.display = "block"' in src
     assert 'allocExcludedEl.style.display = "block"' in src
+    assert 'allocCoverageEl.style.display = "block"' in src
     assert 'allocUnclassifiedEl.style.display = "none"' in src
     assert 'allocExcludedEl.style.display = "none"' in src
+    assert 'allocCoverageEl.style.display = "none"' in src
 
 
 def test_main_js_paints_unclassified_note(client):
@@ -110,8 +122,149 @@ def test_main_js_paints_unclassified_note(client):
     src = _read_js("static/js/main.js")
     assert "updateAllocUnclassified" in src
     assert "function paintAllocation(slices, excluded, by = null" in src
+    assert "updateAllocUnclassified(unclassified, by)" in src
     assert "paintAllocation(entry.data.slices, entry.data.excluded, by," in src
-    assert "paintAllocation(data.slices, data.excluded, by, data.unclassified)" in src
+    assert "paintAllocation(data.slices, data.excluded, by, data.unclassified" in src
+
+
+def test_main_js_coverage_line_uses_percentages_only(client):
+    """Coverage is text against priced long holdings, never a new CAD
+    amount — the privacy rule keeps dollar values out of the note."""
+    src = _read_js("static/js/main.js")
+    coverage = src.split("function updateAllocCoverage(coverage)", 1)[1].split(
+        "\n}", 1)[0]
+    assert "classified" in coverage
+    assert "unknown" in coverage
+    assert "N/A" in coverage
+    assert "priced long holdings" in coverage
+    assert "formatNumber" not in coverage
+    assert " CAD" not in coverage
+    assert "coverage.priced_value" in coverage
+
+
+def test_main_js_colors_synthetic_wedges_by_status(client):
+    """Synthetic wedges get two neutral theme tokens; real wedges keep the
+    categorical palette. The themechange repaint must use the same per-row
+    function, not a flat palette swap."""
+    src = _read_js("static/js/main.js")
+    assert "function allocationSliceStatus(slice)" in src
+    assert "function allocationSliceLabel(slice)" in src
+    assert "function allocationWedgeColors(slices)" in src
+    assert 'slice.status === "unknown"' in src
+    assert 'slice.status === "not_applicable"' in src
+    assert 'slice.key === "Unknown"' in src
+    assert 'slice.key === "n/a"' in src
+    assert "allocationWedgeColors(currentHoldings)" in src
+    assert "const colors = allocationWedgeColors(slices);" in src
+    assert "backgroundColor: colors," in src
+    assert "Not applicable" in src
+
+
+def test_synthetic_wedge_tokens_are_distinct_in_both_themes(client):
+    """Two neutral/surface colors, with separate light and dark values, so
+    Unknown never looks like Not applicable and both stay legible."""
+    css = _read_css()
+    root = css.split(":root {", 1)[1].split("}", 1)[0]
+    dark = css.split(".dark {", 1)[1].split("}", 1)[0]
+    for block in (root, dark):
+        assert "--alloc-unknown:" in block
+        assert "--alloc-na:" in block
+        unknown = block.split("--alloc-unknown:", 1)[1].split(";", 1)[0].strip()
+        na = block.split("--alloc-na:", 1)[1].split(";", 1)[0].strip()
+        assert unknown != na
+
+
+def test_manual_classification_links_only_for_assignable_views(client):
+    """Only country/sector/asset class can be fixed by hand. Type, cap and
+    currency reasons must not tell users to edit a stock page."""
+    src = _read_js("static/js/main.js")
+    assert "MANUAL_CLASSIFICATION_DIMS" in src
+    assert '"country"' in src and '"sector"' in src and '"asset_class"' in src
+    assert "MANUAL_CLASSIFICATION_DIMS.has(by)" in src
+    unclassified = src.split(
+        "function updateAllocUnclassified(unclassified, by = null)", 1
+    )[1].split("\n}", 1)[0]
+    helper = src.split("function appendAllocationNoteEntry", 1)[1].split(
+        "\n}", 1)[0]
+    assert "appendAllocationNoteEntry(" in unclassified
+    assert "if (manual" in helper
+    assert "#classification-card" in helper
+    assert "open the stock page" in helper
+
+
+def test_allocation_notes_collapse_into_expandable_details(client):
+    """Small portfolios fit; longer lists use a native <details> element so
+    touch users can reveal every hidden exclusion or reason, not just a
+    hover-only title."""
+    src = _read_js("static/js/main.js")
+    assert "MAX_ALLOC_NOTE_ITEMS" in src
+    assert 'document.createElement("details")' in src
+    assert 'document.createElement("summary")' in src
+    assert "alloc-note-details" in src
+    css = _read_css()
+    assert ".alloc-note-details" in css
+    assert ".alloc-note-details > summary" in css
+    assert "overflow-wrap: anywhere;" in css
+
+
+def test_allocation_legend_text_uses_resolved_theme_color(client):
+    """Chart.js defaults the legend to a fixed gray that is too dark in dark
+    mode. Read an existing readable CSS token at build time and re-read it on
+    themechange, repainting with no animation."""
+    src = _read_js("static/js/main.js")
+    assert "function allocationLegendLabelColor()" in src
+    assert 'getPropertyValue("--text-primary")' in src
+    assert 'getPropertyValue("--text-secondary")' in src
+    assert "color: allocationLegendLabelColor()" in src
+    assert "function refreshAllocationThemeColors()" in src
+    refresh = src.split("function refreshAllocationThemeColors()", 1)[1].split(
+        "\n}", 1)[0]
+    assert "legendLabels.color = allocationLegendLabelColor();" in refresh
+    assert 'update("none")' in refresh
+    listener = src.split('document.addEventListener("themechange"', 1)[1].split(
+        "});", 1)[0]
+    assert "refreshAllocationThemeColors()" in listener
+
+
+def test_paint_allocation_doc_matches_real_signature(client):
+    """The comment above paintAllocation is the contract future callers
+    read; it must name every accepted argument."""
+    src = _read_js("static/js/main.js")
+    doc = src.split("function paintAllocation(", 1)[0].rsplit(
+        "// PAINT ALLOCATION", 1)[1]
+    for name in ("paintAllocation(slices, excluded, by = null",
+                 "unclassified = []", "coverage = null"):
+        assert name in doc, f"paintAllocation doc must mention {name}"
+
+
+def test_main_js_passes_coverage_through_summary_and_dimensions(client):
+    """Both data sources carry coverage; the cached and live paint calls
+    must pass it through so a failed refresh can restore the same state."""
+    src = _read_js("static/js/main.js")
+    summary = src.split("async function refreshPortfolioSummary()", 1)[1].split(
+        "// PORTFOLIO CHART", 1)[0]
+    assert "allocation_coverage" in summary
+    assert "allocation_excluded" in summary
+    assert "paintAllocation(tickerSlices, tickerExcluded, null, []," in summary
+    assert "lastSummaryCoverage" in summary
+    fetch = src.split("async function fetchAllocDimension(by)", 1)[1]
+    fetch = fetch.split("\n}", 1)[0]
+    assert "entry.data.coverage" in fetch
+    assert "data.coverage" in fetch
+    assert "prior.coverage" in fetch
+
+
+def test_uncached_switch_and_portfolio_change_clear_coverage(client):
+    """A switch to a dimension with no cache must not keep the previous
+    slide's coverage note, and a portfolio change must wipe it entirely."""
+    src = _read_js("static/js/main.js")
+    fetch = src.split("async function fetchAllocDimension(by)", 1)[1].split(
+        "\n}", 1)[0]
+    assert "updateAllocCoverage(null)" in fetch
+    switch = src.split('document.addEventListener("portfoliochange", () => {', 1)[1]
+    assert "updateAllocCoverage(null)" in switch
+    assert "lastSummaryCoverage = null" in switch
+
 
 
 # ---------------------------------------------------------------------------
@@ -120,19 +273,23 @@ def test_main_js_paints_unclassified_note(client):
 
 def test_main_js_defines_seven_allocation_views(client):
     """main.js must define an ALLOCATION_VIEWS array with 7 entries —
-    the ticker view (null key, label from summary) plus 6 dimension views
-    (By Asset Class arrived with #62). By Industry and By Exchange were CUT
-    from the product (cryptic / restates By Ticker at small-portfolio scale)
+    the ticker view (null key, label from summary) plus 6 dimension views.
+    Labels are the approved plain-language names; the API keys and order
+    stay unchanged. By Industry and By Exchange were CUT from the product
     — they must be gone from the source both ways, the test_docker-style
     absent-assert."""
     src = _read_js("static/js/main.js")
     assert "ALLOCATION_VIEWS" in src
     # Count label values as a proxy for the number of entries.
     for label in ["By Ticker", "By Sector", "By Country",
-                  "By Type", "By Asset Class", "By Cap Bucket",
-                  "By Currency"]:
+                  "By Type", "By Asset Class", "By Company Size",
+                  "By Trading Currency"]:
         assert label in src, (
             f"ALLOCATION_VIEWS must include a view labeled '{label}'"
+        )
+    for old_label in ["By Cap Bucket", "By Currency"]:
+        assert old_label not in src, (
+            f"main.js must use the approved label, not '{old_label}'"
         )
     for cut_label in ["By Industry", "By Exchange"]:
         assert cut_label not in src, (
@@ -245,8 +402,9 @@ def test_refetch_keeps_last_painable_payload(client):
         "warmed revalidation must surface a soft refreshing state"
     assert '"empty"' in src, \
         "a genuine empty reply must show the empty state, not an error"
-    assert 'setAllocState(allocationResultState(prior.slices, prior.excluded))' in src, \
-        "a failed revalidation keeps the empty or excluded state from its own reply"
+    assert "allocationResultState(" in src and "prior.coverage" in src, \
+        "a failed revalidation keeps the empty/excluded/no-classified state " \
+        "from its own reply"
 
 
 def test_stale_dimension_paints_its_cached_donut_first(client):
@@ -437,16 +595,30 @@ def test_canvas_fills_donut_box_css():
 
 
 def test_main_js_defines_alloc_state_machine(client):
-    """main.js must own the five donut states with one setter. The ready
-    state reveals the box; every other state surfaces an explicit message
-    through the status line."""
+    """main.js must own the donut states with one setter. The ready state
+    reveals the box; every other state surfaces an explicit message through
+    the status line. 'no-classified' is the priced-but-no-classified case:
+    it must hide the pie while coverage and reasons stay visible."""
     src = _read_js("static/js/main.js")
     assert "function setAllocState(" in src
     for state in ['"loading"', '"ready"', '"empty"',
-                  '"unavailable"', '"stale"']:
+                  '"unavailable"', '"stale"', '"no-classified"']:
         assert state in src, f"setAllocState must handle {state}"
     assert "allocStatusEl.textContent" in src
     assert "donutBoxEl.hidden" in src
+    assert '"no-classified"' in src.split("function allocationResultState", 1)[1]
+
+
+def test_no_classified_value_hides_pie_but_keeps_coverage(client):
+    """A positive priced base with only Unknown/N-A wedges must not render a
+    meaningless pie; the coverage line and unclassified reasons do the
+    explaining instead."""
+    src = _read_js("static/js/main.js")
+    paint = src.split("function paintAllocation", 1)[1].split("\n}", 1)[0]
+    assert "allocationResultState(slices, excluded, coverage)" in paint
+    assert 'state !== "ready"' in paint or 'resultState !== "ready"' in paint
+    assert "allocationChart.destroy()" in paint
+    assert "updateAllocCoverage(coverage)" in paint
 
 
 def test_main_js_ready_state_resizes_revealed_donut(client):

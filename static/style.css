@@ -125,6 +125,13 @@
 
     /* Prev-close reference line color (1D chart) — the ink-navy accent. */
     --prev-close: #1c3a5e;
+
+    /* Allocation synthetic wedges: two neutral/surface tones, separate
+       from the categorical palette. Unknown = a missing fact; N/A = the
+       concept does not apply. They must differ from each other and stay
+       legible on the card paper. */
+    --alloc-unknown: #6b7280;
+    --alloc-na: #b8bec7;
 }
 
 /* ═══ Dark mode ════════════════════════════════════════════════════════
@@ -176,6 +183,11 @@
     /* Prev-close reference line color (1D chart) — stays the brighter
        yellow (gold at line weight is too faint against slate). */
     --prev-close: #facc15;
+
+    /* Synthetic allocation wedges: lift Unknown against slate, recess N/A
+       into the surface family. Still clearly two different colors. */
+    --alloc-unknown: #a7b0bf;
+    --alloc-na: #4a5261;
 }
 
 * {
@@ -1362,15 +1374,40 @@ a.logo { text-decoration: none; color: var(--text-primary); }
     to { opacity: 1; }
 }
 
-/* Excluded-tickers note below the donut — a small, muted line listing
-   any holdings that couldn't be classified. Hidden when empty. */
+/* Coverage + excluded/unclassified notes below the donut — small, muted
+   lines. Hidden when empty so the narrow sidebar stays calm. */
+.alloc-coverage,
 .alloc-excluded {
     font-size: 11px;
     color: var(--text-secondary);
     padding: 0 12px 8px;
     margin: 0;
-    line-height: 1.3;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
     display: none;
+}
+.alloc-coverage {
+    font-variant-numeric: tabular-nums;
+}
+/* Expandable tail for long exclusion/coverage notes. Native <details>
+   keeps the hidden reasons reachable by touch and keyboard. Closed, the
+   summary sits inline after the visible list; open, the body drops to its
+   own line. */
+.alloc-note-details {
+    display: inline-block;
+    margin-left: 2px;
+}
+.alloc-note-details[open] {
+    display: block;
+}
+.alloc-note-details > summary {
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 600;
+}
+.alloc-note-details > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* Segmented timeframe control. The tray is a recessed pill (inset

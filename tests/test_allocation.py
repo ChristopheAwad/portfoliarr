@@ -8,16 +8,14 @@
 #      process-lifetime caching — the name-cache pattern. By Industry and
 #      By Exchange were CUT as carousel dimensions, so those fields are
 #      dropped here too (a layer serving fields nothing reads is dead code).
-#   2. THE ALLOCATION ROUTE: multi-dimension donut data, slicing the same
-#      portfolio value by sector / country / type / cap / currency.
-#      Inherits every rule the summary already follows:
-#        - long-only wedges (a short is a bet against, not an allocation)
-#        - priced-only slices (an unpriced ticker is in no slice and
-#          excluded from the denominator — a weight over a phantom
-#          denominator misstates every holding that DID price)
+#   2. THE ALLOCATION ROUTE: multi-dimension donut data. Every view
+#      partitions ONE CAD base — priced, positive, open-long holdings —
+#      with typed slices whose status is classified/unknown/not_applicable.
+#        - long-only base; flat/short positions are filtered before quotes
+#        - only an unusable CAD long value is excluded (with a reason);
+#          missing metadata becomes a visible Unknown/n/a wedge instead
 #        - CAD display: USD values convert at the live rate
-#        - excludes + note for unclassified/unpriced tickers (never
-#          fabricated into an "Unknown" category)
+#        - coverage reports classified/unknown/N-A fractions of that base
 
 import threading
 import time
@@ -73,6 +71,26 @@ def seed(ticker, price, qty, tx_type="BUY", currency="CAD", fx_rate=1.0,
     """Insert a ledger row through the db layer (never raw SQL)."""
     return db.add_transaction(ticker, date, price, qty, currency, tx_type,
                               fx_rate, portfolio_id=1)
+
+
+def slice_for(body, key):
+    """The one slice with `key`; fails loudly when it is missing."""
+    return next(s for s in body["slices"] if s["key"] == key)
+
+
+def assert_coverage(coverage, priced_value, classified=0.0, unknown=0.0,
+                    na=0.0):
+    """Assert the coverage object's exact shape and fractional values."""
+    assert coverage["priced_value"] == pytest.approx(priced_value)
+    if priced_value <= 0:
+        assert coverage["classified_weight"] is None
+        assert coverage["unknown_weight"] is None
+        assert coverage["not_applicable_weight"] is None
+        return
+    assert coverage["classified_weight"] == pytest.approx(
+        classified / priced_value)
+    assert coverage["unknown_weight"] == pytest.approx(unknown / priced_value)
+    assert coverage["not_applicable_weight"] == pytest.approx(na / priced_value)
 
 
 # ── Market data: get_profile ────────────────────────────────────────────
@@ -420,10 +438,22 @@ def test_cut_dimensions_are_rejected(client, fake_market):
 
 def test_empty_ledger_returns_empty_slices(client, fake_market):
     """An empty ledger → no slices, no excluded. The donut shows its own
-    empty state; the endpoint's job is to say so honestly."""
+    empty state; the endpoint's job is to say so honestly. Coverage still
+    declares a numeric zero priced base with null fractions."""
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert body["slices"] == []
+    assert body["unclassified"] == []
     assert body["excluded"] == []
+    assert body["coverage"]["priced_value"] == 0.0
+    assert_coverage(body["coverage"], 0.0)
+
+
+def test_dimension_labels_are_plain_language(client, fake_market):
+    """The API keys stay cap/currency, but the user-facing labels say what
+    the dimension really measures."""
+    assert app_module.ALLOCATION_DIMENSIONS["cap"]["label"] == "By Company Size"
+    assert (app_module.ALLOCATION_DIMENSIONS["currency"]["label"]
+            == "By Trading Currency")
 
 
 # ── Allocation route: grouping math ─────────────────────────────────────
@@ -451,10 +481,15 @@ def test_sector_grouping_sums_and_sorts(client, fake_market):
     assert slices[0]["key"] == "Technology"
     assert slices[0]["value"] == pytest.approx(2600.0)
     assert slices[0]["weight"] == pytest.approx(2600.0 / 3600.0)
+    assert slices[0]["status"] == "classified"
     assert slices[1]["key"] == "Financials"
     assert slices[1]["value"] == pytest.approx(1000.0)
     assert slices[1]["weight"] == pytest.approx(1000.0 / 3600.0)
+    assert slices[1]["status"] == "classified"
     assert sum(s["weight"] for s in slices) == pytest.approx(1.0, abs=1e-9)
+    assert body["unclassified"] == []
+    assert body["excluded"] == []
+    assert_coverage(body["coverage"], 3600.0, classified=3600.0)
 
 
 def test_usd_converts_at_live_rate(client, fake_market):
@@ -482,6 +517,9 @@ def test_currency_dimension_groups_by_quote_currency(client, fake_market):
     assert len(slices) == 2
     keys = {s["key"] for s in slices}
     assert keys == {"USD", "CAD"}
+    assert {s["status"] for s in slices} == {"classified"}
+    assert body["unclassified"] == []
+    assert_coverage(body["coverage"], 2950.0, classified=2950.0)
     # No profiles were needed for currency
     assert fake_market.profiles == {}
 
@@ -502,6 +540,10 @@ def test_short_position_gets_no_wedge(client, fake_market):
     # SHORT.TO gets no slice (net qty = -4), RBC.TO is the only wedge
     assert len(body["slices"]) == 1
     assert body["slices"][0]["key"] == "Financials"
+    assert body["slices"][0]["status"] == "classified"
+    assert body["excluded"] == []
+    assert body["unclassified"] == []
+    assert_coverage(body["coverage"], 1500.0, classified=1500.0)
 
 
 def test_fully_sold_portfolio_has_no_slices(client, fake_market):
@@ -514,6 +556,8 @@ def test_fully_sold_portfolio_has_no_slices(client, fake_market):
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert body["slices"] == []
     assert body["excluded"] == []
+    assert body["unclassified"] == []
+    assert_coverage(body["coverage"], 0.0)
 
 
 def test_unpriced_ticker_appears_in_excluded_with_reason(client, fake_market):
@@ -528,42 +572,57 @@ def test_unpriced_ticker_appears_in_excluded_with_reason(client, fake_market):
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert len(body["slices"]) == 1
     assert body["slices"][0]["key"] == "Technology"
+    assert body["slices"][0]["status"] == "classified"
+    assert body["unclassified"] == []
     excluded_tickers = {e["ticker"] for e in body["excluded"]}
     assert "DEAD.TO" in excluded_tickers
+    assert next(e for e in body["excluded"]
+                if e["ticker"] == "DEAD.TO")["reason"] == "couldn't be priced"
+    assert_coverage(body["coverage"], 1050.0, classified=1050.0)
 
 
 def test_missing_sector_becomes_na_wedge_not_excluded(client, fake_market):
-    """Profile fetched but no sector data: since #62 a non-equity instrument
+    """Profile fetched but no sector data: a non-equity instrument
     (crypto) lands in the n/a wedge and the unclassified list — it is NOT
     silently excluded, so the donut still reconciles."""
     seed("BTC-USD", 50000.0, 0.1, currency="USD", fx_rate=1.30)
     fake_market.quotes["BTC-USD"] = make_quote("BTC-USD", 50000.0, 49000.0,
                                                 currency="USD")
     fake_market.fx_rates["USDCAD"] = 1.30
-    fake_market.profiles["BTC-USD"] = make_profile(sector=None)
+    fake_market.profiles["BTC-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert [s["key"] for s in body["slices"]] == ["n/a"]
+    assert body["slices"][0]["status"] == "not_applicable"
+    assert body["slices"][0]["value"] == pytest.approx(6500.0)
     assert body["excluded"] == []
     assert body["unclassified"] == [
         {"ticker": "BTC-USD", "reason": "sector not applicable"}]
+    assert_coverage(body["coverage"], 6500.0, na=6500.0)
 
 
-def test_profile_fetch_failure_excluded_with_reason(client, fake_market):
-    """get_profile raises for one ticker → that ticker is excluded, the
-    rest still slice normally."""
+def test_profile_fetch_failure_becomes_unknown_not_excluded(client, fake_market):
+    """get_profile raises for one ticker: its priced value stays in the
+    same CAD base as an Unknown wedge. Only unusable CAD prices are
+    excluded, so the other holdings' weights still describe the truth."""
     seed("AAPL", 100.0, 10)
     seed("DEAD.TO", 50.0, 10)
     fake_market.quotes["AAPL"] = make_quote("AAPL", 105.0, 100.0)
     fake_market.quotes["DEAD.TO"] = make_quote("DEAD.TO", 50.0, 49.0)
-    fake_market.profiles["AAPL"] = make_profile(sector="Technology")
+    fake_market.profiles["AAPL"] = make_profile(
+        quote_type="EQUITY", sector="Technology")
     # DEAD.TO absent from profiles → get_profile raises
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
-    assert len(body["slices"]) == 1
-    assert body["slices"][0]["key"] == "Technology"
-    excluded_tickers = {e["ticker"] for e in body["excluded"]}
-    assert "DEAD.TO" in excluded_tickers
+    assert {s["key"] for s in body["slices"]} == {"Technology", "Unknown"}
+    assert slice_for(body, "Technology")["status"] == "classified"
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "DEAD.TO", "reason": "couldn't fetch profile"}]
+    assert_coverage(body["coverage"], 1550.0, classified=1050.0,
+                    unknown=500.0)
 
 
 def test_all_unclassified_share_one_na_wedge(client, fake_market):
@@ -576,67 +635,132 @@ def test_all_unclassified_share_one_na_wedge(client, fake_market):
     fake_market.quotes["ETH-USD"] = make_quote("ETH-USD", 3000.0, 2900.0,
                                                 currency="USD")
     fake_market.fx_rates["USDCAD"] = 1.30
-    fake_market.profiles["BTC-USD"] = make_profile(sector=None)
-    fake_market.profiles["ETH-USD"] = make_profile(sector=None)
+    fake_market.profiles["BTC-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", sector=None)
+    fake_market.profiles["ETH-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert [s["key"] for s in body["slices"]] == ["n/a"]
+    assert body["slices"][0]["status"] == "not_applicable"
     assert body["slices"][0]["weight"] == pytest.approx(1.0)
     assert body["excluded"] == []
     assert {e["ticker"] for e in body["unclassified"]} == {"BTC-USD", "ETH-USD"}
+    assert_coverage(body["coverage"], 10400.0, na=10400.0)
 
 
-# ── Allocation route: cap buckets ───────────────────────────────────────
+# ── Allocation route: company size (cap) ────────────────────────────────
 
-def test_cap_buckets_respect_thresholds(client, fake_market):
-    """Holdings bucket by CAD-converted market cap: Large ≥ 10B, Mid
-    2–10B, Small < 2B. Missing marketCap → excluded."""
-    # Large: marketCap 25000B native → 25000 CAD (USD × live rate)
-    seed("LARGE", 100.0, 10, currency="USD", fx_rate=1.30)
-    # Mid: marketCap 5B
-    seed("MID", 50.0, 10, currency="USD", fx_rate=1.30)
-    # Small: marketCap 500M
-    seed("SMALL", 20.0, 10, currency="USD", fx_rate=1.30)
-    # No cap: excluded
-    seed("NOCAP", 30.0, 10, currency="USD", fx_rate=1.30)
+def test_company_size_buckets_respect_thresholds(client, fake_market):
+    """Positive direct-equity caps bucket by CAD: Large ≥ 10B, Mid 2–10B,
+    Small < 2B. A stock without a cap is Unknown, never a dropped wedge."""
+    seed("LARGE", 100.0, 10)
+    seed("MID", 50.0, 10)
+    seed("SMALL", 20.0, 10)
+    seed("NOCAP", 30.0, 10)
 
-    fake_market.quotes["LARGE"] = make_quote("LARGE", 100.0, 99.0, currency="USD")
-    fake_market.quotes["MID"] = make_quote("MID", 50.0, 49.0, currency="USD")
-    fake_market.quotes["SMALL"] = make_quote("SMALL", 20.0, 19.0, currency="USD")
-    fake_market.quotes["NOCAP"] = make_quote("NOCAP", 30.0, 29.0, currency="USD")
-    fake_market.fx_rates["USDCAD"] = 1.0  # 1:1 for easy threshold math
-
-    fake_market.profiles["LARGE"] = make_profile(market_cap=25_000_000_000)
-    fake_market.profiles["MID"] = make_profile(market_cap=5_000_000_000)
-    fake_market.profiles["SMALL"] = make_profile(market_cap=500_000_000)
-    fake_market.profiles["NOCAP"] = make_profile(market_cap=None)
+    for sym, price in (("LARGE", 100.0), ("MID", 50.0),
+                       ("SMALL", 20.0), ("NOCAP", 30.0)):
+        fake_market.quotes[sym] = make_quote(sym, price, price - 1)
+    fake_market.profiles["LARGE"] = make_profile(
+        quote_type="EQUITY", market_cap=25_000_000_000)
+    fake_market.profiles["MID"] = make_profile(
+        quote_type="EQUITY", market_cap=5_000_000_000)
+    fake_market.profiles["SMALL"] = make_profile(
+        quote_type="EQUITY", market_cap=500_000_000)
+    fake_market.profiles["NOCAP"] = make_profile(
+        quote_type="EQUITY", market_cap=None)
 
     body = client.get("/api/portfolio/allocation?by=cap").get_json()
     keys = {s["key"] for s in body["slices"]}
-    assert "Large" in keys
-    assert "Mid" in keys
-    assert "Small" in keys
-    assert len(body["slices"]) == 3
-    excluded_tickers = {e["ticker"] for e in body["excluded"]}
-    assert "NOCAP" in excluded_tickers
+    assert keys == {"Large", "Mid", "Small", "Unknown"}
+    assert slice_for(body, "Large")["status"] == "classified"
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(300.0)
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "NOCAP", "reason": "no market-cap data"}]
+    assert_coverage(body["coverage"], 2000.0, classified=1700.0,
+                    unknown=300.0)
 
 
-def test_cap_missing_market_cap_excluded(client, fake_market):
-    """A ticker with missing market_cap is excluded from the cap view
-    with a reason."""
-    seed("ETF.TO", 100.0, 10)
-    fake_market.quotes["ETF.TO"] = make_quote("ETF.TO", 100.0, 98.0)
-    fake_market.profiles["ETF.TO"] = make_profile(market_cap=None)
+def test_company_size_uses_live_rate_before_thresholds(client, fake_market):
+    """A USD company cap converts at the live rate before bucketing: 9B
+    USD × 1.3 = 11.7B CAD, which crosses the Large threshold even though
+    the native cap is below it."""
+    seed("USDLARGE", 100.0, 10, currency="USD", fx_rate=1.20)
+    fake_market.quotes["USDLARGE"] = make_quote(
+        "USDLARGE", 100.0, 99.0, currency="USD")
+    fake_market.fx_rates["USDCAD"] = 1.30
+    fake_market.profiles["USDLARGE"] = make_profile(
+        quote_type="EQUITY", market_cap=9_000_000_000)
 
     body = client.get("/api/portfolio/allocation?by=cap").get_json()
-    assert body["slices"] == []
-    excluded_tickers = {e["ticker"] for e in body["excluded"]}
-    assert "ETF.TO" in excluded_tickers
+    assert [s["key"] for s in body["slices"]] == ["Large"]
+    assert body["slices"][0]["status"] == "classified"
+    assert body["slices"][0]["value"] == pytest.approx(1300.0)
+    assert body["unclassified"] == []
+    assert body["excluded"] == []
+    assert_coverage(body["coverage"], 1300.0, classified=1300.0)
+
+
+def test_company_size_known_non_equities_are_not_applicable(client, fake_market):
+    """Known non-equity instrument types never use a provider cap (an
+    ETF's AUM or a crypto's market cap is not a company size). An
+    unrecognized type is indeterminate, so it stays Unknown."""
+    seed("ETF.TO", 100.0, 10)
+    seed("BTC-USD", 100.0, 10)
+    seed("FUT", 100.0, 10)
+    seed("ODD", 100.0, 10)
+    for sym in ("ETF.TO", "BTC-USD", "FUT", "ODD"):
+        fake_market.quotes[sym] = make_quote(sym, 100.0, 99.0)
+    fake_market.profiles["ETF.TO"] = make_profile(
+        quote_type="ETF", market_cap=999_000_000_000)
+    fake_market.profiles["BTC-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", market_cap=999_000_000_000)
+    fake_market.profiles["FUT"] = make_profile(
+        quote_type="FUTURE", market_cap=999_000_000_000)
+    fake_market.profiles["ODD"] = make_profile(
+        quote_type="WEIRD", market_cap=999_000_000_000)
+
+    body = client.get("/api/portfolio/allocation?by=cap").get_json()
+    assert {s["key"] for s in body["slices"]} == {"n/a", "Unknown"}
+    assert slice_for(body, "n/a")["status"] == "not_applicable"
+    assert slice_for(body, "n/a")["value"] == pytest.approx(3000.0)
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(1000.0)
+    assert body["excluded"] == []
+    reasons = {e["ticker"]: e["reason"] for e in body["unclassified"]}
+    assert reasons == {
+        "BTC-USD": "company size not applicable",
+        "ETF.TO": "company size not applicable",
+        "FUT": "company size not applicable",
+        "ODD": "no company-size data",
+    }
+    assert_coverage(body["coverage"], 4000.0, classified=0.0,
+                    unknown=1000.0, na=3000.0)
+
+
+def test_company_size_missing_stock_cap_is_unknown(client, fake_market):
+    """A stock with no cap is not excluded: it gets the Unknown wedge so
+    the pie still accounts for its priced value."""
+    seed("AAPL", 100.0, 10)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 100.0, 98.0)
+    fake_market.profiles["AAPL"] = make_profile(
+        quote_type="EQUITY", market_cap=None)
+
+    body = client.get("/api/portfolio/allocation?by=cap").get_json()
+    assert [s["key"] for s in body["slices"]] == ["Unknown"]
+    assert body["slices"][0]["status"] == "unknown"
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "AAPL", "reason": "no market-cap data"}]
+    assert_coverage(body["coverage"], 1000.0, unknown=1000.0)
 
 
 def test_weights_divide_over_all_wedges(client, fake_market):
-    """Since #62 the n/a/Unknown wedges are REAL classified slices, so their
-    value enters the denominator: an unpriced/excluded ticker still would
+    """The n/a/Unknown wedges are REAL slices, so their value enters the
+    same priced-long denominator: an unpriced/excluded ticker still would
     not, but a crypto n/a wedge does. Technology keeps only its share."""
     seed("AAPL", 100.0, 10)
     seed("BTC-USD", 50000.0, 0.1, currency="USD", fx_rate=1.30)
@@ -644,15 +768,18 @@ def test_weights_divide_over_all_wedges(client, fake_market):
     fake_market.quotes["BTC-USD"] = make_quote("BTC-USD", 50000.0, 49000.0,
                                                 currency="USD")
     fake_market.fx_rates["USDCAD"] = 1.30
-    fake_market.profiles["AAPL"] = make_profile(sector="Technology")
-    fake_market.profiles["BTC-USD"] = make_profile(sector=None)
+    fake_market.profiles["AAPL"] = make_profile(
+        quote_type="EQUITY", sector="Technology")
+    fake_market.profiles["BTC-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", sector=None)
 
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert {s["key"] for s in body["slices"]} == {"Technology", "n/a"}
-    tech = next(s for s in body["slices"] if s["key"] == "Technology")
+    tech = slice_for(body, "Technology")
     # AAPL: 10×105 = 1050; BTC n/a wedge: 0.1×50000×1.30 = 6500.
     assert tech["weight"] == pytest.approx(1050.0 / (1050.0 + 6500.0))
     assert sum(s["weight"] for s in body["slices"]) == pytest.approx(1.0)
+    assert_coverage(body["coverage"], 7550.0, classified=1050.0, na=6500.0)
 
 
 def test_slice_values_descending(client, fake_market):
@@ -668,6 +795,283 @@ def test_slice_values_descending(client, fake_market):
     body = client.get("/api/portfolio/allocation?by=sector").get_json()
     assert body["slices"][0]["key"] == "Financials"
     assert body["slices"][0]["value"] > body["slices"][1]["value"]
+
+
+# ── Allocation route: the shared priced-long base and view semantics ─────
+
+def _mixed_portfolio(fake_market):
+    """$40k US stock + $20k BTC + $40k ETF (60% stocks, 30% bonds)."""
+    seed("STOCK", 100.0, 400)
+    seed("BTC-USD", 20000.0, 1, currency="USD", fx_rate=1.0)
+    seed("ETF.TO", 100.0, 400)
+    fake_market.quotes["STOCK"] = make_quote("STOCK", 100.0, 99.0)
+    fake_market.quotes["BTC-USD"] = make_quote(
+        "BTC-USD", 20000.0, 19000.0, currency="USD")
+    fake_market.quotes["ETF.TO"] = make_quote("ETF.TO", 100.0, 99.0)
+    fake_market.fx_rates["USDCAD"] = 1.0
+    fake_market.profiles["STOCK"] = make_profile(
+        quote_type="EQUITY", sector="Technology", country="United States",
+        market_cap=50_000_000_000)
+    fake_market.profiles["BTC-USD"] = make_profile(
+        quote_type="CRYPTOCURRENCY", market_cap=1_000_000_000_000)
+    # The ETF reports 60% stocks + 30% bonds. Its own country is a fund
+    # domicile and must never be used as an issuer country.
+    fake_market.profiles["ETF.TO"] = make_profile(
+        quote_type="ETF", country="Canada",
+        market_cap=10_000_000_000,
+        asset_mix={"Stocks": 0.6, "Bonds": 0.3})
+
+
+def test_mixed_portfolio_country_uses_direct_company_country(
+        client, fake_market):
+    """Country: 40% United States, 40% Unknown (the ETF has no country
+    breakdown), 20% n/a (Bitcoin has no country). The fund's Canadian
+    domicile is ignored."""
+    _mixed_portfolio(fake_market)
+
+    body = client.get("/api/portfolio/allocation?by=country").get_json()
+    assert {s["key"] for s in body["slices"]} == {
+        "United States", "Unknown", "n/a"}
+    assert slice_for(body, "United States")["status"] == "classified"
+    assert slice_for(body, "United States")["value"] == pytest.approx(40000.0)
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(40000.0)
+    assert slice_for(body, "n/a")["status"] == "not_applicable"
+    assert slice_for(body, "n/a")["value"] == pytest.approx(20000.0)
+    assert_coverage(body["coverage"], 100000.0, classified=40000.0,
+                    unknown=40000.0, na=20000.0)
+    reasons = {e["ticker"]: e["reason"] for e in body["unclassified"]}
+    assert reasons == {
+        "BTC-USD": "country not applicable",
+        "ETF.TO": "no country data",
+    }
+    assert body["excluded"] == []
+
+
+def test_country_future_is_not_applicable(client, fake_market):
+    """A future has no issuer country. Country keeps the prior n/a
+    classification (with the matching status and reason) instead of
+    falling through to Unknown."""
+    seed("FUT", 100.0, 10)
+    fake_market.quotes["FUT"] = make_quote("FUT", 100.0, 99.0)
+    fake_market.profiles["FUT"] = make_profile(
+        quote_type="FUTURE", country="United States")
+
+    body = client.get("/api/portfolio/allocation?by=country").get_json()
+    assert [s["key"] for s in body["slices"]] == ["n/a"]
+    assert body["slices"][0]["status"] == "not_applicable"
+    assert body["slices"][0]["value"] == pytest.approx(1000.0)
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "FUT", "reason": "country not applicable"}]
+    assert_coverage(body["coverage"], 1000.0, na=1000.0)
+
+
+def test_mixed_portfolio_asset_class_keeps_reported_deficit(
+        client, fake_market):
+    """Asset class: 64% Stocks, 20% Crypto, 12% Bonds, 4% Unknown from the
+    ETF's unreported 10% sleeve. Reported weights are never scaled up."""
+    _mixed_portfolio(fake_market)
+
+    body = client.get("/api/portfolio/allocation?by=asset_class").get_json()
+    assert slice_for(body, "Stocks")["value"] == pytest.approx(64000.0)
+    assert slice_for(body, "Crypto")["value"] == pytest.approx(20000.0)
+    assert slice_for(body, "Bonds")["value"] == pytest.approx(12000.0)
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(4000.0)
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert_coverage(body["coverage"], 100000.0, classified=96000.0,
+                    unknown=4000.0)
+    assert body["unclassified"] == [
+        {"ticker": "ETF.TO", "reason": "incomplete asset-class data"}]
+
+
+def test_allocation_views_share_one_priced_long_base(client, fake_market):
+    """Every dimension reconciles to the same CAD base: priced, open long
+    holdings only. The slices partition it, so values add back to it."""
+    _mixed_portfolio(fake_market)
+
+    for by in ("sector", "country", "type", "asset_class", "cap",
+               "currency"):
+        body = client.get(f"/api/portfolio/allocation?by={by}").get_json()
+        coverage = body["coverage"]
+        assert coverage["priced_value"] == pytest.approx(100000.0), by
+        assert sum(s["value"] for s in body["slices"]) == pytest.approx(
+            coverage["priced_value"]), by
+        assert sum(s["weight"] for s in body["slices"]) == pytest.approx(
+            1.0), by
+        for slice_ in body["slices"]:
+            assert slice_["status"] in (
+                "classified", "unknown", "not_applicable"), by
+            assert 0.0 <= slice_["weight"] <= 1.0, by
+
+
+def test_type_missing_is_unknown_and_known_mapping_is_kept(client, fake_market):
+    """Type keeps the friendly labels; a missing quote type is a visible
+    Unknown wedge, not a fabricated category."""
+    seed("AAPL", 100.0, 10)
+    seed("MYSTERY", 100.0, 10)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", 100.0, 99.0)
+    fake_market.quotes["MYSTERY"] = make_quote("MYSTERY", 100.0, 99.0)
+    fake_market.profiles["AAPL"] = make_profile(quote_type="EQUITY")
+    fake_market.profiles["MYSTERY"] = make_profile()
+
+    body = client.get("/api/portfolio/allocation?by=type").get_json()
+    assert slice_for(body, "Stock")["status"] == "classified"
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert body["excluded"] == []
+    assert body["unclassified"] == [
+        {"ticker": "MYSTERY", "reason": "no type data"}]
+    assert_coverage(body["coverage"], 2000.0, classified=1000.0,
+                    unknown=1000.0)
+
+
+def test_fund_sector_uses_only_the_reported_stock_sleeve(
+        client, fake_market):
+    """A 60/40 fund's reported sectors cover the stock sleeve only. Bonds
+    are n/a and the unreported asset share stays Unknown."""
+    seed("BAL", 100.0, 10)
+    fake_market.quotes["BAL"] = make_quote("BAL", 100.0, 99.0)
+    fake_market.profiles["BAL"] = make_profile(
+        quote_type="ETF",
+        asset_mix={"Stocks": 0.6, "Bonds": 0.3},
+        sector_mix={"Technology": 1.0})
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert slice_for(body, "Technology")["value"] == pytest.approx(600.0)
+    assert slice_for(body, "Technology")["status"] == "classified"
+    assert slice_for(body, "n/a")["value"] == pytest.approx(300.0)
+    assert slice_for(body, "n/a")["status"] == "not_applicable"
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(100.0)
+    assert slice_for(body, "Unknown")["status"] == "unknown"
+    assert_coverage(body["coverage"], 1000.0, classified=600.0,
+                    unknown=100.0, na=300.0)
+    reasons = {e["ticker"]: e["reason"] for e in body["unclassified"]}
+    assert reasons == {"BAL": "incomplete asset-class data; "
+                              "sector not applicable to non-equity holdings"}
+
+
+def test_fund_sector_without_mix_is_all_unknown(client, fake_market):
+    seed("ETF.TO", 100.0, 10)
+    fake_market.quotes["ETF.TO"] = make_quote("ETF.TO", 100.0, 99.0)
+    fake_market.profiles["ETF.TO"] = make_profile(quote_type="ETF")
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert [s["key"] for s in body["slices"]] == ["Unknown"]
+    assert body["slices"][0]["status"] == "unknown"
+    assert body["unclassified"] == [
+        {"ticker": "ETF.TO", "reason": "no asset-class data"}]
+    assert_coverage(body["coverage"], 1000.0, unknown=1000.0)
+
+
+def test_fund_sector_missing_mix_still_keeps_confirmed_non_stock_na(
+        client, fake_market):
+    """No sector data for a 60/40 fund: the stock sleeve is Unknown, but
+    the confirmed bond sleeve is still visibly n/a."""
+    seed("BAL", 100.0, 10)
+    fake_market.quotes["BAL"] = make_quote("BAL", 100.0, 99.0)
+    fake_market.profiles["BAL"] = make_profile(
+        quote_type="ETF", asset_mix={"Stocks": 0.6, "Bonds": 0.4})
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert slice_for(body, "n/a")["value"] == pytest.approx(400.0)
+    assert slice_for(body, "Unknown")["value"] == pytest.approx(600.0)
+    assert_coverage(body["coverage"], 1000.0, unknown=600.0, na=400.0)
+    reasons = {e["ticker"]: e["reason"] for e in body["unclassified"]}
+    assert reasons == {"BAL": "no sector data; "
+                              "sector not applicable to non-equity holdings"}
+
+
+def test_override_precedes_profile_failure_and_maps_synthetic_labels(
+        client, fake_market):
+    """A stored manual override wins before the failed lookup, and its
+    trimmed/case-insensitive synthetic labels become the canonical keys."""
+    seed("DEAD.TO", 100.0, 10)
+    fake_market.quotes["DEAD.TO"] = make_quote("DEAD.TO", 100.0, 99.0)
+    # DEAD.TO absent from profiles → get_profile raises
+    db.set_classification_override(
+        "DEAD.TO", "country",
+        {" united states ": 0.4, "Not Applicable": 0.6})
+
+    body = client.get("/api/portfolio/allocation?by=country").get_json()
+    assert body["excluded"] == []
+    assert body["unclassified"] == []
+    assert slice_for(body, "united states")["status"] == "classified"
+    assert slice_for(body, "united states")["value"] == pytest.approx(400.0)
+    assert slice_for(body, "n/a")["status"] == "not_applicable"
+    assert slice_for(body, "n/a")["value"] == pytest.approx(600.0)
+    assert_coverage(body["coverage"], 1000.0, classified=400.0, na=600.0)
+
+
+def test_short_and_flat_never_fetch_quotes_or_join_excluded(
+        client, fake_market, monkeypatch):
+    """Allocation filters to open longs BEFORE quote work: a dead short or
+    flat position is neither fetched nor listed as excluded."""
+    seed("LONG", 100.0, 10)
+    seed("SHORT", 100.0, 4, tx_type="SELL")
+    seed("FLAT", 100.0, 5)
+    seed("FLAT", 100.0, 5, tx_type="SELL", date="2026-08-02")
+
+    calls = []
+    original = fake_market.quotes["LONG"] = make_quote("LONG", 100.0, 99.0)
+    monkeypatch.setattr(app_module, "get_quote",
+                        lambda symbol: calls.append(symbol) or original)
+    fake_market.profiles["LONG"] = make_profile(
+        quote_type="EQUITY", sector="Technology")
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert calls == ["LONG"]
+    assert body["excluded"] == []
+    assert body["unclassified"] == []
+    assert len(body["slices"]) == 1
+    assert_coverage(body["coverage"], 1000.0, classified=1000.0)
+
+
+def test_unusable_cad_long_values_are_excluded_with_reasons(
+        client, fake_market):
+    """Only priced long holdings without a usable CAD value are excluded:
+    zero/NaN prices, unsupported currency, and a missing USD rate."""
+    seed("ZERO", 100.0, 10)
+    seed("NAN", 100.0, 10)
+    seed("EURX", 10.0, 5, currency="EUR")
+    seed("USDX", 10.0, 5, currency="USD", fx_rate=1.3)
+    fake_market.quotes["ZERO"] = make_quote("ZERO", 0.0, 1.0)
+    fake_market.quotes["NAN"] = make_quote(
+        "NAN", float("nan"), 100.0)
+    fake_market.quotes["EURX"] = make_quote(
+        "EURX", 10.0, 9.0, currency="EUR")
+    fake_market.quotes["USDX"] = make_quote(
+        "USDX", 10.0, 9.0, currency="USD")
+    # No USDCAD rate → USDX has no usable CAD value.
+    fake_market.profiles["ZERO"] = make_profile(
+        quote_type="EQUITY", sector="Technology")
+    fake_market.profiles["NAN"] = make_profile(
+        quote_type="EQUITY", sector="Technology")
+
+    body = client.get("/api/portfolio/allocation?by=sector").get_json()
+    assert body["slices"] == []
+    assert body["unclassified"] == []
+    assert {e["ticker"] for e in body["excluded"]} == {
+        "ZERO", "NAN", "EURX", "USDX"}
+    assert_coverage(body["coverage"], 0.0)
+
+
+def test_summary_and_allocation_share_the_same_base(client, fake_market):
+    """Ticker (summary holdings) and the allocation views price the same
+    open longs in CAD, so their coverage can never disagree."""
+    _mixed_portfolio(fake_market)
+
+    summary = client.get("/api/portfolio/summary").get_json()
+    allocation = client.get(
+        "/api/portfolio/allocation?by=currency").get_json()
+    values = {h["ticker"]: h["value"] for h in summary["holdings"]}
+    assert values == {
+        "STOCK": pytest.approx(40000.0),
+        "ETF.TO": pytest.approx(40000.0),
+        "BTC-USD": pytest.approx(20000.0),
+    }
+    assert summary["allocation_coverage"]["priced_value"] == pytest.approx(
+        allocation["coverage"]["priced_value"])
+    assert summary["allocation_excluded"] == allocation["excluded"] == []
 
 
 # ── Allocation route: profile parallelism ──────────────────────────────

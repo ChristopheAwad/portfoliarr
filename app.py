@@ -283,8 +283,8 @@ ALLOCATION_DIMENSIONS = {
     "country":     {"label": "By Country",     "field": "country"},
     "type":        {"label": "By Type",        "field": "quote_type"},
     "asset_class": {"label": "By Asset Class", "field": "asset_mix"},
-    "cap":         {"label": "By Cap Bucket",  "field": "market_cap"},
-    "currency":    {"label": "By Currency",    "field": None},  # from quote
+    "cap":         {"label": "By Company Size", "field": "market_cap"},
+    "currency":    {"label": "By Trading Currency", "field": None},  # from quote
 }
 
 # Dimensions a person can classify by hand (#62). The key is the carousel/API
@@ -2265,6 +2265,33 @@ Algorithm: walk every trading day in the range forward, keeping a
 # includes currency movement, which is the honest CAD picture.
 # ---------------------------------------------------------------------------
 
+def _cad_long_value(held, quote, live_rate):
+    """The CAD value of one open long position, or `(None, reason)`.
+
+    This is THE allocation-base valuation, shared by the summary's Ticker
+    holdings and every allocation dimension. A position is usable only
+    when it has a real quote, a supported USD/CAD currency, a live USD
+    rate when needed, and a positive finite CAD value. Everything else is
+    named in `excluded` instead of silently shrinking the pie's
+    denominator.
+    """
+    if quote is None:
+        return None, "couldn't be priced"
+    currency = quote.get("currency")
+    if currency not in ("USD", "CAD"):
+        return None, f"unsupported currency: {currency}"
+    if currency == "USD" and live_rate is None:
+        return None, "USDCAD rate unavailable"
+    price = quote.get("price")
+    if (isinstance(price, bool) or not isinstance(price, (int, float))
+            or not math.isfinite(price) or price <= 0):
+        return None, "invalid price"
+    value = held * price * (live_rate if currency == "USD" else 1.0)
+    if not math.isfinite(value) or value <= 0:
+        return None, "invalid value"
+    return value, None
+
+
 def _portfolio_summary_data(portfolio_id, request_id):
     """Return the portfolio header's headline numbers as raw floats, in
     CAD.
@@ -2288,14 +2315,25 @@ def _portfolio_summary_data(portfolio_id, request_id):
                         unavailable for a USD holding, or a currency the
                         CAD display doesn't support
         currency        "CAD" — declared so the frontend can label it
-        holdings        the allocation donut's per-ticker slice: one
-                        {ticker, value, weight} per PRICED ticker with a
-                        NET-LONG position, sorted value-DESCENDING; weight
-                        is value ÷ (sum of the long values), so the wedges
-                        close the circle; a short (net qty < 0) counts in
-                        total_value but gets NO wedge (it's a bet against,
-                        not an allocation); [] when nothing is priced,
-                        held long, or held at all
+        holdings        the allocation donut's By Ticker slice: one
+                        {ticker, value, weight} per priced ticker with a
+                        NET-LONG position and a usable positive CAD value,
+                        sorted value-DESCENDING; weight is value ÷ (sum of
+                        the usable long values), so the wedges close the
+                        circle; a short (net qty < 0) counts in total_value
+                        but gets NO wedge (it's a bet against, not an
+                        allocation); [] when nothing is priced, held long,
+                        or held at all
+        allocation_coverage
+                        {priced_value, classified_weight, unknown_weight,
+                        not_applicable_weight} for the Ticker view: the same
+                        CAD base the other allocation views use. Ticker is
+                        always fully classified, so the last three are
+                        1/0/0 when the base is positive and null at zero.
+        allocation_excluded
+                        one {ticker, reason} per open LONG without a usable
+                        CAD value. Flat/short positions are never listed;
+                        the headline `unpriced` list keeps its old meaning.
     """
     # The ledger is the source of truth for what is held. Order doesn't
     # matter here — everything below is sums, not a forward walk.
@@ -2413,10 +2451,15 @@ def _portfolio_summary_data(portfolio_id, request_id):
     cost_basis = 0.0
     unpriced = []
     holdings = []
+    allocation_excluded = []
     for symbol, held in net_qty.items():
         quote = quotes[symbol]
         if quote is None:
             unpriced.append(symbol)
+            if held > 0:
+                _, reason = _cad_long_value(held, quote, live_rate)
+                allocation_excluded.append({"ticker": symbol,
+                                            "reason": reason})
             continue
         # The QUOTE's currency is the live truth (it's the same source the
         # ledger's currency was derived from at insert time). Only USD↔CAD
@@ -2429,14 +2472,23 @@ def _portfolio_summary_data(portfolio_id, request_id):
                 request_id, symbol, currency,
             )
             unpriced.append(symbol)
+            if held > 0:
+                _, reason = _cad_long_value(held, quote, live_rate)
+                allocation_excluded.append({"ticker": symbol,
+                                            "reason": reason})
             continue
         if currency == "USD" and live_rate is None:
             unpriced.append(symbol)   # no FX → no honest CAD number
+            if held > 0:
+                _, reason = _cad_long_value(held, quote, live_rate)
+                allocation_excluded.append({"ticker": symbol,
+                                            "reason": reason})
             continue
         value_rate = live_rate if currency == "USD" else 1.0
-        # One value per ticker, computed ONCE: the headline total and the
-        # donut's wedge must come from the same number, or a wedge could
-        # disagree with the total it claims to be a fraction of.
+        # The headline uses this native multiplication. The Ticker wedge
+        # below reuses the SAME quote and rate through _cad_long_value, so
+        # the two agree for a normal position while the allocation base can
+        # still reject a nonpositive/nonfinite CAD value.
         position_value = held * quote["price"] * value_rate
         total_value += position_value
         day_gain += held * quote["change"] * value_rate
@@ -2446,9 +2498,16 @@ def _portfolio_summary_data(portfolio_id, request_id):
         # oversell fold opens one deliberately) is a bet AGAINST, not an
         # allocation. A fully-sold ticker (net qty 0) gets NO entry either:
         # a zero-value wedge is invisible clutter at best and a 0/0 weight
-        # NaN at worst.
+        # NaN at worst. The allocation base also requires a usable CAD
+        # value (positive, finite, supported currency, FX when needed) so
+        # the Ticker view and every other view partition one base.
         if held > 0:
-            holdings.append({"ticker": symbol, "value": position_value})
+            alloc_value, reason = _cad_long_value(held, quote, live_rate)
+            if alloc_value is None:
+                allocation_excluded.append({"ticker": symbol,
+                                            "reason": reason})
+            else:
+                holdings.append({"ticker": symbol, "value": alloc_value})
         # Cost: stored-rate amounts pass through; legacy unrated amounts
         # (USD rows with fx_rate NULL) convert at the live rate.
         cost_basis += (
@@ -2458,6 +2517,7 @@ def _portfolio_summary_data(portfolio_id, request_id):
         )
 
     unpriced.sort()  # stable, human-readable order for the tooltip
+    allocation_excluded.sort(key=lambda e: e["ticker"])
 
     # THE DONUT SLICE — weights over the PRICED, LONG-ONLY total. Two
     # exclusions already happened above, each for the same reason from
@@ -2481,6 +2541,24 @@ def _portfolio_summary_data(portfolio_id, request_id):
     long_total = sum(entry["value"] for entry in holdings)
     for entry in holdings:
         entry["weight"] = entry["value"] / long_total
+
+    # The Ticker view always classifies every usable long: the ticker IS
+    # the key. Coverage still uses the shared object shape so the frontend
+    # can paint one component for Ticker and the six dimension views.
+    if long_total > 0:
+        allocation_coverage = {
+            "priced_value": long_total,
+            "classified_weight": 1.0,
+            "unknown_weight": 0.0,
+            "not_applicable_weight": 0.0,
+        }
+    else:
+        allocation_coverage = {
+            "priced_value": 0.0,
+            "classified_weight": None,
+            "unknown_weight": None,
+            "not_applicable_weight": None,
+        }
 
     # Percentages need a meaningful BASE to divide by — otherwise the
     # math produces confident-looking nonsense:
@@ -2508,6 +2586,8 @@ def _portfolio_summary_data(portfolio_id, request_id):
         "unpriced": unpriced,
         "currency": "CAD",
         "holdings": holdings,
+        "allocation_coverage": allocation_coverage,
+        "allocation_excluded": allocation_excluded,
     }
 
 
@@ -3008,35 +3088,36 @@ def portfolio_realized():
 # ---------------------------------------------------------------------------
 # ALLOCATION DONUT — multi-dimension slicing of the portfolio value.
 #
-# The dashboard's donut card offers 6 views (By Ticker via the summary
-# endpoint, plus 5 dimensions here), cycled with arrow buttons. Each
-# dimension groups the same holdings math (net-qty × live quote × live
-# FX rate) by a metadata field: sector, country, asset type, market-cap
-# bucket, or currency. (By Industry and By Exchange were cut — see
-# ALLOCATION_DIMENSIONS.)
+# The dashboard's donut card offers 7 views: By Ticker (the summary's
+# holdings slice) plus sector, country, type, asset class, company size
+# and trading currency here. Every view partitions ONE base: the CAD value
+# of priced, positive, open-long holdings. The base is computed before any
+# metadata lookup, so a profile failure moves a holding to Unknown rather
+# than shrinking the denominator.
 #
-# HOW THE MATH WORKS: identical to the summary's pass (fold → parallel
-# quotes → live FX → long-only, priced-only), but instead of returning
-# per-ticker entries, the per-ticker value is bucketed by the chosen
-# dimension's key. Weights divide by the sum of CLASSIFIED slices only
-# (an excluded ticker's value never inflates the denominator).
+# Each slice carries a status: "classified" (real key), "unknown" (the
+# characteristic applies but data is missing) or "not_applicable" (the
+# characteristic does not fit the instrument). Synthetic keys are the
+# canonical "Unknown" and "n/a"; the status is what distinguishes them
+# from a provider category that happens to share the name.
 #
-# DATA SOURCE: the "currency" dimension classifies off the quote's own
-# currency (zero extra network). The other four consult get_profile()
+# DATA SOURCE: trading currency classifies off the quote's own currency
+# (zero extra network). The other dimensions consult get_profile()
 # (market_data.py) — one Ticker.info call per ticker, process-lifetime
-# cached (the name-cache pattern). Missing metadata fields → excluded
-# with a human-readable reason, never fabricated into a category.
+# cached (the name-cache pattern). Missing metadata becomes a visible
+# synthetic wedge with a plain reason, never a fabricated category.
 #
-# CAP BUCKETS: USD market caps convert at the live rate so all buckets
+# COMPANY SIZE: USD market caps convert at the live rate so all buckets
 # are CAD-consistent. Thresholds: Large ≥ $10B CAD, Mid $2–10B,
-# Small < $2B. Missing market_cap → excluded.
+# Small < $2B. Only direct equities use a company cap; known non-equity
+# instruments are n/a (an ETF's AUM or crypto's cap is not a company
+# size), and an unknown type or a stock without a cap is Unknown.
 #
-# EXCLUDED LIST: every ticker that contributes to no slice lands in
-# `excluded` with {ticker, reason}. Two exclusion paths:
-#   - unpriced (quote failed or unsupported currency) — same excluded-
-#     from-every-sum rule the summary already follows
-#   - unclassified (profile missing the field, or profile fetch failed)
-# The frontend surfaces this as a small note under the donut.
+# EXCLUDED LIST: only a long holding without a usable CAD value (dead
+# quote, unsupported currency, missing USD rate, nonpositive/nonfinite
+# value) lands in `excluded` with {ticker, reason}. Flat/short positions
+# are filtered out before quote work and never appear. Priced holdings
+# with a missing/inapplicable share land in `unclassified` instead.
 # ---------------------------------------------------------------------------
 
 # Market-cap bucket thresholds (CAD). USD caps convert at the live rate
@@ -3061,148 +3142,323 @@ def _cap_bucket(market_cap_cad):
 # The two synthetic wedge labels for dimensions where a holding cannot be
 # cleanly classified. `n/a` = the concept does not apply to the instrument
 # (a commodity fund has no country; crypto has no sector); `Unknown` = the
-# concept applies but Yahoo has no data (an ETF's country). Both are real,
-# visible slices and both are assignable from the manual-override editor,
-# so a wedge never silently drops a holding the way the old "excluded" path
-# did.
+# concept applies but the data is missing (an ETF's country). Both are real,
+# visible slices so a wedge never silently drops a holding the way the old
+# "excluded" path did. Country/Sector/Asset class can also be assigned by
+# hand; Type/Company size/Trading currency stay derived.
 NA_WEDGE = "n/a"
 UNKNOWN_WEDGE = "Unknown"
 
+# The status is what makes the synthetic wedges machine-readable. A real
+# label named "Unknown" (a user override, say) still becomes the canonical
+# synthetic key; the status distinguishes the reason from a provider's own
+# category name.
+CLASSIFIED_STATUS = "classified"
+UNKNOWN_STATUS = "unknown"
+NOT_APPLICABLE_STATUS = "not_applicable"
+
+_FUND_TYPES = frozenset(("ETF", "MUTUALFUND"))
+_KNOWN_NON_EQUITY_TYPES = frozenset((
+    "ETF", "MUTUALFUND", "CRYPTOCURRENCY", "FUTURE", "CURRENCY",
+    "INDEX", "BOND",
+))
+# Asset-mix labels that prove a non-stock sleeve for the Sector view.
+# Preferred / Real Estate / Other are deliberately absent: they are not
+# proof that a holding is outside the Sector definition.
+_CONFIRMED_NON_STOCK_MIX_LABELS = (
+    "Bonds", "Cash", "Convertible", "Commodities", "Crypto",
+)
+# Fund sleeves with no country at all. A fund's own reported country is a
+# domicile, never an issuer country, and is ignored.
+_COUNTRYLESS_MIX_LABELS = ("Commodities", "Crypto")
+_ASSET_CLASS_DIRECT_MAP = {
+    "EQUITY": "Stocks", "CRYPTOCURRENCY": "Crypto",
+    "FUTURE": "Commodities", "CURRENCY": "Cash", "BOND": "Bonds",
+}
+_SYNTHETIC_OVERRIDE_LABELS = {
+    "unknown": (UNKNOWN_WEDGE, UNKNOWN_STATUS),
+    "n/a": (NA_WEDGE, NOT_APPLICABLE_STATUS),
+    "not applicable": (NA_WEDGE, NOT_APPLICABLE_STATUS),
+}
+_MIX_EPSILON = 1e-9
+# Yahoo reports fractions; a tiny cumulative rounding overage is shaved,
+# a material one is not. The market-data layer already validates this, but
+# the route defends itself against a malformed injected profile too.
+_MIX_ROUNDING_CEILING = 1.001
+
 
 def _override_parts(override):
-    """A stored override ({label: fraction}) as [(label, fraction)], or None.
+    """A stored override ({label: fraction}) as
+    [(key, fraction, status, reason)].
 
     Defensive: a non-numeric or non-positive entry is dropped so a corrupted
-    row can never inject a NaN weight into the donut.
+    row can never inject a NaN weight into the donut. Manual labels are
+    trimmed and case-folded only to find the reserved synthetic names; other
+    labels keep the existing whole-mix semantics (the route normalizes them
+    to 1 before storage).
     """
     if not override:
         return None
-    parts = [
-        (label, float(fraction))
-        for label, fraction in override.items()
-        if isinstance(fraction, (int, float))
-        and not isinstance(fraction, bool)
-        and math.isfinite(fraction)
-        and fraction > 0
-    ]
+    parts = []
+    for label, fraction in override.items():
+        if (isinstance(fraction, bool)
+                or not isinstance(fraction, (int, float))
+                or not math.isfinite(fraction)
+                or fraction <= 0):
+            continue
+        if not isinstance(label, str):
+            continue
+        clean = label.strip()
+        synthetic = _SYNTHETIC_OVERRIDE_LABELS.get(clean.casefold())
+        if synthetic is not None:
+            parts.append((synthetic[0], float(fraction), synthetic[1], None))
+        elif clean:
+            parts.append((clean, float(fraction), CLASSIFIED_STATUS, None))
     return parts or None
 
 
+def _validated_mix(raw):
+    """Return `(parts, invalid)` for a provider/reported mix.
+
+    `parts` is {label: fraction} with positive finite weights summing to
+    1 or less, or None when the mix is absent/empty. `invalid` is True
+    when a populated cell is malformed, negative, non-finite, or the raw
+    total is materially above 1. A tiny rounding overage (≤ 0.1%) is
+    scaled down; a deficit is never scaled up.
+    """
+    if raw is None or raw == {}:
+        return None, False
+    if not isinstance(raw, dict):
+        return None, True
+    parts = {}
+    total = 0.0
+    for label, weight in raw.items():
+        if not isinstance(label, str) or not label.strip():
+            return None, True
+        if (isinstance(weight, bool)
+                or not isinstance(weight, (int, float))
+                or not math.isfinite(weight)
+                or weight < 0):
+            return None, True
+        if weight > 0:
+            parts[label] = parts.get(label, 0.0) + float(weight)
+            total += float(weight)
+    if not parts or total <= 0:
+        return None, False
+    if total > _MIX_ROUNDING_CEILING:
+        return None, True
+    if total > 1.0:
+        parts = {label: weight / total
+                 for label, weight in parts.items()}
+    return parts, False
+
+
+def _fund_asset_class_parts(asset_mix):
+    mix, invalid = _validated_mix(asset_mix)
+    if invalid:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "unusable fund asset-class data")]
+    if not mix:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "no asset-class data")]
+    parts = [(label, weight, CLASSIFIED_STATUS, None)
+             for label, weight in mix.items()]
+    total = sum(weight for _, weight, _, _ in parts)
+    if total < 1.0 - _MIX_EPSILON:
+        parts.append((UNKNOWN_WEDGE, 1.0 - total, UNKNOWN_STATUS,
+                      "incomplete asset-class data"))
+    return parts
+
+
+def _fund_country_parts(asset_mix):
+    mix, invalid = _validated_mix(asset_mix)
+    if invalid:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "unusable fund asset-class data")]
+    if not mix:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS, "no country data")]
+    countryless = sum(mix.get(label, 0.0)
+                      for label in _COUNTRYLESS_MIX_LABELS)
+    parts = []
+    if countryless > _MIX_EPSILON:
+        parts.append((NA_WEDGE, countryless, NOT_APPLICABLE_STATUS,
+                      "country not applicable"))
+    remainder = 1.0 - countryless
+    if remainder > _MIX_EPSILON:
+        parts.append((UNKNOWN_WEDGE, remainder, UNKNOWN_STATUS,
+                      "no country data"))
+    return parts or [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                      "no country data")]
+
+
+def _fund_sector_parts(asset_mix, sector_mix):
+    mix, invalid = _validated_mix(asset_mix)
+    if invalid:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "unusable fund asset-class data")]
+    if not mix:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "no asset-class data")]
+    stock_sleeve = mix.get("Stocks", 0.0)
+    non_stock = sum(mix.get(label, 0.0)
+                    for label in _CONFIRMED_NON_STOCK_MIX_LABELS)
+    sector, sector_invalid = _validated_mix(sector_mix)
+    parts = []
+    classified_stock = 0.0
+    sector_reason = None
+    if sector_invalid:
+        sector_reason = "unusable fund sector data"
+    elif sector:
+        for label, weight in sector.items():
+            share = weight * stock_sleeve
+            if share > _MIX_EPSILON:
+                parts.append((label, share, CLASSIFIED_STATUS, None))
+                classified_stock += share
+        if stock_sleeve - classified_stock > _MIX_EPSILON:
+            sector_reason = "incomplete sector data"
+    elif stock_sleeve > _MIX_EPSILON:
+        sector_reason = "no sector data"
+    # The part of the stock sleeve the sector report did not cover.
+    stock_gap = stock_sleeve - classified_stock
+    if stock_gap > _MIX_EPSILON and sector_reason is not None:
+        parts.append((UNKNOWN_WEDGE, stock_gap, UNKNOWN_STATUS,
+                      sector_reason))
+    # Confirmed non-stock sleeves are outside the Sector definition.
+    if non_stock > _MIX_EPSILON:
+        parts.append((NA_WEDGE, non_stock, NOT_APPLICABLE_STATUS,
+                      "sector not applicable to non-equity holdings"))
+    # Whatever is left is neither a confirmed stock nor a confirmed
+    # non-stock sleeve: Preferred / Real Estate / Other, or an unreported
+    # part of the fund.
+    remainder = 1.0 - stock_sleeve - non_stock
+    if remainder > _MIX_EPSILON:
+        parts.append((UNKNOWN_WEDGE, remainder, UNKNOWN_STATUS,
+                      "incomplete asset-class data"))
+    return parts or [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                      "no sector data")]
+
+
+def _classify_company_size(profile, currency, live_rate):
+    """Company-size (cap) parts for one priced long."""
+    quote_type = profile.get("quote_type")
+    if quote_type == "EQUITY":
+        market_cap = profile.get("market_cap")
+        if (market_cap is not None
+                and not isinstance(market_cap, bool)
+                and isinstance(market_cap, (int, float))
+                and math.isfinite(market_cap)
+                and market_cap > 0):
+            if currency == "USD" and live_rate is not None:
+                market_cap = market_cap * live_rate
+            bucket = _cap_bucket(market_cap)
+            if bucket is not None:
+                return [(bucket, 1.0, CLASSIFIED_STATUS, None)]
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "no market-cap data")]
+    if quote_type in _KNOWN_NON_EQUITY_TYPES:
+        return [(NA_WEDGE, 1.0, NOT_APPLICABLE_STATUS,
+                 "company size not applicable")]
+    return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS, "no company-size data")]
+
+
 def _classify_holding(by, profile, override):
-    """Classify one holding for a wedge dimension.
+    """Classify one priced long holding for a wedge dimension.
 
-    Returns `(parts, reason)` where `parts` is a non-empty list of
-    `(label, fraction)` summing to 1, and `reason` is None when the holding
-    is fully classified or a human string when a wedge (n/a or Unknown) is
-    present. `by` is one of sector/country/asset_class/type; cap and currency
-    are handled directly by the route (no wedge, no override).
-
-    A manual `override` (a {label: fraction} dict, or None) always replaces
-    the whole result for that dimension.
+    Returns a non-empty list of `(key, fraction, status, reason)` parts.
+    `reason` is a plain human string for a synthetic part (None for a
+    classified part). An owner override always wins, before any lookup
+    failure. `by` is one of sector/country/asset_class/type; company size
+    and currency are handled by their own helpers.
     """
     override_parts = _override_parts(override)
     if override_parts is not None:
-        return override_parts, None
+        return override_parts
+    if profile is None:
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "couldn't fetch profile")]
 
     quote_type = profile.get("quote_type")
     asset_mix = profile.get("asset_mix")
     sector_mix = profile.get("sector_mix")
 
     if by == "type":
-        return [(_quote_type_label(quote_type), 1.0)], None
+        if not quote_type:
+            return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS, "no type data")]
+        return [(_quote_type_label(quote_type), 1.0,
+                 CLASSIFIED_STATUS, None)]
 
     if by == "asset_class":
-        if asset_mix:
-            parts = [(label, w) for label, w in asset_mix.items()
-                     if isinstance(w, (int, float)) and not isinstance(w, bool)
-                     and math.isfinite(w) and w > 0]
-            if parts:
-                return parts, None
-        mapped = {
-            "EQUITY": "Stocks", "CRYPTOCURRENCY": "Crypto",
-            "FUTURE": "Commodities", "CURRENCY": "Cash", "BOND": "Bonds",
-        }.get(quote_type)
+        if quote_type in _FUND_TYPES:
+            return _fund_asset_class_parts(asset_mix)
+        mapped = _ASSET_CLASS_DIRECT_MAP.get(quote_type)
         if mapped:
-            return [(mapped, 1.0)], None
-        return [(UNKNOWN_WEDGE, 1.0)], "no asset-class data"
+            return [(mapped, 1.0, CLASSIFIED_STATUS, None)]
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                 "no asset-class data")]
 
     if by == "country":
-        country = profile.get("country")
-        if country:
-            return [(country, 1.0)], None
-        if quote_type in ("ETF", "MUTUALFUND"):
-            pure_non_security = (
-                asset_mix is not None
-                and (asset_mix or {}).get("Stocks", 0) == 0
-                and (asset_mix or {}).get("Bonds", 0) == 0
-            )
-            if pure_non_security:
-                return [(NA_WEDGE, 1.0)], "country not applicable"
-            return [(UNKNOWN_WEDGE, 1.0)], "no country data"
+        if quote_type in _FUND_TYPES:
+            return _fund_country_parts(asset_mix)
+        if quote_type == "EQUITY":
+            country = profile.get("country")
+            if country:
+                return [(country, 1.0, CLASSIFIED_STATUS, None)]
+            return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                     "no country data")]
         if quote_type in ("CRYPTOCURRENCY", "FUTURE", "CURRENCY"):
-            return [(NA_WEDGE, 1.0)], "country not applicable"
-        return [(UNKNOWN_WEDGE, 1.0)], "no country data"
+            return [(NA_WEDGE, 1.0, NOT_APPLICABLE_STATUS,
+                     "country not applicable")]
+        return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS, "no country data")]
 
     # by == "sector"
-    equity = (asset_mix or {}).get("Stocks", 0) > 0 or quote_type == "EQUITY"
-    if sector_mix:
-        # Yahoo's sector weights describe the EQUITY sleeve only. Scale by the
-        # fund's stock weight so a 60/40 fund puts 60% across sectors and the
-        # remaining 40% in an n/a (non-equity) wedge — never 100% on equities.
-        equity_fraction = (
-            (asset_mix or {}).get("Stocks", 0) if asset_mix is not None else 1.0
-        )
-        if equity_fraction <= 0:
-            return [(NA_WEDGE, 1.0)], "sector not applicable"
-        parts = [
-            (s, w * equity_fraction) for s, w in sector_mix.items()
-            if isinstance(w, (int, float)) and not isinstance(w, bool)
-            and math.isfinite(w) and w > 0
-        ]
-        if not parts:
-            return [(NA_WEDGE, 1.0)], "sector not applicable"
-        remainder = 1 - equity_fraction
-        if remainder > 1e-9:
-            parts.append((NA_WEDGE, remainder))
-            return parts, "sector not applicable to non-equity holdings"
-        return parts, None
+    if quote_type in _FUND_TYPES:
+        return _fund_sector_parts(asset_mix, sector_mix)
+    if quote_type in _KNOWN_NON_EQUITY_TYPES:
+        return [(NA_WEDGE, 1.0, NOT_APPLICABLE_STATUS,
+                 "sector not applicable")]
     sector = profile.get("sector")
     if sector:
-        return [(sector, 1.0)], None
-    if equity:
-        return [(UNKNOWN_WEDGE, 1.0)], "no sector data"
-    return [(NA_WEDGE, 1.0)], "sector not applicable"
+        return [(sector, 1.0, CLASSIFIED_STATUS, None)]
+    return [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS, "no sector data")]
 
 
 @app.route("/api/portfolio/allocation")
 def portfolio_allocation():
     """Return per-dimension allocation slices for the donut carousel.
 
-    Query param `by` is a key in ALLOCATION_DIMENSIONS; defaults to
-    "sector". Invalid key → 400 with the valid options. Shape of reply:
+    Every view partitions ONE base: the CAD value of priced, positive,
+    open-long holdings. The base is priced BEFORE any metadata lookup, so a
+    profile failure can move a holding between classified and Unknown but
+    can never change the denominator. Flat/short positions are filtered out
+    before quote work; `excluded[]` is only for long holdings without a
+    usable CAD value (dead quote, unsupported currency, missing USD rate,
+    nonpositive/nonfinite value).
+
+    Shape of the reply:
 
         by              the dimension key ("sector", "currency", ...)
         currency        "CAD" — all values are CAD
-        slices[]        value-desc, one per wedge:
-            key         the dimension value ("Technology", "USD", ...) or a
-                        synthetic "n/a"/"Unknown" wedge (#62)
-            value       Σ net_qty × live price × rate × the wedge's fraction
-                        for long positions in this group (CAD)
-            weight      value ÷ sum of all slice values
-        unclassified[]  tickers whose result includes an n/a/Unknown part
-                        (assignable via the manual-override editor), only
-                        for sector/country/asset_class:
-            ticker      the symbol
-            reason      "no country data", "sector not applicable", ...
-        excluded[]      tickers that contribute to no slice at all:
-            ticker      the symbol
-            reason      "couldn't be priced", "couldn't fetch profile", ...
+        slices[]        stable value-desc then key:
+            key         the dimension value ("Technology", "USD", ...) or
+                        the canonical synthetic "n/a"/"Unknown"
+            value       this wedge's share of the priced-long CAD base
+            weight      value ÷ coverage.priced_value (null at zero base)
+            status      "classified" | "unknown" | "not_applicable"
+        coverage        {priced_value, classified_weight, unknown_weight,
+                         not_applicable_weight}; priced_value is always
+                         numeric (0 when there is no base), the three
+                         fractions are null when there is no denominator
+        unclassified[]  one {ticker, reason} per priced holding with a
+                        missing/inapplicable share; reasons are deduped and
+                        joined with "; "
+        excluded[]      one {ticker, reason} per long holding that could not
+                        be valued in CAD
 
-    A fund's value is split across its real composition (asset class, and
-    sector scaled to its equity sleeve); a missing or non-applicable
-    dimension becomes an n/a/Unknown wedge instead of silently dropping the
-    holding. Slices may be [] when every holding is excluded — that's
-    honest, not an error. Empty ledger → all three lists are [].
+    A fund's value is split across its real composition; a missing or
+    non-applicable dimension becomes an n/a/Unknown wedge instead of
+    silently dropping the holding. Slices may be [] when every holding is
+    excluded — that's honest, not an error. Empty ledger/only flat/short
+    positions → empty slices with a zero-base coverage object.
     """
     # Validate the dimension key BEFORE doing any work — the same
     # "fail early, fail friendly" pattern as portfolio_history's period
@@ -3215,27 +3471,36 @@ def portfolio_allocation():
     dimension = ALLOCATION_DIMENSIONS[by]
     profile_field = dimension["field"]  # None for currency
 
-    # ── PASS 1: fold transactions into per-ticker figures ────────────────
-    # Same fold as portfolio_summary: net qty (BUY adds, SELL subtracts)
-    # and cost. We need net_qty for the long-only check; value is priced
-    # in pass 2 from live quotes.
+    def zero_base_reply(excluded):
+        return jsonify({
+            "by": by,
+            "currency": "CAD",
+            "slices": [],
+            "unclassified": [],
+            "excluded": sorted(excluded, key=lambda e: e["ticker"]),
+            "coverage": {
+                "priced_value": 0.0,
+                "classified_weight": None,
+                "unknown_weight": None,
+                "not_applicable_weight": None,
+            },
+        })
+
+    # ── PASS 1: fold transactions into per-ticker net quantities ─────────
     transactions = db.get_transactions(g.portfolio_id)
     net_qty = {}
-    currency_by_symbol = {}
     for tx in transactions:
         symbol = tx["ticker"]
         sign = 1 if tx["transaction_type"] == "BUY" else -1
         net_qty[symbol] = net_qty.get(symbol, 0) + sign * tx["qty"]
-        currency_by_symbol.setdefault(symbol, tx["currency"])
 
-    # Empty ledger → empty slices, empty unclassified, empty excluded.
-    if not net_qty:
-        return jsonify({"by": by, "currency": "CAD",
-                        "slices": [], "unclassified": [], "excluded": []})
+    # Allocation is open-long-only. Filter BEFORE quote work: a dead short
+    # or flat position earns no quote call, no excluded entry, no wedge.
+    longs = {symbol: held for symbol, held in net_qty.items() if held > 0}
+    if not longs:
+        return zero_base_reply([])
 
-    # ── PASS 2: price the priced slice in CAD ───────────────────────────
-    # One quote per UNIQUE ticker, fetched in parallel — same pattern as
-    # portfolio_summary. Unpriced tickers join the excluded list.
+    # ── PASS 2: quote the long candidates and price the CAD base ─────────
     def fetch_alloc_quote(symbol):
         try:
             return symbol, get_quote(symbol), None
@@ -3244,27 +3509,29 @@ def portfolio_allocation():
 
     quotes = {}
     quote_failures = []
+    ordered_longs = sorted(longs)
     with ThreadPoolExecutor(
-        max_workers=min(len(net_qty), 8)
+        max_workers=min(len(ordered_longs), 8)
     ) as pool:
-        for symbol, quote, error_type in pool.map(fetch_alloc_quote, net_qty):
+        for symbol, quote, error_type in pool.map(fetch_alloc_quote,
+                                                  ordered_longs):
             quotes[symbol] = quote
             if error_type is not None:
                 quote_failures.append((symbol, error_type))
 
     _log_aggregate_degradation(
-        "market_quotes_degraded", "allocation", len(net_qty),
-        len(net_qty) - len(quote_failures), quote_failures,
+        "market_quotes_degraded", "allocation", len(ordered_longs),
+        len(ordered_longs) - len(quote_failures), quote_failures,
     )
 
-    # ONE live USDCAD rate — fetched only when a USD holding needs
-    # converting. Same logic as portfolio_summary.
-    usd_tickers = sorted(
-        s for s, c in currency_by_symbol.items()
-        if c == "USD" and net_qty.get(s, 0) > 0
+    # ONE live USDCAD rate — demanded by the QUOTE's currency, the same
+    # live truth the summary uses. No rate is fetched for a CAD-only base.
+    needs_live_rate = any(
+        quote is not None and quote.get("currency") == "USD"
+        for quote in quotes.values()
     )
     live_rate = None
-    if usd_tickers:
+    if needs_live_rate:
         try:
             live_rate = get_fx_rate("USD", "CAD")
         except Exception as exc:
@@ -3274,28 +3541,28 @@ def portfolio_allocation():
                 g.request_id, type(exc).__name__,
             )
 
-    # ── PASS 2.5: prefetch profiles in parallel ─────────────────────────
-    # Profile dimensions consult get_profile once per eligible ticker
-    # BEFORE pass 3 classifies. This is the exact set of symbols pass 3
-    # would call get_profile for (priced, long, supported currency, live
-    # rate present when USD) — an unsupported-currency or short ticker is
-    # excluded without ever touching the profile pool. Fetching here in
-    # parallel (≤8 workers, like the quotes) instead of serially inside the
-    # classification loop removes the slow Yahoo Ticker.info calls from the
-    # critical path. A fetch failure records None here; classification
-    # treats None as "couldn't fetch profile" — never fabricated metadata.
-    if profile_field is not None:
-        profile_pool = sorted(
-            symbol
-            for symbol, held in net_qty.items()
-            if held > 0
-            and quotes.get(symbol) is not None
-            and quotes[symbol]["currency"] in ("USD", "CAD")
-            and not (quotes[symbol]["currency"] == "USD"
-                     and live_rate is None)
-        )
-    else:
-        profile_pool = []
+    base = []
+    excluded = []
+    for symbol in ordered_longs:
+        value, reason = _cad_long_value(
+            longs[symbol], quotes.get(symbol), live_rate)
+        if value is None:
+            # No per-view warning for an unsupported quote currency: the
+            # summary already logs that condition, and repeating it for
+            # every carousel view would flood the log without new facts.
+            excluded.append({"ticker": symbol, "reason": reason})
+        else:
+            base.append({"ticker": symbol, "value": value,
+                         "quote": quotes[symbol]})
+
+    if not base:
+        return zero_base_reply(excluded)
+
+    # ── PASS 2.5: prefetch metadata in parallel (base members only) ──────
+    # A profile failure records None here; classification turns that into
+    # an Unknown wedge. It never removes the holding from the base.
+    profile_pool = ([entry["ticker"] for entry in base]
+                    if profile_field is not None else [])
 
     profiles = {}
     if profile_pool:
@@ -3324,119 +3591,90 @@ def portfolio_allocation():
 
     # ── PASS 2.7: manual overrides (assignable dimensions only) ─────────
     # One query for the whole dimension — the table is tiny and install-wide.
-    # A stored override replaces the n/a/Unknown wedge for that symbol.
+    # An override always wins, even when the profile lookup failed.
     overrides = {}
     if by in _OVERRIDE_DIM:
         for row in db.get_classification_overrides(_OVERRIDE_DIM[by]):
             overrides[row["symbol"]] = row["weights"]
 
-    # ── PASS 3: classify + aggregate ────────────────────────────────────
-    # Walk every held ticker. A priced long holding contributes value × each
-    # part's fraction (a fund splits across its composition). A holding that
-    # lands on an n/a/Unknown wedge is listed in `unclassified` so the UI can
-    # offer the manual editor. Profile lookups are already done in parallel
-    # (pass 2.5); this loop only reads the resulting dict.
-    slices = {}        # {label: value}
-    unclassified = []  # [{ticker, reason}] — n/a/Unknown wedges, assignable
-    excluded = []      # [{ticker, reason}] — cannot contribute at all
-    fund_degraded = 0  # profiles whose fund look-through fetch failed
+    # ── PASS 3: classify + aggregate by (status, key) ────────────────────
+    slices = {}            # {(status, key): CAD value}
+    unclassified_reasons = {}  # {ticker: set(reasons)}
+    fund_degraded = 0      # profiles whose fund look-through fetch failed
 
-    for symbol, held in net_qty.items():
-        quote = quotes[symbol]
+    for entry in base:
+        symbol = entry["ticker"]
+        value = entry["value"]
+        quote = entry["quote"]
 
-        # Unpriced: same excluded-from-every-sum rule as the summary.
-        if quote is None:
-            excluded.append({"ticker": symbol,
-                             "reason": "couldn't be priced"})
-            continue
-
-        # Currency check: only USD and CAD are supported — anything else
-        # is excluded, same as the summary.
-        currency = quote["currency"]
-        if currency not in ("USD", "CAD"):
-            app.logger.warning(
-                "event=market_currency_unsupported request_id=%s "
-                "operation=allocation symbol=%r currency=%r",
-                g.request_id, symbol, currency,
-            )
-            excluded.append({"ticker": symbol,
-                             "reason": f"unsupported currency: {currency}"})
-            continue
-        if currency == "USD" and live_rate is None:
-            excluded.append({"ticker": symbol,
-                             "reason": "USDCAD rate unavailable"})
-            continue
-
-        # Long-only: a short is a bet against, not an allocation. It earns
-        # neither a slice nor an unclassified/excluded entry.
-        if held <= 0:
-            continue
-
-        value_rate = live_rate if currency == "USD" else 1.0
-        position_value = held * quote["price"] * value_rate
-
-        # Currency dimension classifies off the quote directly — zero extra
-        # network and no profile.
         if by == "currency":
-            slices[currency] = slices.get(currency, 0.0) + position_value
-            continue
+            parts = [(quote["currency"], 1.0, CLASSIFIED_STATUS, None)]
+        elif by == "cap":
+            profile = profiles.get(symbol)
+            if profile is None:
+                parts = [(UNKNOWN_WEDGE, 1.0, UNKNOWN_STATUS,
+                          "couldn't fetch profile")]
+            else:
+                parts = _classify_company_size(
+                    profile, quote["currency"], live_rate)
+        else:
+            profile = profiles.get(symbol)
+            if (by in _OVERRIDE_DIM and profile is not None
+                    and profile.get("fund_degraded")):
+                fund_degraded += 1
+            parts = _classify_holding(by, profile, overrides.get(symbol))
 
-        # Profile dimensions: `None` means the fetch failed (pass 2.5 ran
-        # before exclusion, so a symbol that got here HAS an entry). A failed
-        # fetch is excluded; a profile merely lacking a field is classified
-        # into an n/a/Unknown wedge, never fabricated.
-        profile = profiles.get(symbol)
-        if profile is None:
-            excluded.append({"ticker": symbol,
-                             "reason": "couldn't fetch profile"})
-            continue
-
-        # Fund look-through failures are logged as one aggregate warning,
-        # only for the dimensions that actually read the mixes.
-        if by in _OVERRIDE_DIM and profile.get("fund_degraded"):
-            fund_degraded += 1
-
-        # Cap dimension: bucket the market cap (convert USD → CAD).
-        if by == "cap":
-            mc = profile.get("market_cap")
-            if currency == "USD" and live_rate is not None and mc is not None:
-                mc = mc * live_rate
-            bucket = _cap_bucket(mc)
-            if bucket is None:
-                excluded.append({"ticker": symbol,
-                                 "reason": "no market-cap data"})
+        for key, fraction, status, reason in parts:
+            if fraction <= _MIX_EPSILON or not math.isfinite(fraction):
                 continue
-            slices[bucket] = slices.get(bucket, 0.0) + position_value
-            continue
-
-        parts, reason = _classify_holding(by, profile, overrides.get(symbol))
-        for label, fraction in parts:
-            slices[label] = slices.get(label, 0.0) + position_value * fraction
-        if reason is not None:
-            unclassified.append({"ticker": symbol, "reason": reason})
+            bucket = (status, key)
+            slices[bucket] = slices.get(bucket, 0.0) + value * fraction
+            if status != CLASSIFIED_STATUS and reason:
+                unclassified_reasons.setdefault(symbol, set()).add(reason)
 
     if fund_degraded:
         app.logger.warning(
             "event=market_fund_degraded request_id=%s operation=allocation "
             "dimension=%s degraded=%d total=%d",
-            g.request_id, by, fund_degraded, len(net_qty),
+            g.request_id, by, fund_degraded, len(base),
         )
 
     # ── PASS 4: build the response ──────────────────────────────────────
-    # Sorted value-descending (biggest slice first — the donut's legend
-    # reads biggest-first). Weights divide by the sum of classified slices
-    # (n/a/Unknown wedges included): an excluded ticker's value never enters
-    # the denominator.
-    total = sum(slices.values())
+    priced_value = sum(entry["value"] for entry in base)
+
+    def _weight(part):
+        return max(0.0, min(1.0, part / priced_value))
+
+    status_values = {
+        CLASSIFIED_STATUS: 0.0,
+        UNKNOWN_STATUS: 0.0,
+        NOT_APPLICABLE_STATUS: 0.0,
+    }
+    for (status, _key), value in slices.items():
+        status_values[status] = status_values.get(status, 0.0) + value
+
     result_slices = [
-        {"key": key, "value": value,
-         "weight": value / total if total > 0 else 0.0}
-        for key, value in sorted(slices.items(),
-                                 key=lambda item: item[1], reverse=True)
+        {"key": key, "value": value, "weight": _weight(value),
+         "status": status}
+        for (status, key), value in sorted(
+            slices.items(),
+            key=lambda item: (-item[1], item[0][1], item[0][0]),
+        )
     ]
 
+    coverage = {
+        "priced_value": priced_value,
+        "classified_weight": _weight(status_values[CLASSIFIED_STATUS]),
+        "unknown_weight": _weight(status_values[UNKNOWN_STATUS]),
+        "not_applicable_weight": _weight(
+            status_values[NOT_APPLICABLE_STATUS]),
+    }
+
+    unclassified = [
+        {"ticker": symbol, "reason": "; ".join(sorted(reasons))}
+        for symbol, reasons in sorted(unclassified_reasons.items())
+    ]
     excluded.sort(key=lambda e: e["ticker"])
-    unclassified.sort(key=lambda e: e["ticker"])
 
     return jsonify({
         "by": by,
@@ -3444,6 +3682,7 @@ def portfolio_allocation():
         "slices": result_slices,
         "unclassified": unclassified,
         "excluded": excluded,
+        "coverage": coverage,
     })
 
 
