@@ -1481,8 +1481,10 @@ async function refreshLedger() {
         ledgerHasResult = true;
         renderLedger(transactions);
         perfMark("ledger:rows");
+        window.telemetrySection?.("ledger_rows", transactions.length ? "ready" : "empty");
     } catch (err) {
         if (!isCurrent()) return;
+        window.telemetrySection?.("ledger_rows", "failed");
         console.error("ledger refresh failed:", err);
         if (ledgerBody.querySelector(".ledger-group")) {
             markLedgerUnavailable();

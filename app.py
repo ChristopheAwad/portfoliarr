@@ -24,6 +24,7 @@ from logging.config import dictConfig
 # every ticker's Yahoo history at the same time instead of one after
 # another (I/O waits overlap; CPU work wouldn't).
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 # Import the Flask class (used to create the app), render_template (serves
 # Jinja2 HTML templates to the browser), jsonify (converts Python
@@ -59,6 +60,7 @@ import db
 # Pure, thread-safe metrics sink. The route layer OWNS logging; market_data
 # and db only record durations into this store (see perf.py).
 import perf
+import telemetry
 
 
 # The portfolio chart's leading trim may only wait for a holiday-sized gap.
@@ -939,6 +941,8 @@ def log_request_duration(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if request.path.startswith("/api/telemetry/") or endpoint == "preferences_page":
+        response.headers["Cache-Control"] = "no-store"
     bytes_sent = "-"
     if endpoint != "static":
         # Server-Timing is the W3C header browser DevTools shows beside the
@@ -960,6 +964,7 @@ def log_request_duration(response):
         request_id, request.method, request.path,
         response.status_code, duration_ms, endpoint, bytes_sent,
     )
+    _finish_telemetry_action(response.status_code)
     # An after_request hook MUST return the response (modified or not) —
     # forgetting this breaks every route at once.
     return response
@@ -1038,6 +1043,101 @@ def _client_endpoint(path):
         if pattern.fullmatch(clean):
             return template
     return None
+
+
+_telemetry_lock = threading.Lock()
+_telemetry_warning_lock = threading.Lock()
+_telemetry_last_warning = -math.inf
+
+
+@contextmanager
+def _telemetry_guard():
+    """Acquire at the outer boundary only; no application work inside."""
+    if not _telemetry_lock.acquire(timeout=telemetry.TIMEOUT):
+        raise TimeoutError("Telemetry is busy")
+    try:
+        yield
+    finally:
+        _telemetry_lock.release()
+
+
+def _telemetry_generation_locked():
+    value = db.get_setting(telemetry.SETTING, timeout=telemetry.TIMEOUT)
+    return value if telemetry.is_generation(value) else None
+
+
+def _telemetry_warning():
+    global _telemetry_last_warning
+    with _telemetry_warning_lock:
+        now = time.monotonic()
+        if now - _telemetry_last_warning < 60:
+            return
+        _telemetry_last_warning = now
+    app.logger.warning("event=local_telemetry_unavailable")
+
+
+def _telemetry_snapshot():
+    with _telemetry_guard():
+        return _telemetry_generation_locked()
+
+
+def _telemetry_path():
+    return db.DB_PATH.with_name("telemetry.db")
+
+
+def _telemetry_write(generation, events):
+    with _telemetry_guard():
+        if generation == _telemetry_generation_locked():
+            telemetry.record(_telemetry_path(), events)
+
+
+def _telemetry_page_state():
+    try:
+        generation = _telemetry_snapshot()
+        return generation, generation is not None
+    except (OSError, sqlite3.Error):
+        _telemetry_warning()
+        return None, None
+
+
+def _start_telemetry_action(metric):
+    try:
+        generation = _telemetry_snapshot()
+        if generation is not None:
+            g.telemetry_action = (generation, metric)
+    except Exception:
+        _telemetry_warning()
+
+
+def _finish_telemetry_action(status):
+    try:
+        action = g.get("telemetry_action")
+        if action is None:
+            return
+        generation, metric = action
+        outcome, reason = g.get("telemetry_outcome", (None, None))
+        if status >= 500:
+            outcome, reason = "failed", "internal"
+        elif outcome is None:
+            if 200 <= status < 300:
+                outcome = "success"
+            else:
+                outcome = "failed"
+                reason = {400: "validation", 404: "not_found"}.get(status, "rejected")
+        _telemetry_write(generation, [(metric, outcome, reason, None, None)])
+    except Exception:
+        # A committed transaction must never fail in the client's eyes
+        # because this optional measurement could not be written.
+        _telemetry_warning()
+
+
+def _record_import_outcome(accepted, reasons):
+    if not reasons and accepted:
+        g.telemetry_outcome = ("success", None)
+        return
+    reason = next((value for value in ("write", "unquotable", "format")
+                   if value in reasons), "no_eligible_rows")
+    g.telemetry_outcome = ("partial" if accepted else "failed", reason)
 
 
 def _note_completed_request():
@@ -1123,14 +1223,107 @@ def index():
     # The dashboard renders the market overview's tabs/panels/links from
     # MARKET_CATEGORIES, so the config rides into the template — the same
     # dict /api/indices validates against (one source of truth).
-    return render_template("index.html", market_categories=MARKET_CATEGORIES)
+    generation, _ = _telemetry_page_state()
+    return render_template("index.html", market_categories=MARKET_CATEGORIES,
+                           telemetry_generation=generation)
 
 
 @app.route("/preferences")
 def preferences_page():
-    """Render the preferences page. No server-side state — all settings
-    are stored in the browser's localStorage by preferences.js."""
-    return render_template("preferences.html", app_version=APP_VERSION)
+    """Render browser preferences and the installation's telemetry status."""
+    _, enabled = _telemetry_page_state()
+    return render_template("preferences.html", app_version=APP_VERSION,
+                           telemetry_enabled=enabled)
+
+
+def _read_telemetry_json(limit):
+    origin = request.headers.get("Origin")
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if ((origin is not None and origin != request.host_url.rstrip("/"))
+            or (fetch_site is not None and fetch_site != "same-origin")):
+        return None, (jsonify(error="same-origin request required"), 403)
+    if request.mimetype != "application/json":
+        return None, (jsonify(error="application/json required"), 415)
+    request.max_content_length = limit if request.content_length is not None else limit + 1
+    try:
+        raw = request.get_data(cache=False)
+    except RequestEntityTooLarge:
+        raw = None
+    if raw is None or len(raw) > limit:
+        return None, (jsonify(error="payload too large"), 413)
+
+    def unique_object(pairs):
+        obj = dict(pairs)
+        if len(obj) != len(pairs):
+            raise ValueError("duplicate JSON key")
+        return obj
+
+    try:
+        return json.loads(raw, object_pairs_hook=unique_object), None
+    except (ValueError, RecursionError):
+        return None, (jsonify(error="invalid JSON"), 400)
+
+
+@app.route("/api/telemetry/settings", methods=["GET", "PUT"])
+def telemetry_settings():
+    denied = _require_owner()
+    if denied:
+        return denied
+    desired = None
+    if request.method == "PUT":
+        body, error = _read_telemetry_json(256)
+        if error:
+            return error
+        if not isinstance(body, dict) or set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+            return jsonify(error="expected an enabled boolean"), 400
+        desired = body["enabled"]
+    try:
+        with _telemetry_guard():
+            enabled = _telemetry_generation_locked() is not None
+            if desired is not None and desired != enabled:
+                db.set_setting(telemetry.SETTING, secrets.token_hex(16) if desired else "off",
+                               timeout=telemetry.TIMEOUT)
+                enabled = desired
+    except (OSError, sqlite3.Error):
+        _telemetry_warning()
+        return jsonify(error="telemetry settings unavailable"), 503
+    return jsonify(enabled=enabled)
+
+
+@app.get("/api/telemetry/report")
+def telemetry_report():
+    denied = _require_owner()
+    if denied:
+        return denied
+    try:
+        generation = _telemetry_snapshot()
+        if generation is None:
+            return jsonify(error="local telemetry is off"), 404
+        data = telemetry.report(_telemetry_path())
+        current = _telemetry_snapshot()
+        if current is None:
+            return jsonify(error="local telemetry is off"), 404
+        if current != generation:
+            return jsonify(error="telemetry setting changed; try again"), 503
+    except (OSError, sqlite3.Error, KeyError):
+        _telemetry_warning()
+        return jsonify(error="weekly report unavailable"), 503
+    return jsonify(data)
+
+
+@app.post("/api/telemetry/client")
+def telemetry_client():
+    body, error = _read_telemetry_json(2048)
+    if error:
+        return error
+    batch = telemetry.parse_batch(body)
+    if batch is None:
+        return jsonify(error="invalid telemetry batch"), 400
+    try:
+        _telemetry_write(*batch)
+    except (OSError, sqlite3.Error):
+        _telemetry_warning()
+    return "", 204
 
 
 @app.route("/api/perf")
@@ -1237,7 +1430,8 @@ def ledger_page():
     from /api/transactions and /api/portfolio/realized, fetched and
     painted by static/js/ledger.js (the same no-server-render rule as
     the dashboard)."""
-    return render_template("ledger.html")
+    generation, _ = _telemetry_page_state()
+    return render_template("ledger.html", telemetry_generation=generation)
 
 
 def _portfolio_name(body):
@@ -3804,6 +3998,7 @@ def log_transaction():
         {"ticker": "AAPL", "date": "2026-08-31", "price": 229.50,
          "qty": 10, "type": "BUY"}
     """
+    _start_telemetry_action("save_create")
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({"error": "expected JSON body with ticker, date, price, qty, type, optional fee"}), 400
@@ -3834,6 +4029,7 @@ def log_transaction():
             "reason=unquotable",
             g.request_id, ticker,
         )
+        g.telemetry_outcome = ("failed", "unquotable")
         return jsonify({"error": f"unknown or unquotable symbol: {ticker}"}), 404
     currency = quote["currency"]
 
@@ -4267,6 +4463,7 @@ def edit_transaction(tx_id):
     # would just confuse. (Flask's <int:tx_id> converter 404s non-numeric
     # ids before this code even runs.) The row itself is kept: its
     # (non-editable) currency feeds the fx_rate re-derivation below.
+    _start_telemetry_action("save_edit")
     row = db.get_transaction(tx_id, g.portfolio_id)
     if row is None:
         return jsonify({"error": f"no transaction with id {tx_id}"}), 404
@@ -4604,8 +4801,10 @@ def import_preview():
     the ledger. The zero-writes rule is what makes the preview
     trustworthy: the ledger is untouched, so previewing is always safe.
     """
+    _start_telemetry_action("import_preview")
     text, error = _import_text_or_error()
     if error:
+        g.telemetry_outcome = ("failed", "format")
         return error
 
     rows = parse_import_text(text)
@@ -4615,14 +4814,17 @@ def import_preview():
         len(quotes) - len(quote_failures), quote_failures,
     )
 
+    reasons = set()
     for row in rows:
         if row["error"] is not None:
+            reasons.add("format")
             continue  # already broken at parse time — leave that reason
         quote = quotes[row["ticker"]]
         if quote is None:
             # Same rule as log_transaction's 404: the ticker isn't proven
             # real, and with no quote there is no currency — no row.
             row["error"] = "unknown or unquotable ticker"
+            reasons.add("unquotable")
         else:
             row["currency"] = quote["currency"]
 
@@ -4636,6 +4838,7 @@ def import_preview():
         rows, db.get_transactions(g.portfolio_id))
 
     valid_count = sum(1 for row in rows if row["error"] is None)
+    _record_import_outcome(valid_count, reasons)
     return jsonify({
         "rows": rows,
         "valid_count": valid_count,
@@ -4658,8 +4861,10 @@ def import_commit():
     claim the request was malformed, when the honest story is "nothing
     qualified".
     """
+    _start_telemetry_action("import_commit")
     text, error = _import_text_or_error()
     if error:
+        g.telemetry_outcome = ("failed", "format")
         return error
 
     rows = parse_import_text(text)
@@ -4675,8 +4880,10 @@ def import_commit():
 
     imported_count = 0
     failed = []
+    reasons = set()
     for row in rows:
         if row["error"] is not None:
+            reasons.add("format")
             failed.append(row)  # parse-stage failure: report it, skip it
             continue
 
@@ -4686,6 +4893,7 @@ def import_commit():
             # same verdict as any other bad ticker: skip, report, never
             # fatal to the rest of the batch.
             row["error"] = "unknown or unquotable ticker"
+            reasons.add("unquotable")
             failed.append(row)
             continue
 
@@ -4712,6 +4920,7 @@ def import_commit():
                 exc_info=True,
             )
             row["error"] = "database write failed"
+            reasons.add("write")
             failed.append(row)
             continue
         imported_count += 1
@@ -4724,6 +4933,7 @@ def import_commit():
         "failed_count=%d",
         g.request_id, imported_count, len(failed),
     )
+    _record_import_outcome(imported_count, reasons)
     return jsonify({"imported": imported_count, "failed": failed})
 
 

@@ -752,6 +752,18 @@ semantics. The reviewed measurements and acceptance checks are in
 
 ---
 
+### 65. Local performance telemetry
+Let the installation owner opt in from Preferences. Show seven days of initial
+dashboard and ledger timings and save/import outcomes. Keep measurements on
+the installation in a separate SQLite file with bounded retention.
+
+**Effort:** 3–5 days
+**Files:** `telemetry.py`, `app.py`, `db.py`, `templates/`, `static/`, `tests/`, `README.md`
+**Depends on:** #21, #61, #64 (shipped)
+**Status:** in progress
+
+---
+
 ## Tier 2.5 — Quick Extends (1 day each)
 
 ### 9. Dashboard Period Return Readout
@@ -992,7 +1004,8 @@ Tier 2 (all independent of each other):
   61. Performance Measurement ──────────┤
   62. Fund Allocation Look-through ─────┤
   63. Loading/Duplicate Work (#61) ──────┤
-  64. Responsive Charts/Startup/Ledger ──┘── depends on #61 and #63 (shipped)
+  64. Responsive Charts/Startup/Ledger ──┤── depends on #61 and #63 (shipped)
+  65. Local performance telemetry ──────┘── depends on #21, #61 and #64
 
 Tier 2.5:
   9. Dashboard Period Return ─────────── depends on #13 (shipped)
@@ -1073,6 +1086,7 @@ For maximum compounding value:
 61. **Performance Measurement** → numbers for route, Yahoo, cache, and browser timing so the next optimization is proven, not guessed
 63. **Loading Performance and Duplicate Work** → shared history work and trustworthy measurements (shipped)
 64. **Responsive Charts, Startup, and Lazy Ledger** → the approved first audit pass, built on #61 and #63
+65. **Local performance telemetry** → measure waits and failures on an opted-in installation
 47. **Database Backup and Restore** → a copy of the whole ledger you can put back
 11. **Search Caching** → resilience
 12. **Stats Caching** → performance

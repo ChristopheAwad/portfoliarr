@@ -93,6 +93,38 @@ This deployment uses plain HTTP. Use it on a trusted private LAN, do not forward
 
 The account security upgrade signs everyone out once and turns off legacy open signup. The installation owner manages accounts and shared fund classifications. See the [upgrade and recovery runbook](docs/operations/audit-rollout.md) for backups, owner recovery, and password resets.
 
+## Local performance telemetry
+
+To start collecting measurements, sign in as the server owner and turn on
+**Preferences → Performance → Collect local telemetry**. The switch starts off.
+It takes effect without a restart. Open Dashboard or Ledger to collect the
+first load timings. The weekly report also counts save and paste import requests
+and their outcomes. It counts received measurements, not people.
+
+The switch applies to all signed-in accounts on this installation. Only the
+owner can see the weekly report. The measurements include no account names,
+IP addresses, tickers, portfolio values, trades, or pasted text. Portfoliarr
+does not send them outside the server.
+
+Measurements live in `instance/telemetry.db`, or `/app/instance/telemetry.db`
+in Docker's `portfoliarr-data` volume. The report shows the last seven days.
+Each write removes measurements more than 30 days old and keeps at most 20,000
+rows. Turning collection off stops new writes but does not delete the file.
+Recent measurements can appear again if you turn it back on. A copy of
+`portfolio.db` includes the setting only; a backup of the whole volume can
+include the measurements as well.
+
+To delete the measurements on a Docker server, turn the switch off first.
+Then run these commands beside the Compose file:
+
+```sh
+docker compose stop portfoliarr
+docker compose run --rm --no-deps --entrypoint /bin/rm portfoliarr -f /app/instance/telemetry.db /app/instance/telemetry.db-journal /app/instance/telemetry.db-wal /app/instance/telemetry.db-shm
+docker compose up -d
+```
+
+Keep `portfolio.db` and the Docker volume. They hold your portfolio and accounts.
+
 ## Android app
 
 `android/` holds a thin WebView client for this web app. Build with `./gradlew assembleDebug` (JDK 17, Android SDK 34). See `android/README.md`.

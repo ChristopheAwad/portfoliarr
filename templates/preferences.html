@@ -168,8 +168,35 @@
                  optional ?perf=1 overlay is the per-page detail view. -->
             <div class="card preferences-card" id="perf-card">
                 <h3>Performance</h3>
-                <p>Server and page timings since the app last started.
-                    These numbers clear when the server restarts.</p>
+                {% if g.user and g.user.get('role') == 'owner' %}
+                <div id="telemetry-controls">
+                    <label class="pref-row" for="telemetry-enabled">
+                        <span class="pref-label">Collect local telemetry</span>
+                        <input type="checkbox" class="pref-check" id="telemetry-enabled"
+                               aria-describedby="telemetry-description" disabled>
+                    </label>
+                    <p id="telemetry-description">Collect load times and save and import
+                        results for signed-in accounts on this server. Only you can
+                        see the weekly report. No usernames, tickers, trades, or
+                        amounts are collected. Nothing leaves this server.
+                        Turning this off keeps existing measurements.</p>
+                    <p id="telemetry-status" role="status"></p>
+                    <p id="telemetry-error" class="action-error" role="alert" hidden></p>
+                    <section id="telemetry-report" aria-labelledby="telemetry-heading" hidden>
+                        <h4 id="telemetry-heading">Last 7 days</h4>
+                        <p id="telemetry-report-status" role="status"></p>
+                        <div id="telemetry-results"></div>
+                    </section>
+                </div>
+                {% elif telemetry_enabled %}
+                <p>Local telemetry is on. This server keeps load times and save and
+                    import results. Only the server owner can see the report. No
+                    usernames, tickers, trades, or amounts are collected.</p>
+                {% elif telemetry_enabled is none %}
+                <p>Local telemetry status is unavailable. Reload this page to check again.</p>
+                {% endif %}
+                <h4>Since last restart</h4>
+                <p>Live server and page timings. These numbers clear when the server restarts.</p>
                 <p id="perf-error" class="action-error" role="alert" hidden></p>
                 <div id="perf-readout"></div>
                 <button type="button" class="btn-text" id="perf-reload">

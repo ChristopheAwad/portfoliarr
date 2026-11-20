@@ -65,7 +65,7 @@
 </head>
 <!-- The body tag itself is a block hole: pages can stamp attributes onto
      it. stock.html uses it for data-symbol (stock.js's identity hook). -->
-<body{% block body_attrs %}{% endblock %}>
+<body{% if telemetry_generation %} data-local-telemetry-generation="{{ telemetry_generation }}"{% endif %}{% block body_attrs %}{% endblock %}>
 
     <!-- Top Navigation Bar — shared by every page (that's why it lives in
          the base template): the dashboard and the stock detail page both
