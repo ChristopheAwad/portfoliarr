@@ -808,9 +808,28 @@ def test_stalled_portfolio_list_headers_fail_within_deadline():
             let ready = false, result;
             portfolioReady.then(value => {ready = true; result = value;});
             assert.equal(status.hidden, true);
+            assert.equal(timers[0].delay, 10000, 'the approved deadline is 10s');
             fireTimers();
             await flush();
             assert.equal(ready, true, 'startup must settle at the deadline');
+            assert.equal(result, null);
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /could not load portfolios\. try again\./i);
+            assert.equal(retry.disabled, false, 'Retry must become available');
+            assert.equal(pendingTimers(), 0, 'the deadline timer must be cleared');
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_stalled_portfolio_list_headers_fail_without_abort_controller():
+    run_node("globalThis.AbortController = undefined;\n" + PORTFOLIO_HARNESS, r"""
+        (async () => {
+            let ready = false, result;
+            portfolioReady.then(value => {ready = true; result = value;});
+            assert.equal(status.hidden, true);
+            fireTimers();
+            await flush();
+            assert.equal(ready, true, 'the timer race must still settle startup');
             assert.equal(result, null);
             assert.equal(status.hidden, false);
             assert.match(message.textContent, /could not load portfolios\. try again\./i);
