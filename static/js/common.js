@@ -135,11 +135,36 @@ function refreshPortfolioList() {
     return flight;
 }
 
+// A stalled response or body must not keep startup (and Retry) pending forever.
+const PORTFOLIO_LIST_TIMEOUT_MS = 10000;
+
 async function loadPortfolioList(generation) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let timer = null;
+    let onAbort = null;
+    let expired = false;
+    let rejectDeadline;
+    const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+    const expire = () => {
+        if (expired) return;
+        expired = true;
+        rejectDeadline(new Error("Portfolio list timeout"));
+    };
+    timer = setTimeout(() => {
+        if (controller) controller.abort();
+        expire();
+    }, PORTFOLIO_LIST_TIMEOUT_MS);
+    if (controller) {
+        onAbort = expire;
+        controller.signal.addEventListener("abort", onAbort);
+    }
     try {
-        const response = await fetch("/api/portfolios");
+        const response = await Promise.race([
+            fetch("/api/portfolios", controller ? { signal: controller.signal } : undefined),
+            deadline,
+        ]);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const list = await response.json();
+        const list = await Promise.race([response.json(), deadline]);
         // A superseded boot read follows the newer read instead of resolving
         // readiness before any current list has been published.
         if (generation !== portfolioListGeneration) return latestPortfolioListPromise;
@@ -184,6 +209,11 @@ async function loadPortfolioList(generation) {
             setPortfolioLoadStatus("Could not load portfolios. Try again.");
         }
         throw error;
+    } finally {
+        if (timer !== null) clearTimeout(timer);
+        if (controller && onAbort) {
+            controller.signal.removeEventListener("abort", onAbort);
+        }
     }
 }
 
