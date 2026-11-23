@@ -91,6 +91,25 @@ def test_future_only_ledger_with_missing_history_is_genuine_empty(
     assert_complete(res, body)
 
 
+def test_trimmed_axis_with_missing_recent_history_is_unavailable(
+        client, fake_market):
+    """Healthy bars exist only BEFORE the first investment, so the trim
+    leaves no labels. A second ticker has no history at all and a
+    transaction on/before today: the empty reply is unavailable."""
+    seed_transaction(ticker="AAPL", date="2026-08-21")
+    seed_transaction(ticker="MISSING", date="2026-08-28", qty=5)
+    fake_market.histories["AAPL"] = {"2026-08-20": 100.0}
+    # MISSING deliberately absent -> get_history raises.
+
+    res = history(client)
+    body = res.get_json()
+    assert body["labels"] == []
+    assert body["values"] == []
+    assert body["index_values"] is None
+    assert body["twrr_pct"] is None
+    assert_degraded(res, body, "unavailable")
+
+
 # ── Complete portfolios ───────────────────────────────────────────────
 
 def test_complete_cad_portfolio_has_no_status(client, fake_market):

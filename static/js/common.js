@@ -1655,14 +1655,24 @@ function setupTimeframeChart(
     // are inert there.
     function setChartStatus(message) {
         if (chartStatus) {
-            chartStatus.textContent = message || "";
-            chartStatus.hidden = !message;
             // Older Android WebViews may not support :has(), so the
             // wrapper is hidden explicitly. Guard closest(): the Node
             // chart harnesses use a plain fake node.
             const line = chartStatus.closest
                 ? chartStatus.closest(".chart-status-line") : null;
-            if (line) line.hidden = !message;
+            if (message) {
+                // Unhide the live region BEFORE the text lands, so the
+                // new text is inside a visible node when it is set and
+                // aria-live announces it.
+                chartStatus.hidden = false;
+                if (line) line.hidden = false;
+                chartStatus.textContent = message;
+            } else {
+                // Clear the text first, then hide the live region.
+                chartStatus.textContent = "";
+                chartStatus.hidden = true;
+                if (line) line.hidden = true;
+            }
         }
         if (chartRetry) chartRetry.hidden = !message;
     }

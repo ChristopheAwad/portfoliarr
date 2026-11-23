@@ -2114,7 +2114,7 @@ def portfolio_history():
     flow_eligible_symbols = {
         symbol for symbol, currency in currency_by_symbol.items()
         if currency == "CAD"
-        or (currency == "USD" and live_rate is not None)
+        or (currency == "USD" and _usable_fx_rate(live_rate))
     }
 
     def tx_flow(tx):
@@ -2211,8 +2211,9 @@ def portfolio_history():
                     label_unpriced.append(symbol)
                     continue   # never traded in range → contributes 0
             # A real, finite close (fresh or carried) plus a supported
-            # currency is a PRICED input. The status only records the walk
-            # that already happened; it never changes the value math.
+            # currency is a PRICED input. Anything else is recorded as
+            # unpriced AND contributes nothing to the total, so a
+            # non-finite or unconvertible value can never reach `values`.
             close_priced = math.isfinite(close)
             currency = currency_by_symbol.get(symbol)
             if currency == "USD":
@@ -2227,10 +2228,10 @@ def portfolio_history():
             elif currency != "CAD":
                 label_unpriced.append(symbol)
                 continue       # unsupported currency — contributes 0
-            if close_priced:
-                label_priced = True
-            else:
+            if not close_priced:
                 label_unpriced.append(symbol)
+                continue
+            label_priced = True
             total += held * close
 
         # Never START the line on a partial total. A position carried into

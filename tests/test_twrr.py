@@ -434,11 +434,15 @@ def test_all_unpriced_nulls_index(client, monkeypatch):
 
     monkeypatch.setattr(app_module, "get_history", fake_get_history)
 
-    body = client.get("/api/portfolio/history?period=5D").get_json()
-    assert body["values"] == []
-    assert body["costs"] == []
-    assert body["index_values"] is None
-    assert body["twrr_pct"] is None
+    res = client.get("/api/portfolio/history?period=5D")
+    assert res.status_code == 200
+    assert res.get_json() == {
+        "labels": [], "values": [], "costs": [],
+        "index_values": None, "twrr_pct": None,
+        # No market axis + a transaction on/before today = unavailable.
+        "valuation_status": "unavailable",
+    }
+    assert res.headers["Cache-Control"] == "no-store"
 
 
 def test_all_unpriced_intraday_returns_empty_shape(client, monkeypatch):
