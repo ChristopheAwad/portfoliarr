@@ -517,7 +517,11 @@ def test_parallel_fetch_failure_isolation(client, monkeypatch):
         "index_values": pytest.approx(
             [100.0, 100.0 + 100.0 / 11.0]),
         "twrr_pct": pytest.approx(100.0 / 11.0),
+        # The chart is usable but incomplete: one relevant position never
+        # priced, so the availability contract marks the reply as degraded.
+        "valuation_status": "partial",
     }
+    assert res.headers["Cache-Control"] == "no-store"
 
 
 # ── In-flight coordination for identical history requests ─────────────
@@ -677,10 +681,48 @@ def test_invalid_history_period_raises_before_touching_the_provider(
     assert fake_yf.calls == []
 
 
-def test_empty_history_success_keeps_the_normal_ttl(fake_yf):
+@pytest.mark.parametrize("period", ["1M", "3M"])
+def test_empty_history_success_uses_the_short_ttl(fake_yf, monkeypatch,
+                                                  period):
+    """An EMPTY successful result may be a transient provider gap, so it
+    expires on the short empty TTL (15s) — on live and settled periods
+    alike. Boundary: 14s is fresh, exactly 15s is stale."""
     fake_yf.state["history"] = pd.DataFrame(
         {"Close": []}, index=pd.to_datetime([]))
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(market_data, "time",
+                        SimpleNamespace(time=lambda: clock["now"],
+                                        perf_counter=lambda: clock["now"]))
 
-    assert market_data.get_history("AAPL", "1M") == {}
-    assert market_data.get_history("AAPL", "1M") == {}
+    assert market_data.get_history("AAPL", period) == {}   # fetch #1
+    clock["now"] += 14
+    assert market_data.get_history("AAPL", period) == {}   # still fresh
     assert len(fake_yf.calls) == 1
+
+    clock["now"] += 1                                       # exactly 15s
+    assert market_data.get_history("AAPL", period) == {}   # stale -> refetch
+    assert len(fake_yf.calls) == 2
+
+
+def test_empty_history_recovers_before_the_full_ttl(fake_yf, monkeypatch):
+    """An empty result must not hide a recovery for the full 600s window:
+    after the empty TTL (but well before the settled TTL) the next call
+    refetches, gets real bars, and those are then cached normally."""
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": []}, index=pd.to_datetime([]))
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(market_data, "time",
+                        SimpleNamespace(time=lambda: clock["now"],
+                                        perf_counter=lambda: clock["now"]))
+
+    assert market_data.get_history("AAPL", "3M") == {}
+
+    clock["now"] += 20          # past the 15s empty TTL, inside the 600s one
+    fake_yf.state["history"] = pd.DataFrame(
+        {"Close": [100.0]}, index=pd.to_datetime(["2026-08-28"]))
+    assert market_data.get_history("AAPL", "3M") == {"2026-08-28": 100.0}
+    assert len(fake_yf.calls) == 2
+
+    clock["now"] += 599         # non-empty data keeps the normal 600s TTL
+    assert market_data.get_history("AAPL", "3M") == {"2026-08-28": 100.0}
+    assert len(fake_yf.calls) == 2

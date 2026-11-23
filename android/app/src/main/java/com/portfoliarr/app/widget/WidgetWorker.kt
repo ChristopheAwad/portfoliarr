@@ -16,8 +16,12 @@ import java.io.IOException
  * app-private preferences; never touches the WebView session. Widgets that
  * share a portfolio share one fetch. A 401 means the token was revoked (or
  * its portfolio/user deleted): the config is cleared so the widget shows
- * its connect state instead of retrying a dead credential forever. Any
- * other failure keeps the cached numbers and asks WorkManager to retry.
+ * its connect state instead of retrying a dead credential forever. A 200
+ * whose body fails the completeness contract (an unpriced ticker, a failed
+ * quote or FX rate) is NOT saved as fresh data: the attempt is marked failed
+ * so the last good snapshot stays tinted stale, and it is not retried, since
+ * another immediate request would fail the same way. Any other failure keeps
+ * the cached numbers and asks WorkManager to retry.
  */
 class WidgetWorker(
     appContext: Context,
@@ -50,10 +54,18 @@ class WidgetWorker(
         for ((token, ids) in idsByToken) {
             try {
                 val payload = WidgetApi.fetchSummary(serverUrl, token)
-                val fetchedAt = System.currentTimeMillis()
-                for (appWidgetId in ids) {
-                    store.savePayload(appWidgetId, payload, fetchedAt)
-                    store.saveAttemptFailed(appWidgetId, false)
+                if (WidgetSummary.readPayload(payload) != null) {
+                    val fetchedAt = System.currentTimeMillis()
+                    for (appWidgetId in ids) {
+                        store.savePayload(appWidgetId, payload, fetchedAt)
+                        store.saveAttemptFailed(appWidgetId, false)
+                    }
+                } else {
+                    // A 200 is not proof of a complete valuation. Keep the
+                    // last good snapshot and timestamp untouched.
+                    for (appWidgetId in ids) {
+                        store.saveAttemptFailed(appWidgetId, true)
+                    }
                 }
             } catch (e: WidgetApi.UnauthorizedException) {
                 for (appWidgetId in ids) {

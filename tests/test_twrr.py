@@ -455,7 +455,10 @@ def test_all_unpriced_intraday_returns_empty_shape(client, monkeypatch):
     assert res.get_json() == {
         "labels": [], "values": [], "costs": [],
         "index_values": None, "twrr_pct": None,
+        # No market axis + a transaction on/before today = unavailable.
+        "valuation_status": "unavailable",
     }
+    assert res.headers["Cache-Control"] == "no-store"
 
 
 # ── Intraday (1D) degenerates naturally ───────────────────────────────

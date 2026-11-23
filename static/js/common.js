@@ -1586,7 +1586,8 @@ function reconcileOverlays(replyBenchmarks, pickerSymbols) {
 function setupTimeframeChart(
     { canvas, buttonBar, datasetLabel, endpoint, defaultPeriod, onPeriodData,
       onPeriodSummary, onPaintComplete, onVisibleFailure, modeBar, getBenchmarks, comparisonReadout,
-      comparisonPrimaryLabel = datasetLabel, getScope = () => "global" }
+      comparisonPrimaryLabel = datasetLabel, getScope = () => "global",
+      chartStatus = null, chartRetry = null }
 ) {
     // Guard: the CDN could be unreachable (offline, blocked, down).
     // Without this, "new Chart(...)" would throw and kill EVERYTHING in
@@ -1637,6 +1638,43 @@ function setupTimeframeChart(
 
     function isLatestChartRequest(period, generation) {
         return chartRequestGenerations[period] === generation;
+    }
+
+    // A degraded history reply still has HTTP 200. The server marks it so
+    // the page can keep an honest old chart instead of painting a partial
+    // total as if it were complete. The stock endpoint never sends this.
+    function isDegradedReply(reply) {
+        return Boolean(reply) && (
+            reply.valuation_status === "partial" ||
+            reply.valuation_status === "unavailable"
+        );
+    }
+
+    // The status line lives beside the period-return readout on the
+    // dashboard only. A stock chart passes no elements, so these helpers
+    // are inert there.
+    function setChartStatus(message) {
+        if (chartStatus) {
+            chartStatus.textContent = message || "";
+            chartStatus.hidden = !message;
+            // Older Android WebViews may not support :has(), so the
+            // wrapper is hidden explicitly. Guard closest(): the Node
+            // chart harnesses use a plain fake node.
+            const line = chartStatus.closest
+                ? chartStatus.closest(".chart-status-line") : null;
+            if (line) line.hidden = !message;
+        }
+        if (chartRetry) chartRetry.hidden = !message;
+    }
+
+    // Retry must not fall back to a cache entry that predates the failed
+    // read. Remove this scope/period/comparison entry, then run the normal
+    // guarded visible refresh (which re-checks in-flight and generations).
+    function forgetCachedPeriod(period) {
+        const scope = getScope();
+        if (scope === null || scope === undefined) return;
+        const benchmarks = (getBenchmarks && getBenchmarks()) || [];
+        delete chartCache[JSON.stringify([scope, period, benchmarks])];
     }
 
     // The x-axis text plan: one entry per bar, "" = paint nothing there.
@@ -2653,6 +2691,7 @@ function setupTimeframeChart(
                 ? TTL_LIVE_MS : TTL_SETTLED_MS;
             const cached = chartCache[cacheKey];
             let data;
+            let degraded = false;
             if (cached && (Date.now() - cached.fetchedAt) < ttl) {
                 data = cached.data;
             } else {
@@ -2678,8 +2717,13 @@ function setupTimeframeChart(
                     flight.then(cleanup, cleanup);
                 }
                 data = await flight;
-                // An older same-period response must not replace fresher data.
-                if (scopeAtStart === scopeGeneration && scope === getScope() &&
+                degraded = isDegradedReply(data);
+                // A degraded 200 is not a complete chart. Never let it
+                // poison the cache: retry and later switches must fetch a
+                // real reply. An older same-period response must not replace
+                // fresher data either.
+                if (!degraded && scopeAtStart === scopeGeneration &&
+                    scope === getScope() &&
                     isLatestChartRequest(period, requestGeneration)) {
                     chartCache[cacheKey] = { data, fetchedAt: Date.now() };
                 }
@@ -2689,12 +2733,36 @@ function setupTimeframeChart(
 
             // Silent mode: fetch + cache only, don't repaint the chart.
             // Used by the pre-fetch loop to warm the cache without
-            // causing the visible chart to jump between timeframes.
+            // causing the visible chart to jump between timeframes. A
+            // degraded prefetch is dropped by the cache guard above.
             if (silent) return;
 
             // A slower, older request may finish after any newer visible
             // request, including another request for the SAME period.
             if (visibleGeneration !== visibleRequestGeneration) return;
+
+            // Degraded but successful: take the same visible-failure path
+            // as an HTTP error, after every generation/scope guard and
+            // before any paint. A prior complete chart stays on screen
+            // with its readout; the status line names both timeframes.
+            if (degraded) {
+                if (lastReply === null) {
+                    if (onVisibleFailure) onVisibleFailure();
+                    emitPeriodSummary(period, null);
+                    if (requestedMode !== mode) applyRequestedMode();
+                    setChartStatus(`${period} unavailable.`);
+                } else {
+                    failedComparisonSymbols = [
+                        ...((getBenchmarks && getBenchmarks()) || []),
+                    ];
+                    reconcileOverlaysOnFailure();
+                    if (requestedMode !== mode) repaintRequestedMode();
+                    setChartStatus(
+                        `Showing ${currentPeriod} data — ${period} unavailable.`
+                    );
+                }
+                return null;
+            }
 
             // Repaint with this reply — the render half of a refresh
             // lives in paint() below so the view toggle can reuse it
@@ -2782,6 +2850,10 @@ function setupTimeframeChart(
                     if (!reuseReply) failedComparisonSymbols = null;
                     applyRequestedMode();
                     paint(data, period);
+                    // Only an accepted visible-fetch paint clears a degraded
+                    // notice. A view repaint passes reuseReply, and scope
+                    // invalidation clears it separately.
+                    if (!reuseReply) setChartStatus(null);
                     syncTimeframeButtons(period);
                     const drawable = () => {
                         const area = chart.chartArea;
@@ -3096,6 +3168,19 @@ function setupTimeframeChart(
         refresh(period);
     });
 
+    // Retry the active request, not whatever button happens to be
+    // highlighted: the old chart and its button stay on screen while a
+    // newer period was unavailable. The cached entry is removed first so
+    // the retry always reaches the network, then the normal guarded
+    // refresh keeps every in-flight and generation rule.
+    if (chartRetry) {
+        chartRetry.addEventListener("click", () => {
+            const period = requestedPeriod;
+            forgetCachedPeriod(period);
+            refresh(period);
+        });
+    }
+
     // History is not part of the 60-second quote poll, but a failed initial
     // request must recover when a stale mobile tab reconnects or returns to
     // the foreground. A cache hit is useful too: paint() still forces the
@@ -3146,6 +3231,10 @@ function setupTimeframeChart(
             lastReply = null;
             failedComparisonSymbols = null;
             lastCosts = null;
+            // The old portfolio's previous close must not be drawn over the
+            // new scope's 1D line before its summary arrives.
+            prevClose = null;
+            setChartStatus(null);
             clearMeasurement();
             chart.data.labels = [];
             chart.data.datasets.forEach((dataset) => { dataset.data = []; });
