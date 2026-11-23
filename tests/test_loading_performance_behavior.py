@@ -24,11 +24,14 @@ def run_node(harness, case):
     # An unresolved Promise alone does not keep Node running. Fail instead of
     # silently passing when a drawing or network completion never arrives.
     if "})().catch(" in case:
-        case = ("const testDeadline = setTimeout(() => { "
+        # Use the real timers module so a harness that fakes global timers
+        # cannot disable this safety net.
+        case = ("const testDeadline = require('node:timers').setTimeout(() => { "
                 "console.error('behavior test did not complete'); "
                 "process.exitCode = 1; }, 3000);\n" +
                 case.replace("})().catch(",
-                             "})().finally(() => clearTimeout(testDeadline)).catch("))
+                             "})().finally(() => require('node:timers')"
+                             ".clearTimeout(testDeadline)).catch("))
     result = subprocess.run(
         [NODE, "-e", harness + "\n" + case, str(ROOT)],
         capture_output=True, text=True, timeout=20,
@@ -495,6 +498,21 @@ const start = source.indexOf('// A selection belongs to this browser');
 const end = source.indexOf('// How long after a finger LIFTS', start);
 assert(start >= 0 && end > start);
 const requests = [], events = [], saved = new Map();
+const timers = [];
+let nextTimerId = 1;
+globalThis.setTimeout = (fn, delay) => {
+    const id = nextTimerId++;
+    timers.push({id, fn, delay});
+    return id;
+};
+globalThis.clearTimeout = id => {
+    const index = timers.findIndex(timer => timer.id === id);
+    if (index >= 0) timers.splice(index, 1);
+};
+function fireTimers() {
+    timers.splice(0).forEach(timer => timer.fn());
+}
+function pendingTimers() {return timers.length;}
 function target(extra={}) {
     return Object.assign({handlers:{}, addEventListener(name, fn) {
         (this.handlers[name] ||= []).push(fn);
@@ -780,6 +798,148 @@ def test_superseded_hung_recovery_does_not_block_new_retry(outcome, trigger, old
             if (!oldFirst) await succeed(1, [{id:1,name:'Old'}]);
             assert.equal(currentPortfolioId(), 2);
             assert.equal(retry.disabled, false);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_stalled_portfolio_list_headers_fail_within_deadline():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            let ready = false, result;
+            portfolioReady.then(value => {ready = true; result = value;});
+            assert.equal(status.hidden, true);
+            assert.equal(timers[0].delay, 10000, 'the approved deadline is 10s');
+            fireTimers();
+            await flush();
+            assert.equal(ready, true, 'startup must settle at the deadline');
+            assert.equal(result, null);
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /could not load portfolios\. try again\./i);
+            assert.equal(retry.disabled, false, 'Retry must become available');
+            assert.equal(pendingTimers(), 0, 'the deadline timer must be cleared');
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_stalled_portfolio_list_headers_fail_without_abort_controller():
+    run_node("globalThis.AbortController = undefined;\n" + PORTFOLIO_HARNESS, r"""
+        (async () => {
+            let ready = false, result;
+            portfolioReady.then(value => {ready = true; result = value;});
+            assert.equal(status.hidden, true);
+            fireTimers();
+            await flush();
+            assert.equal(ready, true, 'the timer race must still settle startup');
+            assert.equal(result, null);
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /could not load portfolios\. try again\./i);
+            assert.equal(retry.disabled, false, 'Retry must become available');
+            assert.equal(pendingTimers(), 0, 'the deadline timer must be cleared');
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_stalled_portfolio_list_body_fails_within_deadline():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            let ready = false;
+            portfolioReady.then(() => ready = true);
+            requests[0].resolve({ok:true, json: () => new Promise(() => {})});
+            await flush();
+            assert.equal(ready, false, 'a stalled body must not settle startup');
+            fireTimers();
+            await flush();
+            assert.equal(ready, true, 'startup must settle at the deadline');
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /could not load portfolios\. try again\./i);
+            assert.equal(retry.disabled, false, 'Retry must become available');
+            assert.equal(pendingTimers(), 0, 'the deadline timer must be cleared');
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_retry_after_portfolio_list_timeout_succeeds():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            fireTimers();
+            await flush();
+            assert.equal(status.hidden, false);
+            retry.dispatch('click');
+            assert.equal(requests.length, 2, 'Retry must issue a fresh request');
+            assert.equal(retry.disabled, true);
+            await succeed(1, [{id:2,name:'Recovered'}]);
+            assert.equal(currentPortfolioId(), 2);
+            assert.equal(status.hidden, true);
+            assert.equal(retry.disabled, false);
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail),
+                [{id:2, previous:null}]);
+            assert.equal(pendingTimers(), 0);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+@pytest.mark.parametrize("stage", ["headers", "body"])
+def test_late_portfolio_list_response_cannot_replace_a_newer_retry(stage):
+    run_node(PORTFOLIO_HARNESS, f"const lateStage = {stage!r};\n" + r"""
+        (async () => {
+            let resolveBody = null;
+            if (lateStage === 'body') {
+                requests[0].resolve({ok:true,
+                    json: () => new Promise(resolve => {resolveBody = resolve;})});
+                await flush();
+            }
+            fireTimers();
+            await flush();
+            retry.dispatch('click');
+            await succeed(1, [{id:2,name:'New'}]);
+            assert.equal(currentPortfolioId(), 2);
+            const lists = changes('portfoliolistchange').length;
+            if (lateStage === 'body') {
+                resolveBody([{id:1,name:'Old'}]);
+                await flush();
+            } else {
+                await succeed(0, [{id:1,name:'Old'}]);
+            }
+            assert.equal(currentPortfolioId(), 2,
+                'a late old reply cannot replace the newer retry');
+            assert.equal(changes('portfoliolistchange').length, lists);
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail),
+                [{id:2, previous:null}]);
+            assert.equal(pendingTimers(), 0);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_empty_portfolio_list_still_uses_existing_recovery():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            await succeed(0, []);
+            assert.equal(currentPortfolioId(), null);
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /no portfolios available/i);
+            assert.equal(pendingTimers(), 0);
+            retry.dispatch('click');
+            await succeed(1, [{id:3,name:'Main'}]);
+            assert.equal(currentPortfolioId(), 3);
+            assert.equal(status.hidden, true);
+            assert.deepEqual(changes('portfoliochange').map(e=>e.detail),
+                [{id:3, previous:null}]);
+        })().catch(e => {console.error(e); process.exitCode=1;});
+    """)
+
+
+def test_http_failure_still_uses_existing_failure_path():
+    run_node(PORTFOLIO_HARNESS, r"""
+        (async () => {
+            await fail(0);
+            assert.equal(status.hidden, false);
+            assert.match(message.textContent, /could not load portfolios\. try again\./i);
+            assert.equal(retry.disabled, false);
+            assert.equal(pendingTimers(), 0);
+            retry.dispatch('click');
+            await succeed(1, [{id:4,name:'Main'}]);
+            assert.equal(currentPortfolioId(), 4);
+            assert.equal(status.hidden, true);
         })().catch(e => {console.error(e); process.exitCode=1;});
     """)
 
