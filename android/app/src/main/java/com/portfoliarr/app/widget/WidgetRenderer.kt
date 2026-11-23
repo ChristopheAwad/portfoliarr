@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import com.portfoliarr.app.MainActivity
 import com.portfoliarr.app.R
 import com.portfoliarr.app.StartGate
-import org.json.JSONObject
 
 /**
  * Paints one widget instance (#51).
@@ -20,8 +19,9 @@ import org.json.JSONObject
  * name, the fetch time, and total return). The wide/small decision comes
  * from the launcher's reported width. Every state degrades honestly:
  * "no server", "tap to connect", a placeholder while the first fetch is in
- * flight, and the cached numbers tinted as stale when the last refresh
- * failed. The view set is limited to what RemoteViews can inflate.
+ * flight, "prices unavailable" when the stored snapshot is incomplete, and
+ * the cached numbers tinted as stale when the last refresh failed. The view
+ * set is limited to what RemoteViews can inflate.
  */
 object WidgetRenderer {
 
@@ -40,7 +40,10 @@ object WidgetRenderer {
         val hasToken = hasServer && store.origin(appWidgetId) == origin &&
             !store.token(appWidgetId).isNullOrEmpty()
         val payloadJson = store.payload(appWidgetId)
-        val status = WidgetFormat.status(hasServer, hasToken, payloadJson != null)
+        // Re-validate the CACHE, not just the last response: an old build may
+        // have stored a partial payload that must never be painted as fresh.
+        val summary = WidgetSummary.readPayload(payloadJson)
+        val status = WidgetFormat.status(hasServer, hasToken, summary != null)
 
         val manager = AppWidgetManager.getInstance(context)
         val widthDp = manager.getAppWidgetOptions(appWidgetId)
@@ -56,12 +59,18 @@ object WidgetRenderer {
                 context, views, wide, context.getString(R.string.widget_no_server))
             WidgetStatus.NO_TOKEN -> showMessage(
                 context, views, wide, context.getString(R.string.widget_no_token))
-            WidgetStatus.NO_DATA -> showMessage(context, views, wide, "—")
+            WidgetStatus.NO_DATA -> if (payloadJson != null ||
+                store.attemptFailed(appWidgetId)) {
+                // No complete snapshot: either a legacy/partial cache or a
+                // failed first refresh. Show the truth, not numbers.
+                showUnavailable(context, views, wide, store, appWidgetId)
+            } else {
+                showMessage(context, views, wide, "—")
+            }
             WidgetStatus.READY -> try {
-                showData(context, views, wide, store, appWidgetId, payloadJson!!)
+                showData(context, views, wide, store, appWidgetId, summary!!)
             } catch (e: Exception) {
-                // A cached payload that cannot be parsed is treated like a
-                // failed refresh: tell the truth, never crash the launcher.
+                // Painting must never crash the launcher.
                 showMessage(context, views, wide,
                     context.getString(R.string.widget_error))
             }
@@ -107,17 +116,14 @@ object WidgetRenderer {
         wide: Boolean,
         store: WidgetStore,
         appWidgetId: Int,
-        payloadJson: String,
+        summary: WidgetSummary.Snapshot,
     ) {
-        val json = JSONObject(payloadJson)
-        val totalValue = json.getDouble("total_value")
-        val dayGain = json.getDouble("day_gain")
-        val dayPct = if (json.isNull("day_gain_pct")) null
-        else json.getDouble("day_gain_pct")
-        val totalGain = json.getDouble("total_gain")
-        val totalPct = if (json.isNull("total_gain_pct")) null
-        else json.getDouble("total_gain_pct")
-        val currency = json.optString("currency", "CAD")
+        val totalValue = summary.totalValue
+        val dayGain = summary.dayGain
+        val dayPct = summary.dayGainPct
+        val totalGain = summary.totalGain
+        val totalPct = summary.totalGainPct
+        val currency = summary.currency
 
         views.setTextViewTextSize(
             R.id.widget_value, TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -167,6 +173,44 @@ object WidgetRenderer {
                     context,
                     if (WidgetFormat.isUp(totalGain)) R.color.widget_up
                     else R.color.widget_down))
+        }
+    }
+
+    /**
+     * The stored snapshot failed the completeness contract, or no complete
+     * one exists yet. Keep an old timestamp when one is available, tinted
+     * stale, so a legacy partial cache cannot look fresh either.
+     */
+    private fun showUnavailable(
+        context: Context,
+        views: RemoteViews,
+        wide: Boolean,
+        store: WidgetStore,
+        appWidgetId: Int,
+    ) {
+        views.setTextViewTextSize(
+            R.id.widget_value, TypedValue.COMPLEX_UNIT_SP, 11f)
+        views.setTextViewText(
+            R.id.widget_value,
+            context.getString(R.string.widget_prices_unavailable))
+        views.setViewVisibility(R.id.widget_day, View.GONE)
+        if (wide) {
+            views.setViewVisibility(R.id.widget_name, View.GONE)
+            views.setViewVisibility(R.id.widget_total, View.GONE)
+        }
+        val fetchedAt = store.fetchedAt(appWidgetId)
+        if (fetchedAt > 0L) {
+            views.setViewVisibility(R.id.widget_asof, View.VISIBLE)
+            views.setTextViewText(
+                R.id.widget_asof,
+                context.getString(
+                    R.string.widget_asof,
+                    WidgetFormat.formatAsOf(fetchedAt)))
+            views.setTextColor(
+                R.id.widget_asof,
+                ContextCompat.getColor(context, R.color.widget_stale))
+        } else {
+            views.setViewVisibility(R.id.widget_asof, View.GONE)
         }
     }
 

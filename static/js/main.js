@@ -739,6 +739,15 @@ async function refreshPortfolioSummary() {
             const data = await response.json();
             if (epoch !== portfolioEpoch()) return;
 
+            // If this cycle could not price part of the ledger, the derived
+            // previous close is stale or complete-looking. Clear it before
+            // any all-unpriced early return so a 1D chart cannot draw the
+            // previous portfolio's line over the new one.
+            if (Array.isArray(data.unpriced) && data.unpriced.length > 0 &&
+                portfolioChartHandle) {
+                portfolioChartHandle.updatePrevClose(null);
+            }
+
             // Privacy guard: when masked, skip painting dollar-only spans
             // (portfolio value and cost basis) but still paint the change
             // pills so percentages stay fresh during the refresh cycle.
@@ -963,6 +972,10 @@ const portfolioChartHandle = setupTimeframeChart({
     comparisonPrimaryLabel: "Portfolio",
     // The chart card's period return readout — the selected timeframe's TWR.
     onPeriodSummary: paintPeriodReturn,
+    // Dashboard-only degraded-reply notice and its retry button. The stock
+    // page passes neither, so its chart never shows them.
+    chartStatus: document.getElementById("portfolio-chart-status"),
+    chartRetry: document.getElementById("portfolio-chart-retry"),
     onPaintComplete: portfolioChartPainted,
     onVisibleFailure: () => window.telemetrySection?.("dashboard_chart", "failed"),
     // The chart plots the CAD total in every mode — label it so the

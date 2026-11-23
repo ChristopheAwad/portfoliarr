@@ -187,6 +187,25 @@
                         <p class="period-return-note">Deposits and withdrawals excluded</p>
                     </div>
 
+                    <!-- Degraded-chart notice. The server marks a history
+                         reply "partial" or "unavailable" when it could not
+                         price some or all positions. The chart keeps the
+                         last complete line (when there is one), this line
+                         names the displayed and requested timeframes, and
+                         Retry re-fetches the requested period without using
+                         a cache entry. Stock pages do not ship it. -->
+                    <div class="chart-status-line" hidden>
+                        <span id="portfolio-chart-status"
+                              class="chart-status"
+                              role="status"
+                              aria-live="polite"
+                              hidden></span>
+                        <button type="button"
+                                id="portfolio-chart-retry"
+                                class="chart-retry"
+                                hidden>Retry</button>
+                    </div>
+
                     <div class="chart-box">
                         <canvas id="portfolioChart"></canvas>
                     </div>

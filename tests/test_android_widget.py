@@ -205,6 +205,27 @@ def test_jvm_widget_suite_exists():
         assert name in suite, f"the JVM suite must cover {name}"
 
 
+def test_widget_summary_adapter_reads_raw_types():
+    summary = code(f"{WIDGET}/WidgetSummary.kt")
+    assert "android." not in summary, \
+        "the completeness helper must stay JVM-testable"
+    assert "androidx." not in summary, \
+        "the completeness helper must stay JVM-testable"
+    assert "JSONObject" in summary
+    assert "JSONArray" in summary, \
+        "unpriced must be checked as an array, not any truthy value"
+    assert ".has(" in summary, \
+        "a missing key must stay distinct from an explicit JSON null"
+    assert ".opt(" in summary, \
+        "raw values must be read without numeric coercion"
+    assert "getDouble" not in summary, \
+        "getDouble would coerce a string-typed number into a Double"
+    assert "as? Number" in summary, \
+        "only genuine JSON numbers may pass the numeric checks"
+    assert "JSONObject.NULL" in summary, \
+        "explicit JSON null must stay distinct from a number"
+
+
 # ── Store cleanup and 401 fail-closed ────────────────────────────────────
 
 def test_store_removes_per_widget_keys():

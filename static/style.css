@@ -1203,6 +1203,47 @@ a.logo { text-decoration: none; color: var(--text-primary); }
     color: var(--text-secondary);
 }
 
+/* Degraded-chart notice + retry. It sits under the return readout as a quiet
+   caption, wraps on narrow cards, and stays invisible until a partial or
+   unavailable history reply replaces a complete chart. */
+.chart-status-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 10px;
+    margin: -4px 0 10px;
+}
+
+/* A healthy chart keeps the original readout-to-canvas spacing: the empty
+   status row takes no room at all. The hidden attribute is set by the
+   shared chart code (not :has(), which older Android WebViews may lack).
+   The attribute selector outranks the flex display above, so no author
+   display rule can override it. */
+.chart-status-line[hidden] { display: none; }
+
+.chart-status {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.chart-retry {
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    padding: 3px 10px;
+    border-radius: calc(var(--radius-md) - 3px);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.chart-retry:hover { border-color: var(--accent); }
+
+.chart-retry:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
 /* Chart Canvas Area. A fixed height (so the card layout is stable) and
    position: relative, which gives Chart.js a positioned ancestor to
    measure itself against — with responsive:true +

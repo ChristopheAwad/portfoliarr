@@ -70,6 +70,11 @@ _name_cache = {}
 # quote cache made the same call; restarting re-warms it once).
 _HISTORY_TTL_SETTLED = 600    # seconds: settled date-spaced bars
 _HISTORY_TTL_LIVE = 120       # seconds: series including today's live bar
+# A SUCCESSFUL empty result is not reliable history: it is often a transient
+# provider gap, not "this ticker has no bars". Keep it only briefly (15s) so
+# the next chart click retries rather than serving a blank line for the full
+# normal TTL. A non-empty result keeps the normal TTL above.
+_HISTORY_TTL_EMPTY_S = 15
 _history_cache = {}
 
 # In-flight coordination: {(symbol, period_key): Future}. Same rule as
@@ -1213,6 +1218,10 @@ def get_history(symbol, period_key):
     cache_key = (symbol, period_key)
     with _market_lock:
         entry = _history_cache.get(cache_key)
+        # An empty success expires on the short empty TTL on EVERY period:
+        # a transient gap must not blank the chart for the full window.
+        if entry and not entry["data"]:
+            ttl = _HISTORY_TTL_EMPTY_S
         if entry and (now - entry["fetched_at"]) < ttl:
             perf.record("market.get_history",
                         (time.perf_counter() - started) * 1000,
@@ -1269,8 +1278,10 @@ def get_history(symbol, period_key):
         result = dict(zip(labels, valid))
 
         # Cache the SUCCESS (an exception above never reaches this line).
-        # A successful empty dict is still a success and keeps the normal
-        # TTL, exactly as before.
+        # A successful empty dict is still a success, but it is cached
+        # under the short empty TTL (see _HISTORY_TTL_EMPTY_S): a transient
+        # provider gap retries soon instead of blanking the chart for the
+        # full normal window.
         with _market_lock:
             _history_cache[cache_key] = {
                 "data": result,

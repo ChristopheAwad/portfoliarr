@@ -1656,6 +1656,16 @@ def _parse_compare_symbols(raw):
     return symbols
 
 
+def _usable_fx_rate(rate):
+    """True when a live USD→CAD rate can honestly convert a USD close.
+
+    None (the lookup failed) is unusable, and so is a non-finite or
+    non-positive number — the same "no honest CAD number" rule the walk
+    applies when it skips an unconvertible holding.
+    """
+    return rate is not None and math.isfinite(rate) and rate > 0
+
+
 def _rebase_series(labels, closes):
     """Forward-fill closes onto labels and rebase the first close to 100."""
     values = []
@@ -1693,7 +1703,16 @@ def portfolio_history():
       twrr_pct     — the time-weighted % over the SAME span the index
         covers (= index end as a %). null when the index is null.
 
-Algorithm: walk every trading day in the range forward, keeping a
+    Availability: a 200 reply can still be an INCOMPLETE chart. When a
+    held position cannot be priced at a retained point (missing history,
+    no CAD conversion), the payload also carries `valuation_status`:
+      "partial"     — at least one relevant position still priced
+      "unavailable" — no relevant position priced anywhere in the window
+    The key is ABSENT for a complete chart and for a genuinely empty one
+    (empty ledger, future-only ledger). Degraded replies are sent with
+    Cache-Control: no-store so a transient gap is never cached.
+
+    Algorithm: walk every trading day in the range forward, keeping a
     running "net quantity held" per ticker (buys add, sells subtract),
     and at each day multiply that quantity by the ticker's close price
     that day. Sum across tickers = portfolio value that day. The daily
@@ -1722,16 +1741,22 @@ Algorithm: walk every trading day in the range forward, keeping a
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    def empty_history_response(benchmark_errors=None):
+    def empty_history_response(benchmark_errors=None, valuation_status=None):
         """Return the empty portfolio shape plus requested comparisons.
 
         Comparisons cannot create a portfolio axis. A successfully fetched
         benchmark therefore gets an empty values list; a known failure keeps
         its error and null values so the frontend can explain the difference.
+
+        `valuation_status` is passed ONLY when the empty chart is not
+        trustworthy (no market axis even though a transaction exists), so
+        a genuine empty ledger keeps exactly its old shape and headers.
         """
         errors = benchmark_errors or {}
         payload = {"labels": [], "values": [], "costs": [],
                    "index_values": None, "twrr_pct": None}
+        if valuation_status:
+            payload["valuation_status"] = valuation_status
         if benchmark_symbols:
             payload["benchmarks"] = [
                 {
@@ -1741,7 +1766,10 @@ Algorithm: walk every trading day in the range forward, keeping a
                 }
                 for symbol in benchmark_symbols
             ]
-        return jsonify(payload)
+        response = jsonify(payload)
+        if valuation_status:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     def load_benchmark_histories(held_histories):
         """Fetch comparisons separately from the portfolio's held histories."""
@@ -1797,6 +1825,11 @@ Algorithm: walk every trading day in the range forward, keeping a
         db.get_transactions(g.portfolio_id),
         key=lambda tx: (tx["transaction_date"], tx["id"]),
     )
+
+    # Empty-chart triage needs "has anything happened yet?" against the
+    # wall clock, not against the fetched axis: a provider gap is only
+    # untrustworthy when a real transaction is on/before today.
+    today_iso = date.today().isoformat()
 
     # An empty ledger is a normal state, not an error — the frontend
     # shows "No transactions yet" and leaves the chart blank.
@@ -1904,7 +1937,16 @@ Algorithm: walk every trading day in the range forward, keeping a
         all_labels.update(history)
     labels = sorted(all_labels)
     if not labels:
-        return empty_history_response(benchmark_errors)
+        # No market axis at all: every history fetch failed or returned
+        # empty. If a transaction has already happened, we cannot judge
+        # the window — say so. A future-only ledger is genuinely empty.
+        has_recent_tx = any(
+            tx["transaction_date"] <= today_iso for tx in transactions
+        )
+        return empty_history_response(
+            benchmark_errors,
+            "unavailable" if has_recent_tx else None,
+        )
 
     # Every label now carries a DATE: intraday series (1D's 5-minute, 5D's
     # 30-minute bars) use "YYYY-MM-DD HH:MM", daily/weekly/monthly use
@@ -1936,7 +1978,19 @@ Algorithm: walk every trading day in the range forward, keeping a
     first_tx_date = transactions[0]["transaction_date"]
     labels = [label for label in labels if label >= first_tx_date]
     if not labels:
-        return empty_history_response(benchmark_errors)
+        # Healthy bars exist but every one predates the first investment.
+        # That is genuinely empty UNLESS a MISSING history belongs to a
+        # ticker with a transaction on/before today: then we cannot tell
+        # whether the missing bars would have covered the window.
+        missing_has_recent_tx = any(
+            tx["transaction_date"] <= today_iso
+            and not histories.get(tx["ticker"])
+            for tx in transactions
+        )
+        return empty_history_response(
+            benchmark_errors,
+            "unavailable" if missing_has_recent_tx else None,
+        )
 
     # A held ticker's first bar can be LATER than the axis start when its
     # market was closed on an earlier label's date (a cross-market holiday:
@@ -1958,6 +2012,29 @@ Algorithm: walk every trading day in the range forward, keeping a
     first_tx_by_symbol = {}
     for tx in transactions:       # already sorted ascending
         first_tx_by_symbol.setdefault(tx["ticker"], tx["transaction_date"])
+
+    def same_day_deferral(symbol, label):
+        """True when an unpriced position is only DEFERRED, not degraded.
+
+        A position first bought ON this label's date may price at a later
+        bar on that SAME date (the intraday case). That is the walk's
+        intentional new-position deferral, so the availability check must
+        not flag it — provided the later same-date bar exists and its
+        currency can be converted.
+        """
+        if first_tx_by_symbol.get(symbol, "")[:10] != label[:10]:
+            return False
+        currency = currency_by_symbol.get(symbol)
+        if currency == "USD":
+            if not _usable_fx_rate(live_rate):
+                return False
+        elif currency != "CAD":
+            return False
+        return any(
+            bar > label and bar[:10] == label[:10]
+            and close is not None and math.isfinite(close)
+            for bar, close in histories.get(symbol, {}).items()
+        )
 
     # Applying transactions is date-driven, and a transaction's date may
     # NOT be a trading-day label (it was a weekend/holiday — e.g. the
@@ -2037,7 +2114,7 @@ Algorithm: walk every trading day in the range forward, keeping a
     flow_eligible_symbols = {
         symbol for symbol, currency in currency_by_symbol.items()
         if currency == "CAD"
-        or (currency == "USD" and live_rate is not None)
+        or (currency == "USD" and _usable_fx_rate(live_rate))
     }
 
     def tx_flow(tx):
@@ -2076,6 +2153,8 @@ Algorithm: walk every trading day in the range forward, keeping a
                         # the date-sorted list)
     series_labels = []  # labels actually plotted (leading partials dropped)
     started = False     # has the first fully-priced bar been found?
+    any_position_priced = False   # any relevant position priced at a kept bar?
+    valuation_degraded = False    # any relevant position stayed unpriced?
     for label_index, label in enumerate(labels):
         # Choose which transactions this label should absorb, then apply
         # them BEFORE pricing (a trade dated this bar's day prices at this
@@ -2105,6 +2184,8 @@ Algorithm: walk every trading day in the range forward, keeping a
         # ledger currencies are treated like an unavailable rate: their
         # holdings contribute 0 rather than a wrong currency's number.
         total = 0.0
+        label_priced = False
+        label_unpriced = []   # relevant symbols this label could not price
         for symbol, held in net_qty.items():
             if held == 0:
                 continue
@@ -2127,14 +2208,30 @@ Algorithm: walk every trading day in the range forward, keeping a
             else:
                 close = last_closes.get(symbol)
                 if close is None:
+                    label_unpriced.append(symbol)
                     continue   # never traded in range → contributes 0
+            # A real, finite close (fresh or carried) plus a supported
+            # currency is a PRICED input. Anything else is recorded as
+            # unpriced AND contributes nothing to the total, so a
+            # non-finite or unconvertible value can never reach `values`.
+            close_priced = math.isfinite(close)
             currency = currency_by_symbol.get(symbol)
             if currency == "USD":
-                if live_rate is None:
-                    continue   # unconvertible — contributes 0 this period
+                # An unusable live rate (None, non-finite, or <= 0) cannot
+                # honestly convert a USD close. Leave the holding unpriced
+                # and contribute 0 — never multiply by 0/NaN/Inf and add
+                # that as if it were a CAD value.
+                if not _usable_fx_rate(live_rate):
+                    label_unpriced.append(symbol)
+                    continue
                 close *= live_rate
             elif currency != "CAD":
+                label_unpriced.append(symbol)
                 continue       # unsupported currency — contributes 0
+            if not close_priced:
+                label_unpriced.append(symbol)
+                continue
+            label_priced = True
             total += held * close
 
         # Never START the line on a partial total. A position carried into
@@ -2182,6 +2279,18 @@ Algorithm: walk every trading day in the range forward, keeping a
             ):
                 continue
             started = True
+
+        # This label is KEPT, so its pricing inputs now count toward the
+        # response's availability. Discarded leading labels (above) never
+        # reach here — their gaps are the existing leading trim, not a
+        # degraded valuation. A same-day new position whose later bar on
+        # that date resolves is deferred, not degraded.
+        if label_priced:
+            any_position_priced = True
+        for symbol in label_unpriced:
+            if not same_day_deferral(symbol, label):
+                valuation_degraded = True
+                break
         series_labels.append(label)
         values.append(total)
 
@@ -2224,6 +2333,11 @@ Algorithm: walk every trading day in the range forward, keeping a
         "labels": labels, "values": values, "costs": costs,
         "index_values": index_values, "twrr_pct": twrr_pct,
     }
+    # Only a degraded chart gets the additive key: absent means complete.
+    valuation_status = None
+    if valuation_degraded:
+        valuation_status = "partial" if any_position_priced else "unavailable"
+        payload["valuation_status"] = valuation_status
     if benchmark_symbols:
         payload["benchmarks"] = [
             {
@@ -2238,7 +2352,10 @@ Algorithm: walk every trading day in the range forward, keeping a
             }
             for symbol in benchmark_symbols
         ]
-    return jsonify(payload)
+    response = jsonify(payload)
+    if valuation_status:
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ---------------------------------------------------------------------------
