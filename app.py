@@ -1709,8 +1709,12 @@ def portfolio_history():
       "partial"     — at least one relevant position still priced
       "unavailable" — no relevant position priced anywhere in the window
     The key is ABSENT for a complete chart and for a genuinely empty one
-    (empty ledger, future-only ledger). Degraded replies are sent with
-    Cache-Control: no-store so a transient gap is never cached.
+    (empty ledger, future-only ledger). A degraded reply WITH a label axis
+    also lists the tickers that could not be priced as `unpriced_symbols`
+    (sorted), so the UI can name the holding instead of saying "some
+    holdings"; the empty-axis unavailable reply omits the list. Degraded
+    replies are sent with Cache-Control: no-store so a transient gap is
+    never cached.
 
     Algorithm: walk every trading day in the range forward, keeping a
     running "net quantity held" per ticker (buys add, sells subtract),
@@ -2161,6 +2165,7 @@ def portfolio_history():
     started = False     # has the first fully-priced bar been found?
     any_position_priced = False   # any relevant position priced at a kept bar?
     valuation_degraded = False    # any relevant position stayed unpriced?
+    valuation_unpriced = set()    # the tickers that caused the degradation
     for label_index, label in enumerate(labels):
         # Choose which transactions this label should absorb, then apply
         # them BEFORE pricing (a trade dated this bar's day prices at this
@@ -2299,7 +2304,9 @@ def portfolio_history():
         for symbol in label_unpriced:
             if not same_day_deferral(symbol, label):
                 valuation_degraded = True
-                break
+                # Keep every culprit, not just the first: the notice names
+                # them so the user knows which holding to fix.
+                valuation_unpriced.add(symbol)
         series_labels.append(label)
         values.append(total)
 
@@ -2342,11 +2349,13 @@ def portfolio_history():
         "labels": labels, "values": values, "costs": costs,
         "index_values": index_values, "twrr_pct": twrr_pct,
     }
-    # Only a degraded chart gets the additive key: absent means complete.
+    # Only a degraded chart gets the additive keys: absent means complete.
     valuation_status = None
     if valuation_degraded:
         valuation_status = "partial" if any_position_priced else "unavailable"
         payload["valuation_status"] = valuation_status
+        if valuation_unpriced:
+            payload["unpriced_symbols"] = sorted(valuation_unpriced)
     if benchmark_symbols:
         payload["benchmarks"] = [
             {

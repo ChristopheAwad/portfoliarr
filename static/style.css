@@ -1227,6 +1227,23 @@ a.logo { text-decoration: none; color: var(--text-primary); }
     color: var(--text-secondary);
 }
 
+/* The unpriced ticker inside the warning: a quiet link to its stock page,
+   so the owner can spot the holding without the caption turning busy. */
+.chart-status-symbol {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-underline-offset: 2px;
+}
+
+.chart-status-symbol:hover { color: var(--accent); }
+
+.chart-status-symbol:focus-visible {
+    outline: none;
+    border-radius: 2px;
+    box-shadow: var(--focus-ring);
+}
+
 .chart-retry {
     border: 1px solid var(--border-color);
     background: var(--card-bg);

@@ -58,7 +58,8 @@ globalThis.window = {handlers:{}, addEventListener(name, fn) {
     (this.handlers[name] ||= []).push(fn);
 }, dispatch(name) {for (const fn of this.handlers[name] || []) fn();}};
 globalThis.document = {documentElement: {}, hidden: false, addEventListener() {},
-    createElement() { return element(); }};
+    createElement() { return element(); },
+    createTextNode(value) { return {nodeValue: value, textContent: value}; }};
 globalThis.localStorage = {getItem() {return null;}, setItem() {}};
 globalThis.getComputedStyle = () => ({getPropertyValue: () => '#123456'});
 globalThis.hexToRgba = () => 'rgba(1,2,3,.75)';
@@ -80,12 +81,18 @@ function element() {
     let text = '';
     return {children: [], hidden: false, style: {}, classList: classes(),
         handlers: {},
-        get textContent() {return text;},
+        get textContent() {
+            if (this.children.length) {
+                return this.children.map(node =>
+                    node.nodeValue ?? node.textContent ?? '').join('');
+            }
+            return text;
+        },
         set textContent(value) {text = value; this.children = [];},
         addEventListener(name, fn) {this.handlers[name] = fn;},
         click() {this.handlers.click?.({target: this});},
         append(...nodes) {this.children.push(...nodes);},
-        replaceChildren(...nodes) {this.children = nodes;}};
+        replaceChildren(...nodes) {this.children = nodes; text = '';}};
 }
 function statusNode() {
     const node = element();
@@ -201,6 +208,103 @@ def test_partial_reply_paints_with_a_warning_and_retry():
             '1D chart is partial — some holdings could not be priced.');
         assert.equal(retryVisible(), true);
         assert.deepEqual(summaries.at(-1), {period: '1D', returnPct: 5});
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_reply_names_and_links_the_unpriced_holding():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        await succeed(0, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['CGL-C.NE'],
+        }));
+        await flush(); await frame(); await frame();
+        assert.equal(statusText(),
+            '1D chart is partial — could not price CGL-C.NE.');
+        const link = chartStatus.children.find(node => node.href);
+        assert.equal(link.textContent, 'CGL-C.NE');
+        assert.equal(link.href, '/stock/CGL-C.NE');
+        assert.equal(retryVisible(), true);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unpriced_link_encodes_the_ticker():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        await succeed(0, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['^GSPC'],
+        }));
+        await flush(); await frame(); await frame();
+        const link = chartStatus.children.find(node => node.href);
+        assert.equal(link.textContent, '^GSPC');
+        assert.equal(link.href, '/stock/%5EGSPC');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unpriced_symbols_shape_is_guarded():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, data(0, 0, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: 'BAD',
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(), '5D unavailable.');
+
+        handle.refresh('1M');
+        await succeed(1, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['AAPL', '', null, 123],
+        }));
+        await flush(); await frame(); await frame();
+        assert.equal(statusText(),
+            '1M chart is partial — could not price AAPL.');
+        const links = chartStatus.children
+            .filter(node => node.href).map(node => node.textContent);
+        assert.deepEqual(links, ['AAPL']);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unavailable_reply_names_the_unpriced_holdings():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, data(0, 0, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: ['AAPL', 'BAD'],
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(),
+            '5D unavailable — could not price AAPL, BAD.');
+        const links = chartStatus.children
+            .filter(node => node.href).map(node => node.textContent);
+        assert.deepEqual(links, ['AAPL', 'BAD']);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unavailable_after_a_chart_still_names_the_holdings():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        await initial();
+        handle.refresh('1D');
+        await succeed(1, data(150, 160, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: ['CGL-C.NE'],
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(),
+            'Showing 5D data — 1D unavailable. Could not price CGL-C.NE.');
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
+        assert.equal(retryVisible(), true);
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """)
 

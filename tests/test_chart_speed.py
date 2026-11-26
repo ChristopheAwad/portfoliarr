@@ -518,8 +518,10 @@ def test_parallel_fetch_failure_isolation(client, monkeypatch):
             [100.0, 100.0 + 100.0 / 11.0]),
         "twrr_pct": pytest.approx(100.0 / 11.0),
         # The chart is usable but incomplete: one relevant position never
-        # priced, so the availability contract marks the reply as degraded.
+        # priced, so the availability contract marks the reply as degraded
+        # and names the ticker the notice must call out.
         "valuation_status": "partial",
+        "unpriced_symbols": ["BAD"],
     }
     assert res.headers["Cache-Control"] == "no-store"
 
