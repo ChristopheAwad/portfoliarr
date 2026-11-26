@@ -1994,17 +1994,23 @@ def portfolio_history():
 
     # A held ticker's first bar can be LATER than the axis start when its
     # market was closed on an earlier label's date (a cross-market holiday:
-    # the date came from another exchange). Forward-fill has no earlier
-    # close to carry at the window's leading edge, so pricing that label
-    # would value the position at 0 and understate the whole portfolio —
-    # the visible leading drop. Record each ticker's first DATE inside the
-    # trimmed window; the walk below skips leading labels until every held
-    # ticker with in-window data has reached that date.
+    # the date came from another exchange), or when an intraday series
+    # simply begins after the first bar another ticker printed that day.
+    # Forward-fill has no earlier close to carry at the window's leading
+    # edge, so pricing that label would value the position at 0 and
+    # understate the whole portfolio — the visible leading drop. Record
+    # each ticker's first BAR inside the trimmed window; the walk below
+    # skips leading labels until every held ticker with in-window data has
+    # reached it. The full label (not just its date) matters for intraday
+    # series: a 10:30 first bar must not be compared as "same day" and
+    # silently kept unpriced at 09:30.
+    first_bar_label = {}
     first_bar_date = {}
     for symbol, history in histories.items():
         in_range = [label for label in history if label >= first_tx_date]
         if in_range:
-            first_bar_date[symbol] = min(in_range)[:10]
+            first_bar_label[symbol] = min(in_range)
+            first_bar_date[symbol] = first_bar_label[symbol][:10]
     # Each ticker's first logged DATE. A position bought BEFORE the label
     # was already carried into it, so it must have an earlier close to
     # forward-fill; a position bought ON the label enters at its first bar
@@ -2236,15 +2242,17 @@ def portfolio_history():
 
         # Never START the line on a partial total. A position carried into
         # the window has no earlier close to forward-fill, so if its first
-        # bar is on a later DATE (its market was closed on this label), this
-        # label cannot price it. Skip leading labels until every carried-in
-        # ticker with in-window data has started trading. A ticker bought ON
-        # this label is a new position (its flow waits for its first price),
-        # so it blocks only while nothing else prices — that keeps a new
-        # same-day buy from hiding the morning line. The comparison is
-        # date-level on purpose: same-day intraday gaps keep their existing
-        # behavior, and a ticker with no bars at all (dead/delisted) still
-        # contributes 0 and never blocks the start.
+        # bar is on a later label (its market was closed, or its intraday
+        # series simply starts later that day), this label cannot price it.
+        # Skip leading labels until every carried-in ticker with in-window
+        # data has started trading. A ticker bought ON this label is a new
+        # position (its flow waits for its first price), so it blocks only
+        # while nothing else prices — that keeps a new same-day buy from
+        # hiding the morning line. The comparison uses the FULL label, not
+        # just its date, so a 10:30 intraday first bar also trims the
+        # earlier same-day bars instead of keeping them unpriced; a ticker
+        # with no bars at all (dead/delisted) still contributes 0 and never
+        # blocks the start.
         #
         # BOUND the wait twice, so a DATA gap can never be mistaken for a
         # market holiday:
@@ -2270,7 +2278,8 @@ def portfolio_history():
             if labels_after >= 2 and any(
                 held != 0
                 and symbol not in last_closes
-                and label_date < first_bar_date.get(symbol, "") <= grace_end
+                and label < first_bar_label.get(symbol, "")
+                and first_bar_date.get(symbol, "") <= grace_end
                 and (
                     not priced_anything
                     or first_tx_by_symbol.get(symbol, "") < label_date

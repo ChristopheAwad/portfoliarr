@@ -402,3 +402,28 @@ def test_same_day_new_position_without_a_same_day_bar_is_partial(
     body = res.get_json()
     assert body["labels"] == ["2026-08-28 09:30", "2026-08-31 09:30"]
     assert_degraded(res, body, "partial")
+
+
+def test_carried_in_position_with_later_same_day_bar_is_complete(
+        client, fake_market):
+    """LATE is carried into the window but its first intraday bar is
+    10:30, after the axis' 09:30 bar. That is the leading trim, not a
+    degraded valuation: the walk must wait for LATE's first bar instead of
+    keeping 09:30 and marking the reply partial."""
+    seed_transaction(ticker="CARRIED", date="2026-08-27", qty=1)
+    seed_transaction(ticker="LATE", date="2026-08-27", qty=2)
+    fake_market.histories["CARRIED"] = {
+        "2026-08-28 09:30": 100.0,
+        "2026-08-28 10:30": 101.0,
+        "2026-08-28 11:30": 102.0,
+    }
+    fake_market.histories["LATE"] = {
+        "2026-08-28 10:30": 50.0,
+        "2026-08-28 11:30": 51.0,
+    }
+
+    res = history(client, "/api/portfolio/history?period=1M")
+    body = res.get_json()
+    assert body["labels"] == ["2026-08-28 10:30", "2026-08-28 11:30"]
+    assert body["values"] == [201.0, 204.0]
+    assert_complete(res, body)

@@ -3,7 +3,9 @@
 Server contract: ``/api/portfolio/history`` keeps healthy payloads
 unchanged, but may add ``valuation_status: "partial" | "unavailable"``
 when some or none of the held positions can be priced.  A degraded reply
-is a 200, so it must never be cached or painted as if it were complete.
+is a 200, so it must never be cached.  A ``partial`` reply still has
+priced positions and is drawn WITH a warning; an ``unavailable`` reply
+must not replace a complete chart.
 
 The Node harness below runs the real shared chart factory with a fake
 network and animation-frame queue.  It deliberately keeps its own copy of
@@ -186,18 +188,19 @@ def test_dashboard_wires_the_status_elements_into_the_factory():
             in span)
 
 
-def test_partial_reply_keeps_previous_chart_and_names_both_timeframes():
+def test_partial_reply_paints_with_a_warning_and_retry():
     run_node(CHART_HARNESS, r"""
     (async () => {
         await initial();
         handle.refresh('1D');
         await succeed(1, degraded(150, 160, 'partial'));
-        await flush(); await frame();
-        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
-        assert.equal(selected(), '5D');
-        assert.equal(statusText(), 'Showing 5D data — 1D unavailable.');
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '1D');
+        assert.equal(statusText(),
+            '1D chart is partial — some holdings could not be priced.');
         assert.equal(retryVisible(), true);
-        assert.equal(summaries.at(-1).period, '5D');
+        assert.deepEqual(summaries.at(-1), {period: '1D', returnPct: 5});
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """)
 
@@ -208,7 +211,10 @@ def test_partial_reply_then_retry_recovers_to_requested_period():
         await initial();
         handle.refresh('1D');
         await succeed(1, degraded(150, 160, 'partial'));
-        await flush(); await frame();
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '1D');
+        assert.equal(retryVisible(), true);
         chartRetry.click();
         assert.equal(requests.length, 3, 'retry must issue a new request');
         await succeed(2, data(150, 160)); await frame(); await frame();
@@ -216,6 +222,76 @@ def test_partial_reply_then_retry_recovers_to_requested_period():
         assert.equal(selected(), '1D');
         assert.equal(statusText(), null);
         assert.equal(retryVisible(), false);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_reply_is_never_written_to_the_cache():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        const count = requests.length;
+        handle.refresh('5D');
+        await flush();
+        assert.equal(requests.length, count + 1,
+            'a partial reply must not be served from the cache');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_first_load_partial_paints_with_a_warning():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '5D');
+        assert.equal(statusText(),
+            '5D chart is partial — some holdings could not be priced.');
+        assert.equal(retryVisible(), true);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_warning_survives_a_mode_repaint():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        await initial();
+        handle.refresh('1D');
+        await succeed(1, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        const warning =
+            '1D chart is partial — some holdings could not be priced.';
+        assert.equal(statusText(), warning);
+        modeBar.handlers.click({target: modes[1]});
+        await frame(); await frame();
+        assert.equal(statusText(), warning);
+        assert.equal(retryVisible(), true);
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        assert.equal(requests.length, 2, 'a view repaint must not fetch');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_late_partial_reply_after_newer_success_is_ignored():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        handle.refresh('5D');
+        await succeed(1, data(100, 110)); await frame(); await frame();
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame();
+        assert.equal(statusText(), null);
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
+        assert.equal(selected(), '5D');
+        const count = requests.length;
+        handle.refresh('1D');
+        await flush();
+        assert.equal(requests.length, count + 1,
+            'a stale partial reply must not be cached');
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """)
 

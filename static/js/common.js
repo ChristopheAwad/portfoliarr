@@ -1670,9 +1670,10 @@ function setupTimeframeChart(
         return chartRequestGenerations[period] === generation;
     }
 
-    // A degraded history reply still has HTTP 200. The server marks it so
-    // the page can keep an honest old chart instead of painting a partial
-    // total as if it were complete. The stock endpoint never sends this.
+    // A degraded history reply still has HTTP 200. "unavailable" means no
+    // held position priced at all (the chart must not replace a real one);
+    // "partial" means some priced and is drawn WITH a warning. Either way
+    // the reply must not be cached. The stock endpoint never sends this.
     function isDegradedReply(reply) {
         return Boolean(reply) && (
             reply.valuation_status === "partial" ||
@@ -2781,10 +2782,24 @@ function setupTimeframeChart(
             // request, including another request for the SAME period.
             if (visibleGeneration !== visibleRequestGeneration) return;
 
-            // Degraded but successful: take the same visible-failure path
-            // as an HTTP error, after every generation/scope guard and
-            // before any paint. A prior complete chart stays on screen
-            // with its readout; the status line names both timeframes.
+            // A PARTIAL reply still priced at least one held position, so
+            // it is drawn with a warning rather than discarded. Retry stays
+            // available and the reply is never cached (the cache guard
+            // above), so a later request can recover to a complete chart.
+            if (data.valuation_status === "partial") {
+                const message =
+                    `${period} chart is partial — some holdings could not be priced.`;
+                return await schedulePaint(data, period, () =>
+                    scopeAtStart === scopeGeneration && scope === getScope() &&
+                    visibleGeneration === visibleRequestGeneration,
+                    { statusMessage: message });
+            }
+
+            // UNAVAILABLE (nothing priced anywhere in the window) is a
+            // visible failure: take the same path as an HTTP error, after
+            // every generation/scope guard and before any paint. A prior
+            // complete chart stays on screen with its readout; the status
+            // line names both timeframes.
             if (degraded) {
                 if (lastReply === null) {
                     if (onVisibleFailure) onVisibleFailure();
@@ -2865,7 +2880,8 @@ function setupTimeframeChart(
         }
     }
 
-    function schedulePaint(data, period, isCurrent, { reuseReply = false } = {}) {
+    function schedulePaint(data, period, isCurrent,
+            { reuseReply = false, statusMessage = null } = {}) {
         const ticket = { isCurrent, generation: ++paintGeneration,
             scope: getScope(), scopeGeneration };
         pendingPaint = ticket;
@@ -2890,10 +2906,11 @@ function setupTimeframeChart(
                     if (!reuseReply) failedComparisonSymbols = null;
                     applyRequestedMode();
                     paint(data, period);
-                    // Only an accepted visible-fetch paint clears a degraded
-                    // notice. A view repaint passes reuseReply, and scope
+                    // Only an accepted visible-fetch paint sets the status:
+                    // null clears a notice, a partial reply passes its
+                    // warning. A view repaint passes reuseReply, and scope
                     // invalidation clears it separately.
-                    if (!reuseReply) setChartStatus(null);
+                    if (!reuseReply) setChartStatus(statusMessage);
                     syncTimeframeButtons(period);
                     const drawable = () => {
                         const area = chart.chartArea;
