@@ -765,17 +765,26 @@ async function refreshPortfolioSummary() {
             // Both the header's degradation path and the normal path must
             // update the donut. An all-unpriced reply is not an empty ledger.
             const tickerSlices = data.holdings.map(
-                (h) => ({ key: h.ticker, value: h.value, weight: h.weight })
+                (h) => ({ key: h.ticker, value: h.value, weight: h.weight,
+                          status: "classified" })
             );
-            const tickerExcluded = data.unpriced.map(
-                (ticker) => ({ ticker, reason: "couldn't be priced" })
-            );
+            // The summary's allocation fields are the authoritative
+            // ticker-view notes since the accuracy fix. Keep the older
+            // `unpriced` fallback so a rolling deploy cannot blank the
+            // note during a version skew.
+            const tickerExcluded = data.allocation_excluded != null
+                ? data.allocation_excluded
+                : data.unpriced.map(
+                    (ticker) => ({ ticker, reason: "couldn't be priced" })
+                );
             lastSummaryHoldings = tickerSlices;
             lastSummaryExcluded = tickerExcluded;
+            lastSummaryCoverage = data.allocation_coverage || null;
             lastSummaryReady = true;
             lastSummaryFailed = false;
             if (allocViewIndex === 0) {
-                paintAllocation(tickerSlices, tickerExcluded);
+                paintAllocation(tickerSlices, tickerExcluded, null, [],
+                                lastSummaryCoverage);
             }
             if (nothingPriced) {
                 window.telemetrySection?.("dashboard_summary", "failed");
@@ -856,6 +865,7 @@ async function refreshPortfolioSummary() {
                 } else {
                     updateAllocExcluded([]);
                     updateAllocUnclassified([]);
+                    updateAllocCoverage(null);
                     setAllocState("unavailable");
                 }
             }
@@ -998,30 +1008,24 @@ function refreshPortfolioChart(period = DEFAULT_CHART_PERIOD, opts) {
 // When the theme toggles, repaint the chart so grid/line colors pick up
 // the new CSS variable values (the crosshair and gradient already read
 // CSS on every draw, but grid color and line border are set at creation /
-// refresh time and need an explicit update). The donut's palette is also
-// build-time state (see paintAllocation) and needs the same refresh.
+// refresh time and need an explicit update). The donut's palette, legend
+// text, and card-paper border are also build-time state (see
+// paintAllocation) and need the same refresh.
 document.addEventListener("themechange", () => {
     if (portfolioChartHandle) {
         portfolioChartHandle.repaintComparisonReadout();
     }
-    // Re-read BOTH pieces of donut color from the new theme: the wedge
-    // palette and the card-paper border between wedges. update("none")
-    // repaints instantly — a theme flip is not the moment for a 600ms
-    // spin. Empty portfolio → no chart yet; the next poll builds one with
-    // fresh colors anyway.
-    if (allocationChart) {
-        const dataset = allocationChart.data.datasets[0];
-        dataset.backgroundColor = getAllocationColors();
-        dataset.borderColor = donutBorderColor();
-        allocationChart.update("none");
-    }
+    // Re-read donut colors from the new theme. update("none") repaints
+    // instantly — a theme flip is not the moment for a 600ms spin. Empty
+    // portfolio → no chart yet; the next poll builds one with fresh colors.
+    refreshAllocationThemeColors();
 });
 
 // ---------------------------------------------------------------------------
 // ALLOCATION DONUT — the sidebar's doughnut of what the portfolio is made
-// OF, cycled through 6 views with arrows and dots. Touching the chart
+// OF, cycled through 7 views with arrows and dots. Touching the chart
 // shows a segment tooltip but never changes views. The "By Ticker" view
-// reads the summary reply's `holdings` slice; the other 5 views fetch
+// reads the summary reply's `holdings` slice; the other 6 views fetch
 // /api/portfolio/allocation?by=<key>.
 // Data is backend-computed; this code paints, never re-derives the math.
 // ---------------------------------------------------------------------------
@@ -1039,9 +1043,21 @@ const allocNextBtn = document.getElementById("alloc-next");
 const allocLabelEl = document.getElementById("alloc-label");
 const allocExcludedEl = document.getElementById("alloc-excluded");
 const allocUnclassifiedEl = document.getElementById("alloc-unclassified");
+const allocCoverageEl = document.getElementById("alloc-coverage");
 const allocDotsEl = document.getElementById("alloc-dots");
 const allocPositionEl = document.getElementById("alloc-position");
 const allocStatusEl = document.getElementById("alloc-status");
+
+// Manual classification only exists for these API keys (#62). Other
+// dimensions must show the reason as plain text — sending a person to a
+// stock page that cannot fix "no market-cap data" or "no type data" is a
+// dead end, and the approved labels do not imply an editor exists.
+const MANUAL_CLASSIFICATION_DIMS = new Set(["country", "sector", "asset_class"]);
+
+// Notes stay readable in the narrow sidebar: list the first few and put the
+// complete list in the " +N more" title instead of a wall of text.
+const MAX_ALLOC_NOTE_ITEMS = 3;
+
 
 // The holdings/slices array the donut currently plots. The tooltip
 // callbacks need each wedge's CAD value, but Chart.js hands a tooltip
@@ -1090,7 +1106,8 @@ function setAllocState(state) {
     const messages = {
         loading: "Loading allocation\u2026",
         empty: "No open long holdings to allocate yet.",
-        excluded: "No holdings could be priced or classified for this view.",
+        excluded: "No priced long holdings to plot for this view. Excluded holdings are listed below.",
+        "no-classified": "No classified values for this view. Coverage and reasons are shown below.",
         unavailable: "Allocation unavailable right now.",
         stale: "Refreshing allocation with the latest prices\u2026",
         "stale-error": "Could not refresh allocation. Showing the last available result.",
@@ -1112,10 +1129,10 @@ function setAllocState(state) {
 }
 
 // ---------------------------------------------------------------------------
-// ALLOCATION CAROUSEL — 6 views, cycled with arrows and dots.
+// ALLOCATION CAROUSEL — 7 views, cycled with arrows and dots.
 //
 // The "By Ticker" view reads from the summary poll's `holdings` slice
-// (already fetched every 60s — zero extra network). The other 5 views
+// (already fetched every 60s — zero extra network). The other 6 views
 // fetch /api/portfolio/allocation?by=<key>, which reuses the quote
 // cache warmed by the summary poll (steady-state: nearly free).
 //
@@ -1135,8 +1152,8 @@ const ALLOCATION_VIEWS = [
     { key: "country", label: "By Country" },
     { key: "type",   label: "By Type" },
     { key: "asset_class", label: "By Asset Class" },
-    { key: "cap",    label: "By Cap Bucket" },
-    { key: "currency", label: "By Currency" },
+    { key: "cap",    label: "By Company Size" },
+    { key: "currency", label: "By Trading Currency" },
 ];
 
 // Carousel state. persisted in localStorage so the last-viewed
@@ -1238,11 +1255,13 @@ function switchAllocView(newIndex) {
         // By Ticker: re-paint from the summary's holdings (already
         // in memory from the last poll). The next poll will refresh it.
         if (lastSummaryReady) {
-            paintAllocation(lastSummaryHoldings, lastSummaryExcluded);
+            paintAllocation(lastSummaryHoldings, lastSummaryExcluded, null,
+                            [], lastSummaryCoverage);
             if (lastSummaryFailed) setAllocState("stale-error");
         } else {
             updateAllocExcluded([]);
             updateAllocUnclassified([]);
+            updateAllocCoverage(null);
             setAllocState(lastSummaryFailed ? "unavailable" : "loading");
         }
     } else {
@@ -1278,10 +1297,11 @@ async function fetchAllocDimension(by) {
     if (allocCache[key]) {
         const entry = allocCache[key];
         paintAllocation(entry.data.slices, entry.data.excluded, by,
-                        entry.data.unclassified);
+                        entry.data.unclassified, entry.data.coverage);
     } else {
         updateAllocExcluded([]);
         updateAllocUnclassified([]);
+        updateAllocCoverage(null);
         setAllocState("loading");
     }
 
@@ -1301,7 +1321,10 @@ async function fetchAllocDimension(by) {
         const cached = allocCache[key];
         if (cached && cached.data.slices &&
             cached.data.slices.length > 0) {
-            setAllocState("stale");
+            const cachedState = allocationResultState(
+                cached.data.slices, cached.data.excluded, cached.data.coverage
+            );
+            setAllocState(cachedState === "ready" ? "stale" : cachedState);
         } else if (!cached) {
             setAllocState("loading");
         }
@@ -1316,7 +1339,8 @@ async function fetchAllocDimension(by) {
         // it over the current slide — their next flip reads the cache.
         allocCache[key] = { data, fetchedAt: Date.now() };
         if (isActiveAllocView(by)) {
-            paintAllocation(data.slices, data.excluded, by, data.unclassified);
+            paintAllocation(data.slices, data.excluded, by, data.unclassified,
+                            data.coverage);
         }
     })().catch((err) => {
         if (epoch !== portfolioEpoch()) return;
@@ -1332,17 +1356,25 @@ async function fetchAllocDimension(by) {
             // A revalidation failed — this dimension's donut is still
             // painted: drop the "refreshing" note and keep the chart.
             // Failures are transient; blanking a valid donut over a blip
-            // is not a kindness, and the next poll retries anyway.
-            setAllocState("ready");
+            // is not a kindness, and the next poll retries anyway. A
+            // priced-only-Unknown/N-A payload keeps its no-classified
+            // state instead of pretending a pie exists.
+            const priorState = allocationResultState(
+                prior.slices, prior.excluded, prior.coverage
+            );
+            setAllocState(priorState === "ready" ? "ready" : priorState);
         } else if (prior) {
-            // This dimension's last honest result was an empty portfolio —
+            // This dimension's last honest result was empty or excluded —
             // keep its message instead of pretending it broke.
-            setAllocState(allocationResultState(prior.slices, prior.excluded));
+            setAllocState(allocationResultState(
+                prior.slices, prior.excluded, prior.coverage
+            ));
         } else {
             // Nothing for THIS dimension was ever painted. Hide whatever
             // other dimension's data is on the canvas and say so plainly.
             updateAllocExcluded([]);
             updateAllocUnclassified([]);
+            updateAllocCoverage(null);
             setAllocState("unavailable");
         }
     }).finally(() => {
@@ -1396,6 +1428,7 @@ if (donutBoxEl) {
 // ticker view is active.
 let lastSummaryHoldings = [];
 let lastSummaryExcluded = [];
+let lastSummaryCoverage = null;
 let lastSummaryReady = false;
 let lastSummaryFailed = false;
 
@@ -1410,53 +1443,255 @@ portfolioReady.then(initializeAllocCarousel);
 
 // ---------------------------------------------------------------------------
 // PAINT ALLOCATION — build or update the donut from one payload.
-// Accepts an array of {label, value, weight} objects (the "slices"
-// shape) plus an optional excluded list. The By Ticker view maps
-// holdings (which have a `ticker` key) to this shape; the allocation
-// endpoint's slices already match.
+//
+// Signature:
+//   paintAllocation(slices, excluded, by = null, unclassified = [],
+//                   coverage = null)
+//
+//   slices       [{key, value, weight, status}] wedges. The By Ticker
+//                view supplies {key: ticker, value, weight, status:
+//                "classified"} from the summary's holdings; dimension
+//                views use the allocation endpoint's slices unchanged.
+//   excluded     [{ticker, reason}] priced-long holdings that cannot be
+//                plotted at all.
+//   by           allocation API key, or null for the ticker view.
+//   unclassified [{ticker, reason}] priced holdings whose wedge is
+//                Unknown or Not applicable (assignable views get links).
+//   coverage     {priced_value, classified_weight, unknown_weight,
+//                not_applicable_weight} or null when there is no priced
+//                base. Weights are fractions; the UI shows percentages.
 // ---------------------------------------------------------------------------
 
-function allocationResultState(slices, excluded) {
-    if (slices && slices.length > 0) return "ready";
+// Chart.js defaults legend text to a fixed gray, which is too dark on the
+// dark card. Reuse the app's existing readable ink token and resolve it
+// from CSS so it follows the active theme.
+function allocationLegendLabelColor() {
+    const styles = getComputedStyle(document.documentElement);
+    return styles.getPropertyValue("--text-primary").trim()
+        || styles.getPropertyValue("--text-secondary").trim()
+        || (document.documentElement.classList.contains("dark")
+            ? "#e7e8ea" : "#171a20");
+}
+
+// One theme repaint path for everything the canvas cached at build time.
+// update("none") keeps a theme flip instant (no 600ms spin).
+function refreshAllocationThemeColors() {
+    if (!allocationChart) return;
+    const dataset = allocationChart.data.datasets[0];
+    dataset.backgroundColor = allocationWedgeColors(currentHoldings);
+    dataset.borderColor = donutBorderColor();
+    const legendLabels = allocationChart.options?.plugins?.legend?.labels;
+    if (legendLabels) {
+        legendLabels.color = allocationLegendLabelColor();
+    }
+    allocationChart.update("none");
+}
+
+function allocationSliceStatus(slice) {
+    // The backend sends `status` explicitly. The key fallbacks keep an
+    // older cached payload (or a hand-built ticker slice) honest too.
+    if (!slice) return "classified";
+    if (slice.status === "unknown" || slice.status === "not_applicable") {
+        return slice.status;
+    }
+    if (slice.key === "Unknown") return "unknown";
+    if (slice.key === "n/a") return "not_applicable";
+    return "classified";
+}
+
+function allocationSliceLabel(slice) {
+    return allocationSliceStatus(slice) === "not_applicable"
+        ? "Not applicable"
+        : (slice.key ?? slice.ticker);
+}
+
+function allocationClassifiedWeight(slices, coverage = null) {
+    if (coverage && typeof coverage.classified_weight === "number") {
+        return coverage.classified_weight;
+    }
+    return (slices || []).reduce((total, slice) => (
+        total + (allocationSliceStatus(slice) === "classified"
+            ? (Number(slice.weight) || 0) : 0)
+    ), 0);
+}
+
+function allocationResultState(slices, excluded, coverage = null) {
+    if (slices && slices.length > 0) {
+        // A positive priced base with no classified wedge is not a donut:
+        // every visual sector would be a synthetic placeholder. The
+        // coverage line and reasons carry the explanation instead.
+        if (allocationClassifiedWeight(slices, coverage) <= 0) {
+            return "no-classified";
+        }
+        return "ready";
+    }
     return excluded && excluded.length > 0 ? "excluded" : "empty";
+}
+
+// Two neutral/surface colors, read from CSS tokens so both themes stay
+// legible. Synthetic wedges must never borrow a real category's hue.
+function getSyntheticAllocationColors() {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+        unknown: styles.getPropertyValue("--alloc-unknown").trim() || "#6b7280",
+        notApplicable: styles.getPropertyValue("--alloc-na").trim() || "#b8bec7",
+    };
+}
+
+function allocationWedgeColors(slices) {
+    const palette = getAllocationColors();
+    const synthetic = getSyntheticAllocationColors();
+    let realIndex = 0;
+    return (slices || []).map((slice) => {
+        const status = allocationSliceStatus(slice);
+        if (status === "unknown") return synthetic.unknown;
+        if (status === "not_applicable") return synthetic.notApplicable;
+        const color = palette[realIndex % palette.length];
+        realIndex += 1;
+        return color;
+    });
+}
+
+function allocationPercent(weight) {
+    const value = Number(weight);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return Math.round(value * 100);
+}
+
+// Coverage is deliberately percentages only. It explains what share of
+// the PRICED long holdings the view actually classified without adding a
+// new CAD amount to the card (the tooltip keeps its existing privacy rule).
+function updateAllocCoverage(coverage) {
+    if (!allocCoverageEl) return;
+    const priced = coverage ? Number(coverage.priced_value) : 0;
+    if (!coverage || !Number.isFinite(priced) || priced <= 0) {
+        allocCoverageEl.textContent = "";
+        allocCoverageEl.title = "";
+        allocCoverageEl.style.display = "none";
+        return;
+    }
+    const parts = [
+        `${allocationPercent(coverage.classified_weight)}% classified`,
+    ];
+    if (Number(coverage.unknown_weight) > 0) {
+        parts.push(`${allocationPercent(coverage.unknown_weight)}% unknown`);
+    }
+    if (Number(coverage.not_applicable_weight) > 0) {
+        parts.push(
+            `${allocationPercent(coverage.not_applicable_weight)}% N/A`
+        );
+    }
+    allocCoverageEl.textContent =
+        `Of priced long holdings: ${parts.join(" \u00b7 ")}`;
+    allocCoverageEl.title = "";
+    allocCoverageEl.style.display = "block";
+}
+
+function appendAllocationNoteEntry(container, entry, manual) {
+    const reason = entry.reason || "not classified";
+    if (manual) {
+        const link = document.createElement("a");
+        link.href = `/stock/${encodeURIComponent(entry.ticker)}#classification-card`;
+        link.textContent = entry.ticker;
+        link.title = `${reason} \u2014 open the stock page`;
+        container.append(link);
+        container.append(document.createTextNode(` (${reason})`));
+    } else {
+        container.append(document.createTextNode(
+            `${entry.ticker} (${reason})`
+        ));
+    }
+}
+
+// Native <details> keeps the hidden tail reachable by touch and keyboard,
+// not just a hover-only title. Small and accessible beats a new panel.
+function appendAllocationMoreDetails(container, hidden, manual = false) {
+    const details = document.createElement("details");
+    details.className = "alloc-note-details";
+    const summary = document.createElement("summary");
+    summary.textContent = `+${hidden.length} more`;
+    details.append(summary);
+    hidden.forEach((entry, index) => {
+        if (index > 0) details.append(document.createTextNode("; "));
+        appendAllocationNoteEntry(details, entry, manual);
+    });
+    container.append(details);
+}
+
+function appendAllocationExcludedDetails(container, hidden) {
+    const details = document.createElement("details");
+    details.className = "alloc-note-details";
+    const summary = document.createElement("summary");
+    summary.textContent = `+${hidden.length} more`;
+    details.append(summary);
+    hidden.forEach((entry, index) => {
+        if (index > 0) details.append(document.createTextNode("; "));
+        details.append(document.createTextNode(
+            `${entry.ticker}\u2009\u2014\u2009${entry.reason || "excluded"}`
+        ));
+    });
+    container.append(details);
 }
 
 function updateAllocExcluded(excluded) {
     if (!allocExcludedEl) return;
+    allocExcludedEl.title = "";
     if (excluded && excluded.length > 0) {
         const parts = excluded.map(
-            (e) => `${e.ticker}\u2009\u2014\u2009${e.reason}`
+            (e) => `${e.ticker}\u2009\u2014\u2009${e.reason || "excluded"}`
         );
-        allocExcludedEl.textContent = `Excludes ${parts.join("; ")}`;
+        const shown = parts.slice(0, MAX_ALLOC_NOTE_ITEMS);
+        const remaining = parts.length - shown.length;
+        allocExcludedEl.replaceChildren();
+        allocExcludedEl.append(document.createTextNode(
+            `Excludes ${shown.join("; ")}`
+        ));
+        if (remaining > 0) {
+            appendAllocationExcludedDetails(
+                allocExcludedEl, excluded.slice(MAX_ALLOC_NOTE_ITEMS)
+            );
+        }
         // "block", not "": the .alloc-excluded class sets display:none as the
         // pre-JS default, and clearing the inline style would fall back to it.
         allocExcludedEl.style.display = "block";
     } else {
-        allocExcludedEl.textContent = "";
+        allocExcludedEl.replaceChildren();
         allocExcludedEl.style.display = "none";
     }
 }
 
 // The "unclassified" note (#62): tickers whose donut wedge is an n/a or
-// Unknown placeholder because the data is missing or does not apply. Each
-// links to the stock page, where the allocation card shows the shared
-// classification and (for the owner) lets them enter the real weights.
-// Distinct from the excluded note, which is about holdings that cannot
-// contribute at all.
-function updateAllocUnclassified(unclassified) {
+// Unknown placeholder because the data is missing or does not apply. Only
+// country/sector/asset class have a manual editor on the stock page, so
+// other dimensions show a plain reason instead of a dead-end link. Long
+// lists collapse to native details to keep the narrow sidebar readable.
+function updateAllocUnclassified(unclassified, by = null) {
     if (!allocUnclassifiedEl) return;
     if (unclassified && unclassified.length > 0) {
         allocUnclassifiedEl.replaceChildren();
-        const label = document.createTextNode("Not classified: ");
-        allocUnclassifiedEl.append(label);
-        unclassified.forEach((entry, index) => {
-            if (index > 0) allocUnclassifiedEl.append(document.createTextNode("; "));
-            const link = document.createElement("a");
-            link.href = `/stock/${encodeURIComponent(entry.ticker)}#classification-card`;
-            link.textContent = entry.ticker;
-            link.title = `${entry.reason} — open the stock page`;
-            allocUnclassifiedEl.append(link);
+        // "Not applicable" is a coverage gap, not a failed classification;
+        // use the neutral heading whenever that reason appears.
+        const hasNotApplicable = unclassified.some(
+            (entry) => /not applicable/i.test(entry.reason || "")
+        );
+        allocUnclassifiedEl.append(document.createTextNode(
+            hasNotApplicable ? "Coverage details: " : "Not classified: "
+        ));
+        const manual = MANUAL_CLASSIFICATION_DIMS.has(by);
+        const shown = unclassified.slice(0, MAX_ALLOC_NOTE_ITEMS);
+        shown.forEach((entry, index) => {
+            if (index > 0) {
+                allocUnclassifiedEl.append(document.createTextNode("; "));
+            }
+            appendAllocationNoteEntry(allocUnclassifiedEl, entry, manual);
         });
+        if (unclassified.length > shown.length) {
+            appendAllocationMoreDetails(
+                allocUnclassifiedEl,
+                unclassified.slice(MAX_ALLOC_NOTE_ITEMS),
+                manual
+            );
+        }
         allocUnclassifiedEl.style.display = "block";
     } else {
         allocUnclassifiedEl.replaceChildren();
@@ -1464,7 +1699,8 @@ function updateAllocUnclassified(unclassified) {
     }
 }
 
-function paintAllocation(slices, excluded, by = null, unclassified = []) {
+function paintAllocation(slices, excluded, by = null, unclassified = [],
+                         coverage = null) {
     // No canvas (defensive — index.html ships one) or no Chart.js (the
     // CDN script failed to load): degrade to the unavailable state rather
     // than throwing — same spirit as the chart handle's null guard.
@@ -1476,35 +1712,45 @@ function paintAllocation(slices, excluded, by = null, unclassified = []) {
     // built from: a failed revalidation for the SAME dimension can safely
     // keep it (lastAllocPayload.by === by), but no other dimension may be
     // restored into its place.
-    lastAllocPayload = { by: by ?? null, slices, excluded, unclassified };
+    lastAllocPayload = {
+        by: by ?? null, slices, excluded, unclassified, coverage,
+    };
     currentHoldings = slices;
     runAllocationCrossfade();
 
     updateAllocExcluded(excluded);
-    updateAllocUnclassified(unclassified);
+    updateAllocUnclassified(unclassified, by);
+    updateAllocCoverage(coverage);
 
-    if (!slices || slices.length === 0) {
-        // Empty reply: no wedges. DESTROY any chart a previous cycle
-        // built — a stale donut beside an "empty" message would
-        // contradict the data it claims to show.
+    const resultState = allocationResultState(slices, excluded, coverage);
+    if (resultState !== "ready") {
+        // Empty, unpriced, or priced-but-no-classified reply: no wedges.
+        // DESTROY any chart a previous cycle built — a stale donut beside
+        // a message that contradicts it is worse than no donut. The
+        // coverage line and notes stay visible above.
         if (allocationChart) {
             allocationChart.destroy();
             allocationChart = null;
         }
-        setAllocState(allocationResultState(slices, excluded));
+        setAllocState(resultState);
         return;
     }
-    const labels = slices.map((s) => s.key ?? s.ticker);
+    const labels = slices.map(allocationSliceLabel);
     const weights = slices.map((s) => s.weight);
+    const colors = allocationWedgeColors(slices);
 
     if (allocationChart) {
         // POLL REFRESH: swap the arrays in place and redraw WITHOUT
         // animation (update("none")) — a 600ms spin every 60s reads as
         // glitch, not life. Mutating chart.data + update() beats tearing
         // the Chart down and rebuilding it: no canvas flash, no dropped
-        // hover state, no re-reading the theme on every cycle.
+        // hover state, no re-reading the theme on every cycle. Colors are
+        // swapped too: a refresh can reorder rows or turn a real wedge
+        // into a synthetic one, and the color must follow the row.
         allocationChart.data.labels = labels;
         allocationChart.data.datasets[0].data = weights;
+        allocationChart.data.datasets[0].backgroundColor = colors;
+        allocationChart.data.datasets[0].borderColor = donutBorderColor();
         allocationChart.update("none");
         setAllocState("ready");
         return;
@@ -1536,7 +1782,7 @@ function paintAllocation(slices, excluded, by = null, unclassified = []) {
                 // The plotted values are the WEIGHTS (they sum to 1, so
                 // the wedges close the circle by construction).
                 data: weights,
-                backgroundColor: getAllocationColors(),
+                backgroundColor: colors,
                 borderWidth: 2,
                 borderColor: donutBorderColor(),
                 hoverOffset: 4,
@@ -1555,6 +1801,7 @@ function paintAllocation(slices, excluded, by = null, unclassified = []) {
                     // would squeeze the donut to a sliver.
                     position: "bottom",
                     labels: {
+                        color: allocationLegendLabelColor(),
                         pointStyle: "circle",
                         usePointStyle: true,
                         boxWidth: 8,
@@ -1782,12 +2029,14 @@ document.addEventListener("portfoliochange", () => {
     if (!portfolioMasked()) portfolioCostBasisEl.textContent = "";
     lastSummaryHoldings = [];
     lastSummaryExcluded = [];
+    lastSummaryCoverage = null;
     lastSummaryReady = false;
     lastSummaryFailed = false;
     lastAllocPayload = null;
     setPortfolioUnavailable(hasPortfolio ? "Loading portfolio..." : "No portfolios available.");
     updateAllocExcluded([]);
     updateAllocUnclassified([]);
+    updateAllocCoverage(null);
     setAllocState(hasPortfolio ? "loading" : "unavailable");
     if (portfolioChartHandle) {
         // invalidate() bumps the scope and clears the canvas; reload()

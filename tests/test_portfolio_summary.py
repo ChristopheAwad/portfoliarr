@@ -107,6 +107,13 @@ def test_empty_ledger_returns_zeros_and_null_pcts(client, fake_market):
         "unpriced": [],
         "currency": "CAD",
         "holdings": [],
+        "allocation_coverage": {
+            "priced_value": 0.0,
+            "classified_weight": None,
+            "unknown_weight": None,
+            "not_applicable_weight": None,
+        },
+        "allocation_excluded": [],
     }
 
 
@@ -353,3 +360,84 @@ def test_fx_failure_puts_usd_holdings_in_unpriced(client, fake_market):
     assert body["unpriced"] == ["AAPL"]
     assert body["total_value"] == pytest.approx(510.0)   # RY.TO only
     assert body["cost_basis"] == pytest.approx(500.0)
+
+
+# ── Allocation coverage/exclusions (the Ticker donut's data) ──────────
+
+def test_summary_exposes_ticker_coverage_and_exclusions(client, fake_market):
+    """The Ticker view uses the summary. Its coverage describes the same
+    priced open-long CAD base as the other allocation views, and its
+    exclusions carry reasons the frontend can show."""
+    seed_transaction(ticker="AAPL", price=100.0, qty=10)
+    seed_transaction(ticker="DEAD.TO", date="2026-08-02", price=50.0, qty=10)
+    fake_market.quotes["AAPL"] = make_quote("AAPL", price=105.0,
+                                            previous_close=100.0)
+    # DEAD.TO absent → no quote
+
+    body = client.get("/api/portfolio/summary").get_json()
+    assert body["unpriced"] == ["DEAD.TO"]
+    assert [h["ticker"] for h in body["holdings"]] == ["AAPL"]
+    assert body["allocation_coverage"] == {
+        "priced_value": pytest.approx(1050.0),
+        "classified_weight": pytest.approx(1.0),
+        "unknown_weight": pytest.approx(0.0),
+        "not_applicable_weight": pytest.approx(0.0),
+    }
+    assert body["allocation_excluded"] == [
+        {"ticker": "DEAD.TO", "reason": "couldn't be priced"}]
+
+
+def test_summary_allocation_exclusions_ignore_short_and_flat(client,
+                                                             fake_market):
+    """The headline's `unpriced` list stays as it was (every failed quote),
+    but the allocation list is long-only: a flat or short position that
+    cannot be quoted must not appear as an allocation exclusion."""
+    seed_transaction(ticker="LONG", date="2026-08-01", price=100.0, qty=10)
+    seed_transaction(ticker="SHORT", date="2026-08-01", price=100.0, qty=4,
+                     tx_type="SELL")
+    seed_transaction(ticker="FLAT", date="2026-08-01", price=100.0, qty=5)
+    seed_transaction(ticker="FLAT", date="2026-08-02", price=100.0, qty=5,
+                     tx_type="SELL")
+    fake_market.quotes["LONG"] = make_quote("LONG", price=100.0,
+                                            previous_close=99.0)
+
+    body = client.get("/api/portfolio/summary").get_json()
+    assert body["unpriced"] == ["FLAT", "SHORT"]
+    assert body["allocation_excluded"] == []
+    assert [h["ticker"] for h in body["holdings"]] == ["LONG"]
+
+
+def test_summary_allocation_coverage_skips_unusable_cad_values(
+        client, fake_market):
+    """Summary money is unchanged, but the allocation base only takes
+    usable CAD prices: zero, unsupported-currency, and no-FX longs are
+    named in allocation_excluded and earn no wedge."""
+    seed_transaction(ticker="GOOD", price=100.0, qty=10)
+    seed_transaction(ticker="ZERO", date="2026-08-02", price=10.0, qty=5)
+    seed_transaction(ticker="EURX", date="2026-08-03", price=10.0, qty=5,
+                     currency="EUR", fx_rate=1.0)
+    seed_transaction(ticker="USDX", date="2026-08-04", price=10.0, qty=5,
+                     currency="USD", fx_rate=1.3)
+    fake_market.quotes["GOOD"] = make_quote("GOOD", price=100.0,
+                                            previous_close=99.0)
+    fake_market.quotes["ZERO"] = make_quote("ZERO", price=0.0,
+                                            previous_close=1.0)
+    fake_market.quotes["EURX"] = make_quote("EURX", price=10.0,
+                                            previous_close=9.0,
+                                            currency="EUR")
+    fake_market.quotes["USDX"] = make_quote("USDX", price=10.0,
+                                            previous_close=9.0,
+                                            currency="USD")
+    # No USDCAD rate → USDX cannot be converted to CAD.
+
+    body = client.get("/api/portfolio/summary").get_json()
+    assert [h["ticker"] for h in body["holdings"]] == ["GOOD"]
+    assert body["allocation_coverage"]["priced_value"] == pytest.approx(1000.0)
+    assert body["allocation_coverage"]["classified_weight"] == pytest.approx(
+        1.0)
+    excluded = {e["ticker"]: e["reason"] for e in body["allocation_excluded"]}
+    assert excluded == {
+        "EURX": "unsupported currency: EUR",
+        "USDX": "USDCAD rate unavailable",
+        "ZERO": "invalid price",
+    }
