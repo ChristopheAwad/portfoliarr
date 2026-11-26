@@ -3,7 +3,9 @@
 Server contract: ``/api/portfolio/history`` keeps healthy payloads
 unchanged, but may add ``valuation_status: "partial" | "unavailable"``
 when some or none of the held positions can be priced.  A degraded reply
-is a 200, so it must never be cached or painted as if it were complete.
+is a 200, so it must never be cached.  A ``partial`` reply still has
+priced positions and is drawn WITH a warning; an ``unavailable`` reply
+must not replace a complete chart.
 
 The Node harness below runs the real shared chart factory with a fake
 network and animation-frame queue.  It deliberately keeps its own copy of
@@ -56,7 +58,8 @@ globalThis.window = {handlers:{}, addEventListener(name, fn) {
     (this.handlers[name] ||= []).push(fn);
 }, dispatch(name) {for (const fn of this.handlers[name] || []) fn();}};
 globalThis.document = {documentElement: {}, hidden: false, addEventListener() {},
-    createElement() { return element(); }};
+    createElement() { return element(); },
+    createTextNode(value) { return {nodeValue: value, textContent: value}; }};
 globalThis.localStorage = {getItem() {return null;}, setItem() {}};
 globalThis.getComputedStyle = () => ({getPropertyValue: () => '#123456'});
 globalThis.hexToRgba = () => 'rgba(1,2,3,.75)';
@@ -78,12 +81,18 @@ function element() {
     let text = '';
     return {children: [], hidden: false, style: {}, classList: classes(),
         handlers: {},
-        get textContent() {return text;},
+        get textContent() {
+            if (this.children.length) {
+                return this.children.map(node =>
+                    node.nodeValue ?? node.textContent ?? '').join('');
+            }
+            return text;
+        },
         set textContent(value) {text = value; this.children = [];},
         addEventListener(name, fn) {this.handlers[name] = fn;},
         click() {this.handlers.click?.({target: this});},
         append(...nodes) {this.children.push(...nodes);},
-        replaceChildren(...nodes) {this.children = nodes;}};
+        replaceChildren(...nodes) {this.children = nodes; text = '';}};
 }
 function statusNode() {
     const node = element();
@@ -186,18 +195,116 @@ def test_dashboard_wires_the_status_elements_into_the_factory():
             in span)
 
 
-def test_partial_reply_keeps_previous_chart_and_names_both_timeframes():
+def test_partial_reply_paints_with_a_warning_and_retry():
     run_node(CHART_HARNESS, r"""
     (async () => {
         await initial();
         handle.refresh('1D');
         await succeed(1, degraded(150, 160, 'partial'));
-        await flush(); await frame();
-        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
-        assert.equal(selected(), '5D');
-        assert.equal(statusText(), 'Showing 5D data — 1D unavailable.');
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '1D');
+        assert.equal(statusText(),
+            '1D chart is partial — some holdings could not be priced.');
         assert.equal(retryVisible(), true);
-        assert.equal(summaries.at(-1).period, '5D');
+        assert.deepEqual(summaries.at(-1), {period: '1D', returnPct: 5});
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_reply_names_and_links_the_unpriced_holding():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        await succeed(0, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['CGL-C.NE'],
+        }));
+        await flush(); await frame(); await frame();
+        assert.equal(statusText(),
+            '1D chart is partial — could not price CGL-C.NE.');
+        const link = chartStatus.children.find(node => node.href);
+        assert.equal(link.textContent, 'CGL-C.NE');
+        assert.equal(link.href, '/stock/CGL-C.NE');
+        assert.equal(retryVisible(), true);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unpriced_link_encodes_the_ticker():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        await succeed(0, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['^GSPC'],
+        }));
+        await flush(); await frame(); await frame();
+        const link = chartStatus.children.find(node => node.href);
+        assert.equal(link.textContent, '^GSPC');
+        assert.equal(link.href, '/stock/%5EGSPC');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unpriced_symbols_shape_is_guarded():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, data(0, 0, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: 'BAD',
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(), '5D unavailable.');
+
+        handle.refresh('1M');
+        await succeed(1, data(150, 160, {
+            valuation_status: 'partial',
+            unpriced_symbols: ['AAPL', '', null, 123],
+        }));
+        await flush(); await frame(); await frame();
+        assert.equal(statusText(),
+            '1M chart is partial — could not price AAPL.');
+        const links = chartStatus.children
+            .filter(node => node.href).map(node => node.textContent);
+        assert.deepEqual(links, ['AAPL']);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unavailable_reply_names_the_unpriced_holdings():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, data(0, 0, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: ['AAPL', 'BAD'],
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(),
+            '5D unavailable — could not price AAPL, BAD.');
+        const links = chartStatus.children
+            .filter(node => node.href).map(node => node.textContent);
+        assert.deepEqual(links, ['AAPL', 'BAD']);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_unavailable_after_a_chart_still_names_the_holdings():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        await initial();
+        handle.refresh('1D');
+        await succeed(1, data(150, 160, {
+            valuation_status: 'unavailable',
+            unpriced_symbols: ['CGL-C.NE'],
+        }));
+        await flush(); await frame();
+        assert.equal(statusText(),
+            'Showing 5D data — 1D unavailable. Could not price CGL-C.NE.');
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
+        assert.equal(retryVisible(), true);
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """)
 
@@ -208,7 +315,10 @@ def test_partial_reply_then_retry_recovers_to_requested_period():
         await initial();
         handle.refresh('1D');
         await succeed(1, degraded(150, 160, 'partial'));
-        await flush(); await frame();
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '1D');
+        assert.equal(retryVisible(), true);
         chartRetry.click();
         assert.equal(requests.length, 3, 'retry must issue a new request');
         await succeed(2, data(150, 160)); await frame(); await frame();
@@ -216,6 +326,76 @@ def test_partial_reply_then_retry_recovers_to_requested_period():
         assert.equal(selected(), '1D');
         assert.equal(statusText(), null);
         assert.equal(retryVisible(), false);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_reply_is_never_written_to_the_cache():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        const count = requests.length;
+        handle.refresh('5D');
+        await flush();
+        assert.equal(requests.length, count + 1,
+            'a partial reply must not be served from the cache');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_first_load_partial_paints_with_a_warning():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('5D');
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        assert.deepEqual(handle.chart.data.datasets[0].data, [150, 160]);
+        assert.equal(selected(), '5D');
+        assert.equal(statusText(),
+            '5D chart is partial — some holdings could not be priced.');
+        assert.equal(retryVisible(), true);
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_partial_warning_survives_a_mode_repaint():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        await initial();
+        handle.refresh('1D');
+        await succeed(1, degraded(150, 160, 'partial'));
+        await flush(); await frame(); await frame();
+        const warning =
+            '1D chart is partial — some holdings could not be priced.';
+        assert.equal(statusText(), warning);
+        modeBar.handlers.click({target: modes[1]});
+        await frame(); await frame();
+        assert.equal(statusText(), warning);
+        assert.equal(retryVisible(), true);
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 105]);
+        assert.equal(requests.length, 2, 'a view repaint must not fetch');
+    })().catch(e => {console.error(e); process.exitCode = 1;});
+    """)
+
+
+def test_late_partial_reply_after_newer_success_is_ignored():
+    run_node(CHART_HARNESS, r"""
+    (async () => {
+        handle.refresh('1D');
+        handle.refresh('5D');
+        await succeed(1, data(100, 110)); await frame(); await frame();
+        await succeed(0, degraded(150, 160, 'partial'));
+        await flush(); await frame();
+        assert.equal(statusText(), null);
+        assert.deepEqual(handle.chart.data.datasets[0].data, [100, 110]);
+        assert.equal(selected(), '5D');
+        const count = requests.length;
+        handle.refresh('1D');
+        await flush();
+        assert.equal(requests.length, count + 1,
+            'a stale partial reply must not be cached');
     })().catch(e => {console.error(e); process.exitCode = 1;});
     """)
 

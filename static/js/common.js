@@ -1670,9 +1670,10 @@ function setupTimeframeChart(
         return chartRequestGenerations[period] === generation;
     }
 
-    // A degraded history reply still has HTTP 200. The server marks it so
-    // the page can keep an honest old chart instead of painting a partial
-    // total as if it were complete. The stock endpoint never sends this.
+    // A degraded history reply still has HTTP 200. "unavailable" means no
+    // held position priced at all (the chart must not replace a real one);
+    // "partial" means some priced and is drawn WITH a warning. Either way
+    // the reply must not be cached. The stock endpoint never sends this.
     function isDegradedReply(reply) {
         return Boolean(reply) && (
             reply.valuation_status === "partial" ||
@@ -1680,10 +1681,20 @@ function setupTimeframeChart(
         );
     }
 
+    // The server names the tickers that kept a reply from being complete.
+    // Guard the shape: an older reply or the empty-axis path may omit it.
+    function unpricedSymbols(reply) {
+        if (!reply || !Array.isArray(reply.unpriced_symbols)) return [];
+        return reply.unpriced_symbols.filter(
+            (symbol) => typeof symbol === "string" && symbol.length > 0);
+    }
+
     // The status line lives beside the period-return readout on the
     // dashboard only. A stock chart passes no elements, so these helpers
-    // are inert there.
-    function setChartStatus(message) {
+    // are inert there. `symbols`, when present, become stock-page links
+    // after `message`, so the warning names the culprit without adding a
+    // wall of text.
+    function setChartStatus(message, symbols = null) {
         if (chartStatus) {
             // Older Android WebViews may not support :has(), so the
             // wrapper is hidden explicitly. Guard closest(): the Node
@@ -1696,7 +1707,21 @@ function setupTimeframeChart(
                 // aria-live announces it.
                 chartStatus.hidden = false;
                 if (line) line.hidden = false;
-                chartStatus.textContent = message;
+                if (symbols && symbols.length) {
+                    const nodes = [document.createTextNode(message)];
+                    symbols.forEach((symbol, index) => {
+                        if (index) nodes.push(document.createTextNode(", "));
+                        const link = document.createElement("a");
+                        link.className = "chart-status-symbol";
+                        link.href = `/stock/${encodeURIComponent(symbol)}`;
+                        link.textContent = symbol;
+                        nodes.push(link);
+                    });
+                    nodes.push(document.createTextNode("."));
+                    chartStatus.replaceChildren(...nodes);
+                } else {
+                    chartStatus.textContent = message;
+                }
             } else {
                 // Clear the text first, then hide the live region.
                 chartStatus.textContent = "";
@@ -2781,25 +2806,49 @@ function setupTimeframeChart(
             // request, including another request for the SAME period.
             if (visibleGeneration !== visibleRequestGeneration) return;
 
-            // Degraded but successful: take the same visible-failure path
-            // as an HTTP error, after every generation/scope guard and
-            // before any paint. A prior complete chart stays on screen
-            // with its readout; the status line names both timeframes.
+            // A PARTIAL reply still priced at least one held position, so
+            // it is drawn with a warning rather than discarded. Retry stays
+            // available and the reply is never cached (the cache guard
+            // above), so a later request can recover to a complete chart.
+            if (data.valuation_status === "partial") {
+                const symbols = unpricedSymbols(data);
+                const message = symbols.length
+                    ? `${period} chart is partial — could not price `
+                    : `${period} chart is partial — some holdings could not be priced.`;
+                return await schedulePaint(data, period, () =>
+                    scopeAtStart === scopeGeneration && scope === getScope() &&
+                    visibleGeneration === visibleRequestGeneration,
+                    { statusMessage: message,
+                      statusSymbols: symbols.length ? symbols : null });
+            }
+
+            // UNAVAILABLE (nothing priced anywhere in the window) is a
+            // visible failure: take the same path as an HTTP error, after
+            // every generation/scope guard and before any paint. A prior
+            // complete chart stays on screen with its readout; the status
+            // line names both timeframes.
             if (degraded) {
+                const symbols = unpricedSymbols(data);
                 if (lastReply === null) {
                     if (onVisibleFailure) onVisibleFailure();
                     emitPeriodSummary(period, null);
                     if (requestedMode !== mode) applyRequestedMode();
-                    setChartStatus(`${period} unavailable.`);
+                    setChartStatus(
+                        symbols.length
+                            ? `${period} unavailable — could not price `
+                            : `${period} unavailable.`,
+                        symbols.length ? symbols : null);
                 } else {
                     failedComparisonSymbols = [
                         ...((getBenchmarks && getBenchmarks()) || []),
                     ];
                     reconcileOverlaysOnFailure();
                     if (requestedMode !== mode) repaintRequestedMode();
+                    const prefix =
+                        `Showing ${currentPeriod} data — ${period} unavailable.`;
                     setChartStatus(
-                        `Showing ${currentPeriod} data — ${period} unavailable.`
-                    );
+                        symbols.length ? `${prefix} Could not price ` : prefix,
+                        symbols.length ? symbols : null);
                 }
                 return null;
             }
@@ -2865,7 +2914,9 @@ function setupTimeframeChart(
         }
     }
 
-    function schedulePaint(data, period, isCurrent, { reuseReply = false } = {}) {
+    function schedulePaint(data, period, isCurrent,
+            { reuseReply = false, statusMessage = null,
+              statusSymbols = null } = {}) {
         const ticket = { isCurrent, generation: ++paintGeneration,
             scope: getScope(), scopeGeneration };
         pendingPaint = ticket;
@@ -2890,10 +2941,11 @@ function setupTimeframeChart(
                     if (!reuseReply) failedComparisonSymbols = null;
                     applyRequestedMode();
                     paint(data, period);
-                    // Only an accepted visible-fetch paint clears a degraded
-                    // notice. A view repaint passes reuseReply, and scope
+                    // Only an accepted visible-fetch paint sets the status:
+                    // null clears a notice, a partial reply passes its
+                    // warning. A view repaint passes reuseReply, and scope
                     // invalidation clears it separately.
-                    if (!reuseReply) setChartStatus(null);
+                    if (!reuseReply) setChartStatus(statusMessage, statusSymbols);
                     syncTimeframeButtons(period);
                     const drawable = () => {
                         const area = chart.chartArea;

@@ -1204,8 +1204,9 @@ a.logo { text-decoration: none; color: var(--text-primary); }
 }
 
 /* Degraded-chart notice + retry. It sits under the return readout as a quiet
-   caption, wraps on narrow cards, and stays invisible until a partial or
-   unavailable history reply replaces a complete chart. */
+   caption and wraps on narrow cards. A partial reply shows it beside the
+   priced line it warns about; an unavailable reply shows it while keeping
+   the last complete chart (or a blank canvas on first load). */
 .chart-status-line {
     display: flex;
     flex-wrap: wrap;
@@ -1224,6 +1225,23 @@ a.logo { text-decoration: none; color: var(--text-primary); }
 .chart-status {
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+/* The unpriced ticker inside the warning: a quiet link to its stock page,
+   so the owner can spot the holding without the caption turning busy. */
+.chart-status-symbol {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-underline-offset: 2px;
+}
+
+.chart-status-symbol:hover { color: var(--accent); }
+
+.chart-status-symbol:focus-visible {
+    outline: none;
+    border-radius: 2px;
+    box-shadow: var(--focus-ring);
 }
 
 .chart-retry {

@@ -189,11 +189,14 @@
 
                     <!-- Degraded-chart notice. The server marks a history
                          reply "partial" or "unavailable" when it could not
-                         price some or all positions. The chart keeps the
-                         last complete line (when there is one), this line
-                         names the displayed and requested timeframes, and
-                         Retry re-fetches the requested period without using
-                         a cache entry. Stock pages do not ship it. -->
+                         price some or all positions. A partial reply is
+                         drawn with this warning; an unavailable reply keeps
+                         the last complete line (when there is one). Either
+                         way this line names the displayed and requested
+                         timeframes and links each unpriced ticker to its
+                         stock page, and Retry re-fetches the requested
+                         period without using a cache entry. Stock pages do
+                         not ship it. -->
                     <div class="chart-status-line" hidden>
                         <span id="portfolio-chart-status"
                               class="chart-status"

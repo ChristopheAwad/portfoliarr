@@ -35,6 +35,7 @@ def assert_complete(res, body):
     """The old payload, no status key, and no degraded-cache header."""
     assert res.status_code == 200
     assert "valuation_status" not in body
+    assert "unpriced_symbols" not in body
     assert "Cache-Control" not in res.headers
 
 
@@ -164,8 +165,26 @@ def test_one_missing_ticker_is_partial(client, fake_market):
     assert body["values"] == [1000.0, 1100.0]
     assert set(body) == {
         "labels", "values", "costs", "index_values", "twrr_pct",
-        "valuation_status",
+        "valuation_status", "unpriced_symbols",
     }
+    assert body["unpriced_symbols"] == ["BAD"]
+    assert_degraded(res, body, "partial")
+
+
+def test_unpriced_symbols_lists_every_culprit_sorted(client, fake_market):
+    """The notice names every holding that could not be priced, in a
+    stable order, so the user can fix the right ticker."""
+    seed_transaction(ticker="AAPL", date="2026-08-28", qty=10)
+    seed_transaction(ticker="ZZZ", date="2026-08-28", qty=5)
+    seed_transaction(ticker="BAD", date="2026-08-28", qty=5)
+    fake_market.histories["AAPL"] = {
+        "2026-08-28": 100.0, "2026-08-31": 110.0,
+    }   # ZZZ and BAD are absent -> both unpriced
+
+    res = history(client)
+    body = res.get_json()
+    assert body["values"] == [1000.0, 1100.0]
+    assert body["unpriced_symbols"] == ["BAD", "ZZZ"]
     assert_degraded(res, body, "partial")
 
 
@@ -241,6 +260,7 @@ def test_usd_without_fx_is_unavailable(client, fake_market):
     res = history(client)
     body = res.get_json()
     assert body["values"] == [0.0, 0.0]
+    assert body["unpriced_symbols"] == ["AAPL"]
     assert_degraded(res, body, "unavailable")
 
 
@@ -265,6 +285,7 @@ def test_usd_with_unusable_live_rate_is_unavailable(
     assert res.status_code == 200
     assert body["values"] == [0.0, 0.0]
     assert all(math.isfinite(value) for value in body["values"])
+    assert body["unpriced_symbols"] == ["AAPL"]
     assert_degraded(res, body, "unavailable")
 
 
@@ -284,6 +305,7 @@ def test_all_relevant_positions_unpriced_is_unavailable(
     body = res.get_json()
     assert body["labels"] == ["2026-08-28", "2026-08-31"]
     assert body["values"] == [0.0, 0.0]
+    assert body["unpriced_symbols"] == ["EURGD", "GAP"]
     assert_degraded(res, body, "unavailable")
 
 
@@ -402,3 +424,28 @@ def test_same_day_new_position_without_a_same_day_bar_is_partial(
     body = res.get_json()
     assert body["labels"] == ["2026-08-28 09:30", "2026-08-31 09:30"]
     assert_degraded(res, body, "partial")
+
+
+def test_carried_in_position_with_later_same_day_bar_is_complete(
+        client, fake_market):
+    """LATE is carried into the window but its first intraday bar is
+    10:30, after the axis' 09:30 bar. That is the leading trim, not a
+    degraded valuation: the walk must wait for LATE's first bar instead of
+    keeping 09:30 and marking the reply partial."""
+    seed_transaction(ticker="CARRIED", date="2026-08-27", qty=1)
+    seed_transaction(ticker="LATE", date="2026-08-27", qty=2)
+    fake_market.histories["CARRIED"] = {
+        "2026-08-28 09:30": 100.0,
+        "2026-08-28 10:30": 101.0,
+        "2026-08-28 11:30": 102.0,
+    }
+    fake_market.histories["LATE"] = {
+        "2026-08-28 10:30": 50.0,
+        "2026-08-28 11:30": 51.0,
+    }
+
+    res = history(client, "/api/portfolio/history?period=1M")
+    body = res.get_json()
+    assert body["labels"] == ["2026-08-28 10:30", "2026-08-28 11:30"]
+    assert body["values"] == [201.0, 204.0]
+    assert_complete(res, body)
